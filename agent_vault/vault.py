@@ -368,13 +368,22 @@ def cmd_seal_retro(args) -> None:
             die(f"{lib.rel(path)} is already sealed")
 
     top = require_clone(slug)
-    branch = impl_fm.get("branch")
-    if not branch:
-        die(f"{lib.rel(impl_path)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
+    info = github.issue_info(slug, args.issue)
     current_branch = github.git("branch", "--show-current", cwd=top)
-    if current_branch != branch:
-        die(f"the current branch is {current_branch or '(detached)'}, but {lib.rel(impl_path)} "
-            f"says {branch}; check out {branch} first")
+    closed = info["state"] != "OPEN"
+    if closed:
+        default = github.default_branch(slug)
+        if current_branch == default or not current_branch:
+            die(f"issue #{args.issue} is closed; check out a branch other than {default} "
+                f"(currently {current_branch or '(detached)'}; the impl note's own branch "
+                "may already be deleted)")
+    else:
+        branch = impl_fm.get("branch")
+        if not branch:
+            die(f"{lib.rel(impl_path)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
+        if current_branch != branch:
+            die(f"the current branch is {current_branch or '(detached)'}, but {lib.rel(impl_path)} "
+                f"says {branch}; check out {branch} first")
     if github.git("status", "--porcelain", cwd=top):
         die("the working tree isn't clean; commit or stash your changes first")
 
@@ -424,7 +433,11 @@ def cmd_seal_retro(args) -> None:
         lib.write_text(claude_path, new_text)
         github.git("add", "CLAUDE.md", cwd=top)
         github.git("commit", "-q", "-m", f"docs(claude): verify audited sections (#{args.issue})", cwd=top)
-        github.git("push", cwd=top)
+        if closed and not github.git("rev-parse", "--abbrev-ref", "--symbolic-full-name",
+                                     "@{u}", cwd=top, check=False):
+            github.git("push", "-u", "origin", "HEAD", cwd=top)
+        else:
+            github.git("push", cwd=top)
 
     update_note(impl_path, status="sealed")
     update_note(retro_path, status="sealed")

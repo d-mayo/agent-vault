@@ -512,6 +512,57 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         (self.clone / "dirty.txt").write_text("x", encoding="utf-8")
         self.refused(self.cli("seal", "retro", "widget", "7"), "isn't clean")
 
+    def drop_impl_branch_field(self):
+        p = self.note("impl")
+        p.write_text(p.read_text(encoding="utf-8").replace(f"branch: {self.name}\n", ""),
+                     encoding="utf-8", newline="\n")
+
+    def test_seals_closed_issue_from_other_branch_with_no_upstream(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.drop_impl_branch_field()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        self.assertEqual(git("rev-parse", "--abbrev-ref", "feat/9-other@{u}", cwd=self.clone, check=False), "")
+        main_before = git("rev-parse", "origin/main", cwd=self.clone)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(git("rev-parse", "--abbrev-ref", "feat/9-other@{u}", cwd=self.clone),
+                         "origin/feat/9-other")
+        log = git("log", "-1", "--format=%s", "origin/feat/9-other", cwd=self.clone)
+        self.assertIn("docs(claude): verify audited sections (#7)", log)
+        self.assertEqual(git("rev-parse", "origin/main", cwd=self.clone), main_before)
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_closed_issue_refused_on_default_branch(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.drop_impl_branch_field()
+        git("switch", "-q", "main", cwd=self.clone)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "closed", "main")
+
+    def test_closed_issue_refused_when_detached(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.drop_impl_branch_field()
+        git("switch", "-q", "--detach", "HEAD", cwd=self.clone)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "closed", "detached")
+
+    def test_closed_issue_refused_with_dirty_tree(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.drop_impl_branch_field()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        (self.clone / "dirty.txt").write_text("x", encoding="utf-8")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "isn't clean")
+
 
 class StageTest(GhCase):  # T5 -> AC5
     def stage(self):
