@@ -99,7 +99,7 @@ def main() -> None:
     names, latest = vault_changes(t0, daily) if kind == "vault" else repo_changes(state)
     if names and not logged_since_start(state, daily, repo):
         logged_at = daily.stat().st_mtime if daily.exists() else 0
-        if logged_at < latest or not latest:
+        if logged_at < (latest or t0):       # a change we can't time (deleted file) counts from session start
             project = f" --project {state['project']}" if state.get("project") else " --project <id>"
             problems.append(
                 "Before finishing, log this session's work in today's daily note. Run:\n"

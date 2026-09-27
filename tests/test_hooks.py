@@ -399,6 +399,15 @@ class StopTest(HookCase):
         self.cli("log", "edited a.txt", "--project", "demo")
         self.assertEqual(self.stop(cwd=self.repo).returncode, 0)
 
+    def test_repo_session_deleted_file_then_logged_passes(self):
+        self.start(self.repo)
+        self.tick()
+        (self.repo / "a.txt").unlink()
+        self.assertEqual(self.stop(cwd=self.repo).returncode, 2)
+        self.tick()
+        self.cli("log", "removed a.txt", "--project", "demo")
+        self.assertEqual(self.stop(cwd=self.repo).returncode, 0)
+
     def test_repo_session_pipeline_event_counts_as_logged(self):
         self.start(self.repo)
         self.tick()

@@ -89,11 +89,14 @@ def segments(tokens: list[str]):
 
 
 def resolve_dir(cwd: str | None, target: str) -> str:
-    if os.name == "nt":
-        m = re.match(r"^/([a-zA-Z])(/|$)", target)   # Git Bash style: /c/Users -> C:/Users
-        if m:
-            target = f"{m.group(1).upper()}:/" + target[m.end():]
-    target = os.path.expanduser(os.path.expandvars(target))
+    def drive(t: str, must_exist: bool) -> str:
+        m = re.match(r"^/([a-zA-Z])(/|$)", t) if os.name == "nt" else None   # Git Bash: /c/Users -> C:/Users
+        if m and not (must_exist and not os.path.isdir(f"{m.group(1)}:/")):
+            return f"{m.group(1).upper()}:/" + t[m.end():]
+        return t
+
+    target = drive(target, False)
+    target = drive(os.path.expanduser(os.path.expandvars(target)), True)   # a variable's value must name a real drive
     return os.path.normpath(os.path.join(cwd or os.getcwd(), target))
 
 

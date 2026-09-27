@@ -119,6 +119,8 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
         self.assertEqual(pg.resolve_dir("/a", "$AV_TEST_DIR/z"), os.path.normpath("/x/y/z"))
         if os.name == "nt":
             self.assertEqual(pg.resolve_dir("C:/a", "/c/Users/me"), os.path.normpath("C:/Users/me"))
+            os.environ["AV_TEST_DIR"] = "/c/Users"
+            self.assertEqual(pg.resolve_dir("C:/a", "$AV_TEST_DIR/me"), os.path.normpath("C:/Users/me"))
 
     def test_ignores_other_tools(self):
         r = run_py(GUARD, stdin={"tool_name": "Write", "tool_input": {"file_path": "x"}})
