@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# agent-vault pre-push guard: no direct pushes to main; branch names must be <type>/<issue>-<slug>.
+re='^(feat|fix|chore|docs|refactor|test|perf|hotfix)/[0-9]+-[a-z0-9-]+$'
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ "$local_sha" =~ ^0+$ ]] && continue            # deletion (SHA-1 or SHA-256)
+  [[ "$remote_ref" == refs/heads/* ]] || continue   # tags, notes and other refs
+  branch="${remote_ref#refs/heads/}"
+  if [ "$branch" = "main" ]; then
+    echo "pre-push: direct pushes to main are blocked. Open a PR instead." >&2; exit 1
+  fi
+  if ! [[ "$branch" =~ $re ]]; then
+    echo "pre-push: branch '$branch' must match <type>/<issue>-<slug>, e.g. feat/12-note-schema" >&2; exit 1
+  fi
+done
+exit 0
