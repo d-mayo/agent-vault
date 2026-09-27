@@ -37,7 +37,7 @@ def bump_projects(paths: list[Path]) -> None:
         if p.parent.name != lib.FOLDERS["project"] or p.suffix != ".md":
             continue
         fm, _, _ = lib.split_frontmatter(lib.read_text(p))
-        if fm and fm.get("updated") != today:
+        if fm and "updated" in fm and fm["updated"] != today:   # v2 projects have no `updated`
             st = p.stat()
             vault.set_fields(p, updated=today)
             os.utime(p, (st.st_atime, st.st_mtime))  # bookkeeping isn't "new work"
