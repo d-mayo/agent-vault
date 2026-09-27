@@ -124,7 +124,7 @@ class SchemaOutputTest(VaultCase):
                 self.assertIn(v, text)
         for cap in lib.SIZE_CAPS.values():
             self.assertIn(str(cap), text)
-        for ev in lib.EVENTS:
+        for ev in lib.EVENTS + lib.IDEA_EVENTS:
             self.assertIn(ev, text)
         for rules in lib.LINE_FORMATS.values():
             for shape, _ in rules:
@@ -240,7 +240,7 @@ class CliAndHooksTest(VaultCase):
     def test_help_has_no_v1_commands(self):      # T10 -> AC10
         r = run_py(CLI, ["--help"], config=self.cfg)
         self.assertEqual(r.returncode, 0)
-        for word in ("archive", "new note", "handoff pull", "intake", "Intake"):
+        for word in ("archive", "new note", "new daily", "--goal", "--title", "intake", "Intake"):
             self.assertNotIn(word, r.stdout)
         src = (CODE / "vault.py").read_text(encoding="utf-8")
         for word in ("intake", "ARCHIVE", "FOLDERS[\"note\"]"):
@@ -270,6 +270,39 @@ class CliAndHooksTest(VaultCase):
         plan.write_text(text.replace("## Context\n", "## Context\n" + "- filler\n" * 400, 1), encoding="utf-8")
         stdin = {"tool_name": "Edit", "cwd": str(self.vault), "tool_input": {"file_path": str(plan)}}
         self.assertEqual(run_py(HOOKS / "post_edit.py", stdin=stdin, config=self.cfg).returncode, 0)
+
+
+class DraftPlanTest(VaultCase):
+    """D1: completeness rules warn on a draft plan and error on a sealed one."""
+    PLAN = "Agent/Work/demo/demo-1-plan.md"
+    SOFT = [("PLAN-AC", "fail-none"), ("PLAN-STEP", "fail-none"), ("PLAN-T", "fail-none"),
+            ("PLAN-COVER", "fail"), ("PLAN-FULL", "fail")]
+    HARD = [("PLAN-AC", "fail-duplicate"), ("PLAN-AC", "fail-format"), ("PLAN-STEP", "fail-files"),
+            ("PLAN-STEP", "fail-done-when"), ("PLAN-STEP", "fail-heading"), ("PLAN-T", "fail-arrow")]
+
+    def as_status(self, rule, case, status):
+        self.load_base()
+        text = (FIXTURES / rule / case / self.PLAN).read_text(encoding="utf-8")
+        self.put(self.PLAN, text.replace("status: sealed", f"status: {status}"))
+        return lib.validate_file(self.vault / self.PLAN)
+
+    def test_soft_rules_warn_on_draft_and_error_when_sealed(self):     # T4 -> AC5
+        for rule, case in self.SOFT:
+            with self.subTest(rule=rule):
+                res = self.as_status(rule, case, "draft")
+                self.assertTrue(any(m.startswith(f"[{rule}]") for m in res.warnings), res.warnings)
+                self.assertFalse(any(m.startswith(f"[{rule}]") for m in res.errors), res.errors)
+                res = self.as_status(rule, case, "sealed")
+                self.assertTrue(any(m.startswith(f"[{rule}]") for m in res.errors), res.errors)
+
+    def test_format_rules_stay_errors_on_draft(self):                  # T4 -> AC5
+        for rule, case in self.HARD:
+            with self.subTest(rule=rule, case=case):
+                res = self.as_status(rule, case, "draft")
+                self.assertTrue(any(m.startswith(f"[{rule}]") for m in res.errors), res.errors)
+
+    def test_every_soft_rule_is_covered(self):
+        self.assertEqual({r for r, _ in self.SOFT}, set(lib.DRAFT_SOFT))
 
 
 class CrossNoteTest(VaultCase):
