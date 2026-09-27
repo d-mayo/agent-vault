@@ -1,0 +1,195 @@
+"""Checks on skills/ (design §3): frontmatter, install, and that every
+`vault.py` command and option a skill names actually exists in the CLI
+parser (AC10)."""
+from __future__ import annotations
+
+import argparse
+import re
+import shlex
+import sys
+import unittest
+from pathlib import Path
+
+from tests.helpers import REPO
+
+sys.path.insert(0, str(REPO / "agent_vault"))
+sys.path.insert(0, str(REPO))
+import lib  # noqa: E402
+import vault  # noqa: E402
+import install  # noqa: E402
+
+SKILL_DIR = REPO / "skills" / "implement-story"
+CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+
+
+def read(name: str) -> str:
+    return (SKILL_DIR / name).read_text(encoding="utf-8")
+
+
+def frontmatter(text: str) -> dict:
+    lines = text.splitlines()
+    if lines[0].strip() != "---":
+        raise ValueError("SKILL.md must open with a '---' frontmatter block")
+    end = next(i for i in range(1, len(lines)) if lines[i].strip() == "---")
+    data = {}
+    for ln in lines[1:end]:
+        key, _, val = ln.partition(":")
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]     # a quoted YAML scalar, e.g. to keep a literal ' #' out of a comment
+        data[key.strip()] = val
+    return data
+
+
+def vault_calls(text: str) -> list[str]:
+    """The part after 'vault.py' in every code span that mentions it."""
+    out = []
+    for span in CODE_SPAN_RE.findall(text):
+        if "vault.py" not in span:
+            continue
+        after = span.split("vault.py", 1)[1].strip()
+        if after:
+            out.append(after)
+    return out
+
+
+def subparsers_action(parser: argparse.ArgumentParser):
+    return next((a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None)
+
+
+def resolve(parser: argparse.ArgumentParser, tokens: list[str]):
+    """Descend through nested subparsers while tokens name a subcommand.
+    Returns (deepest parser, command path, tokens not consumed as a command name)."""
+    path, i = [], 0
+    while True:
+        action = subparsers_action(parser)
+        if action and i < len(tokens) and tokens[i] in action.choices:
+            parser = action.choices[tokens[i]]
+            path.append(tokens[i])
+            i += 1
+            continue
+        break
+    return parser, path, tokens[i:]
+
+
+def is_placeholder(tok: str) -> bool:
+    return "<" in tok or tok.startswith("[") or tok.startswith('"')
+
+
+def check_call(top: argparse.ArgumentParser, call: str) -> list[str]:
+    """Problems with one 'vault.py <call>' mention, or [] if it's fine."""
+    tokens = shlex.split(call.replace("[", "").replace("]", ""))
+    if not tokens or is_placeholder(tokens[0]):
+        return []          # a generic illustration, e.g. "vault.py <command>"
+    parser, path, rest = resolve(top, tokens)
+    if not path:
+        return [f"'{tokens[0]}' is not a vault.py command"]
+    problems = []
+    opts = set(parser._option_string_actions)
+    for tok in rest:
+        if tok.startswith("--"):
+            name = tok.split("=", 1)[0]
+            if name not in opts:
+                problems.append(f"`{name}` is not accepted by `vault.py {' '.join(path)}`")
+    return problems
+
+
+class SkillFrontmatterTest(unittest.TestCase):  # T1 -> AC1
+    def test_name_and_description(self):
+        fm = frontmatter(read("SKILL.md"))
+        self.assertEqual(fm.get("name"), "implement-story")
+        desc = fm.get("description", "").lower()
+        self.assertIn("implement", desc)
+        self.assertTrue(re.search(r"implement (#\d|issue \d)", desc),
+                        "description should show a trigger like 'implement #9' or 'implement issue 9'")
+
+
+class SkillInstallTest(unittest.TestCase):  # T1 -> AC1
+    def test_installs_with_marker(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            claude = Path(td) / ".claude"
+            report: list[str] = []
+            install.install_skills(claude, report)
+            dest = claude / "skills" / "implement-story"
+            self.assertTrue((dest / "SKILL.md").is_file())
+            self.assertTrue((dest / "reviewer.md").is_file())
+            self.assertTrue((dest / install.SKILL_MARKER).exists())
+            self.assertTrue(any("implement-story" in r for r in report))
+
+
+class VaultCommandsTest(unittest.TestCase):  # T2 -> AC10
+    def test_every_command_and_option_exists(self):
+        top = vault.build_parser()
+        problems, calls = [], []
+        for name in ("SKILL.md", "reviewer.md"):
+            found = vault_calls(read(name))
+            calls += found
+            problems += [f"{name}: {p}" for p in (p for call in found for p in check_call(top, call))]
+        self.assertGreaterEqual(len(calls), 3,
+                                 "expected several 'vault.py ...' mentions to check; found none — "
+                                 "did the extraction regex break, or did the skill stop naming any?")
+        self.assertEqual(problems, [])
+
+
+class ProcedureContentTest(unittest.TestCase):  # T3 -> AC2-AC9
+    def setUp(self):
+        self.skill = read("SKILL.md")
+        self.reviewer = read("reviewer.md")
+
+    def assertMentions(self, *needles: str, text: str | None = None):
+        # collapse wrapped-prose whitespace so a phrase split across a line
+        # wrap by markdown formatting still matches
+        text = re.sub(r"\s+", " ", (text or self.skill).lower())
+        for n in needles:
+            self.assertIn(re.sub(r"\s+", " ", n.lower()), text, f"expected {n!r} in the skill files")
+
+    def test_start_resolves_repo_issue_and_gates_on_preflight(self):  # AC2
+        self.assertMentions("vault.py preflight", "git config --get remote.origin.url",
+                             "vault.py branch")
+
+    def test_per_step_commits_and_reviews(self):  # AC3
+        self.assertMentions("(#<issue>)", "one commit per step", "review findings",
+                             "(major|minor)", "fixed in", "won't fix")
+
+    def test_reviewer_runs_on_opus_with_own_prompt_and_fixed_format(self):  # AC4
+        self.assertMentions('model: "opus"', "acceptance criteria", "claude.md",
+                             "git diff <from>..<to>", text=self.reviewer)
+        self.assertMentions("no findings.", "(major)", "(minor)", text=self.reviewer)
+
+    def test_deviations_and_stop_and_ask(self):  # AC5
+        self.assertMentions("## deviations", "stop and ask")
+
+    def test_finish_runs_full_check_final_review_and_opens_pr(self):  # AC6
+        self.assertMentions("full check", "whole pr diff", "## verification",
+                             "## discoveries", "vault.py open-pr")
+
+    def test_address_pr_review(self):  # AC7
+        self.assertMentions("address pr review", "pr review:", "gh pr view", "--paginate",
+                             "leave the impl note open")
+
+    def test_resume_from_commits_and_impl_note(self):  # AC8
+        self.assertMentions("## resume", "git log --oneline <base>..head", "impl note")
+
+    def test_never_merges_pushes_main_edits_plan_or_installs(self):  # AC9
+        self.assertMentions("never merge", "never push to `main`", "never edit a sealed plan",
+                             "never run `install.py`")
+
+
+class ImplNoteFormatTest(unittest.TestCase):  # T3 -> AC3, AC4, AC7 (schema fidelity)
+    def test_finding_line_convention_matches_the_fixed_schema(self):
+        """The three tags the skill uses (Step/Final review/PR review) still produce a
+        line lib.py's own IMPL-REV format actually accepts — not just something that
+        looks plausible in prose."""
+        samples = [
+            "- R1 (major): Step 1: example finding → fixed in 1234567",
+            "- R2 (minor): Final review: example finding → won't fix: not worth it",
+            "- R3 (minor): PR review: example finding → fixed in abcdef1",
+        ]
+        for line in samples:
+            self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["IMPL-REV"]),
+                             f"{line!r} should match lib.py's IMPL-REV format")
+
+
+if __name__ == "__main__":
+    unittest.main()
