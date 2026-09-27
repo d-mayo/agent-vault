@@ -35,7 +35,7 @@ class PathsTest(unittest.TestCase):
         self.assertFalse(gone.exists())
 
     def test_config_override(self):
-        r = run_py(HOOKS / "session_start.py", stdin={"session_id": "t"}, config=self.cfg)
+        r = run_py(HOOKS / "session_start.py", stdin={"session_id": "t", "cwd": str(self.vault)}, config=self.cfg)
         self.assertEqual(r.returncode, 0)
         self.assertIn("Vault check: OK", r.stdout)
         self.assertTrue(list((self.vault / "Agent" / "Daily").glob("*.md")))

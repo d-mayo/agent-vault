@@ -12,11 +12,13 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 GH_ENV = "AGENT_VAULT_GH"
 INSTALL_URL = "https://cli.github.com"
+DEADLINE: float | None = None      # time.monotonic() value after which every call fails (hooks set it)
 SIGNED_OUT_HINTS = ("gh auth login", "not logged in", "authentication required", "bad credentials")
 
 
@@ -61,10 +63,17 @@ def run(argv: list[str], cwd: Path | str | None = None, check: bool = True) -> s
         argv = gh_command() + argv[1:]
     elif tool != "git":
         raise ValueError(f"github.run only runs gh and git, not {tool!r}")
+    timeout = None
+    if DEADLINE is not None:
+        timeout = DEADLINE - time.monotonic()
+        if timeout <= 0:
+            raise CmdError("GitHub did not answer in time", "timeout")
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0", GH_NO_UPDATE_NOTIFIER="1")
     try:
         proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
+                              encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise CmdError("GitHub did not answer in time", "timeout")
     except FileNotFoundError:
         if tool == "git":
             raise CmdError("git was not found on PATH", "missing")
@@ -94,6 +103,11 @@ def gh_json(*args: str, cwd=None):
 
 def git(*args: str, cwd=None, check: bool = True) -> str:
     return run(["git", *args], cwd, check).stdout.strip()
+
+
+def status_lines(cwd) -> list[str]:
+    """`git status --porcelain`, one entry per changed path. Not stripped: the first column can be a space."""
+    return run(["git", "status", "--porcelain"], cwd, check=False).stdout.splitlines()
 
 
 # --- repos ------------------------------------------------------------------------

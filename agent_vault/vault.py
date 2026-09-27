@@ -437,32 +437,35 @@ def create_with_body(cmd: list[str], body: str) -> str:
     return out.strip().splitlines()[-1].strip()
 
 
-def cmd_stage(args) -> None:
-    slug = issue_context(args)
-    info = github.issue_info(slug, args.issue)
-    pat = issue_branch_re(args.issue)
+def stage_of(slug: str, repo: str, issue: str) -> tuple[str, str]:
+    """(stage, why) of an issue, derived from GitHub and the plan note (design §4)."""
+    info = github.issue_info(slug, issue)
+    pat = issue_branch_re(issue)
     prs = [p for p in github.open_prs(slug) if pat.match(p["headRefName"])]
     branches = [b for b in github.remote_branches(slug) if pat.match(b)]
-    plan = work_path(args.repo, args.issue, "plan")
+    plan = work_path(repo, issue, "plan")
     sealed = False
     if plan.is_file():
         fm, _, _ = lib.split_frontmatter(lib.read_text(plan))
         sealed = (fm or {}).get("status") == "sealed"
     label = lib.PLANNED_LABEL[0]
     if info["state"] != "OPEN":
-        stage, why = "done", f"issue #{args.issue} is {info['state'].lower()}"
-    elif prs:
-        stage, why = "in review", f"PR {prs[0]['url']} is open for {prs[0]['headRefName']}"
-    elif branches:
-        stage, why = "in progress", f"branch {branches[0]} exists and has no open PR"
-    elif sealed and label in info["labels"]:
-        stage, why = "planned", f"the plan is sealed and the issue has the '{label}' label"
-    elif sealed:
-        stage, why = "backlog", (f"the plan is sealed but the issue lacks the '{label}' label; "
-                                 f"rerun `seal plan {args.repo} {args.issue}` to add it")
-    else:
-        stage, why = "backlog", "the issue is open and has no sealed plan"
-    print(f"{stage}: {why}")
+        return "done", f"issue #{issue} is {info['state'].lower()}"
+    if prs:
+        return "in review", f"PR {prs[0]['url']} is open for {prs[0]['headRefName']}"
+    if branches:
+        return "in progress", f"branch {branches[0]} exists and has no open PR"
+    if sealed and label in info["labels"]:
+        return "planned", f"the plan is sealed and the issue has the '{label}' label"
+    if sealed:
+        return "backlog", (f"the plan is sealed but the issue lacks the '{label}' label; "
+                           f"rerun `seal plan {repo} {issue}` to add it")
+    return "backlog", "the issue is open and has no sealed plan"
+
+
+def cmd_stage(args) -> None:
+    slug = issue_context(args)
+    print("{}: {}".format(*stage_of(slug, args.repo, args.issue)))
 
 
 def cmd_idea_promote(args) -> None:

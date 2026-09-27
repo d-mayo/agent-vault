@@ -36,6 +36,13 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
                 self.assertEqual(self.check(cmd, "main", cwd=elsewhere), 2)
         self.assertEqual(self.check(f"cd {self.repo} && git push", "feat/1-x", cwd=elsewhere), 0)
 
+    def test_blocks_windows_paths(self):  # AC11
+        elsewhere = Path(self._t.name)
+        for cmd in [f"git -C {self.repo} push", f'git -C "{self.repo}" push origin',
+                    f"cd {self.repo} && git push", f"pushd {self.repo}; git push"]:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.check(cmd, "main", cwd=elsewhere), 2)
+
     def test_blocks(self):
         for cmd, branch in [
             ("git push origin main", "feat/1-x"),

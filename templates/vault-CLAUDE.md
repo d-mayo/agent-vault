@@ -13,10 +13,11 @@ The scripts live outside the vault, in `~/.claude/agent-vault/`, installed from 
 
 ## Rules
 
-Hooks in `.claude/settings.json` enforce these. If a hook blocks you, do what its message says; don't work around it.
+Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what its message says; don't work around it.
 
 - Create notes only with the commands below, then edit the file they create. Daily notes are written only by `log` and the pipeline commands; never edit them.
 - A project reference is always `[[project-id]]` of a project that exists. If it's unclear which project something belongs to, ask me instead of guessing.
+- Never write vault files through the shell (`echo >`, `sed -i`, `Set-Content`, `mv`, …): use the CLI commands below or the edit tools, which the hooks check. Sealed notes and past daily notes are never edited; if one is wrong, tell me.
 - Log work with `{{CLI}} log "..." --project <id>`. Past daily notes are closed.
 - A project's current truth lives in its project note (`Purpose`, `Current state`, `Architecture`, `Standing decisions`). Daily notes are history.
 
