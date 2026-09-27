@@ -535,6 +535,27 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
         self.assertEqual(self.fm(self.retro)["status"], "sealed")
 
+    def test_seals_closed_issue_ignoring_a_stale_branch_field(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        self.assertEqual(self.fm(self.note("impl"))["branch"], self.name)   # left stale, unlike the other tests
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+
+    def test_seals_closed_issue_from_branch_with_existing_upstream(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.assertEqual(git("rev-parse", "--abbrev-ref", f"{self.name}@{{u}}", cwd=self.clone),
+                         f"origin/{self.name}")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        log = git("log", "-1", "--format=%s", f"origin/{self.name}", cwd=self.clone)
+        self.assertIn("docs(claude): verify audited sections (#7)", log)
+
     def test_closed_issue_refused_on_default_branch(self):
         self.prep()
         self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)

@@ -9,7 +9,8 @@ Runs last in the pipeline, before merge (design §5 step 4). Audits the repo's
 living docs against what the PR actually did, replaces restated facts with
 pointers to their real home, sorts what's left into an issue, an idea, or
 dropped, then seals the impl note and the retro. There is no reviewer
-subagent here — this skill is out of scope for one (see the plan).
+subagent here: a retro has no code to review, only docs and judgment calls,
+which this skill's own approval steps already put in front of the user.
 
 Every `vault.py <command>` below means the exact CLI string in the current
 vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
@@ -50,13 +51,15 @@ name (e.g. `agent-vault`), never `owner/name`.
      fetching first if it isn't local yet). This must stay the current
      branch for the whole retro — `seal retro` checks it. If `branch:` is
      empty or the branch is gone, stop and ask.
-   - Closed (a backfill, run after the merge): stay on whatever non-default
-     branch is already checked out in this session — normally another
-     issue's still-open feature branch running the backlog (D1: the
-     backfilled issue's own branch is usually already deleted, and this
-     avoids one throwaway branch and PR per backfilled issue). Never create
-     a new branch or open a new PR for a backfill, and never check out the
-     default branch itself.
+   - Closed (a backfill, run after the merge): the backfilled issue's own
+     branch is usually already deleted, and recreating one just for this
+     would mean a throwaway branch and PR per backfilled issue. Instead,
+     stay on whatever non-default branch is already checked out in this
+     session — normally another issue's still-open feature branch that's
+     running the backlog. Never create a new branch or open a new PR for a
+     backfill. If the current branch is the default branch, or HEAD is
+     detached, stop and ask rather than guessing which other branch to
+     switch to.
 3. Either way, the working tree must be clean before `seal retro` runs at
    the end; commit or stash anything in the way now.
 
@@ -85,7 +88,10 @@ name (e.g. `agent-vault`), never `owner/name`.
      elsewhere — the code, another doc, the design record. If so, rewrite
      it into a pointer to that home instead of a copy.
    - `rewritten`: edit the section now, in this repo's `CLAUDE.md` or
-     `README.md`; the audit line records what changed and why.
+     `README.md`; the audit line records what changed and why. If the
+     rewrite renames the heading itself, the audit line names the heading
+     as it now reads, not the old name — `seal retro` matches audit lines
+     against the file's current headings.
    - `removed`: delete the section now, same as above.
    - `confirmed`: leave it as-is; `seal retro` bumps the `verified:` date on
      any `CLAUDE.md` section that carries a `covers:` comment.
@@ -99,7 +105,9 @@ name (e.g. `agent-vault`), never `owner/name`.
      is `None`.
 5. Repo-file rewrites (`CLAUDE.md`, `README.md`) are committed and pushed
    on the current branch before moving on — `seal retro` refuses a dirty
-   tree, and it needs the audited state already on the remote.
+   tree, and it needs the audited state already on the remote. Push with
+   plain `git push` if the branch already has an upstream, or `git push -u
+   origin HEAD` if it doesn't yet.
 
 ## Follow-ups
 
@@ -135,13 +143,13 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 Same Audit, Follow-ups and Seal procedure as above, run on whatever
 non-default branch is already checked out (see Preflight) instead of the
-impl note's `branch:`, which may already be gone. That branch already has
-an upstream and, usually, an open PR (the one running the backlog), so the
-Audit step's repo-doc commits reach it the normal way — plain `git push`.
-`seal retro` for a closed issue needs no `branch:` in the impl note; it
-still refuses a dirty tree, and it commits and pushes its own `verified:`
-bump to the current branch, giving that branch an upstream itself if it
-somehow doesn't have one yet.
+impl note's `branch:`, which may already be gone — usually a branch that
+already has an upstream and an open PR (the one running the backlog), so
+Audit step 5's push is a plain `git push`; if it turns out not to, that
+step's own `-u origin HEAD` fallback covers it. `seal retro` for a closed
+issue needs no `branch:` in the impl note; it still refuses a dirty tree,
+and it commits and pushes its own `verified:` bump to the current branch,
+giving that branch an upstream itself if it somehow doesn't have one yet.
 
 ## Stop and ask if
 
@@ -154,6 +162,9 @@ somehow doesn't have one yet.
   obvious from the PR diff and the code.
 - A follow-up needs a GitHub issue created or amended, and the user hasn't
   approved the exact wording yet.
+- The retro can't fit the 40-line body cap once every `##` heading of
+  `CLAUDE.md`, `README.md` and the overview has its audit line — trimming
+  reasons won't fix it, and it isn't this skill's call to raise the cap.
 - `vault.py validate` still fails after fixing what's fixable.
 - For an open issue, the branch to check out isn't the impl note's
   `branch:` — the branch was deleted or never existed; don't improvise one.
