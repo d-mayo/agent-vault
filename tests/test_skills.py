@@ -1,12 +1,13 @@
 """Checks on skills/ (design §3): frontmatter, install, and that every
 `vault.py` command and option a skill names actually exists in the CLI
-parser (AC10)."""
+parser (AC10/AC11 of #8, AC1/AC11 of #7)."""
 from __future__ import annotations
 
 import argparse
 import re
 import shlex
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,12 +19,18 @@ import lib  # noqa: E402
 import vault  # noqa: E402
 import install  # noqa: E402
 
-SKILL_DIR = REPO / "skills" / "implement-story"
+SKILLS_DIR = REPO / "skills"
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 
+# skill name -> (frontmatter trigger pattern, reference file next to SKILL.md)
+SKILLS = {
+    "implement-story": (r"implement (#\d|issue \d)", "reviewer.md"),
+    "plan-story": (r"plan (#\d|issue \d)", "plan-reviewer.md"),
+}
 
-def read(name: str) -> str:
-    return (SKILL_DIR / name).read_text(encoding="utf-8")
+
+def read(skill: str, name: str) -> str:
+    return (SKILLS_DIR / skill / name).read_text(encoding="utf-8")
 
 
 def frontmatter(text: str) -> dict:
@@ -94,55 +101,64 @@ def check_call(top: argparse.ArgumentParser, call: str) -> list[str]:
     return problems
 
 
-class SkillFrontmatterTest(unittest.TestCase):  # T1 -> AC1
+class SkillFrontmatterTest(unittest.TestCase):  # T1 -> AC1 (#8, #7)
     def test_name_and_description(self):
-        fm = frontmatter(read("SKILL.md"))
-        self.assertEqual(fm.get("name"), "implement-story")
-        desc = fm.get("description", "").lower()
-        self.assertIn("implement", desc)
-        self.assertTrue(re.search(r"implement (#\d|issue \d)", desc),
-                        "description should show a trigger like 'implement #9' or 'implement issue 9'")
+        for skill, (pattern, _ref) in SKILLS.items():
+            with self.subTest(skill=skill):
+                fm = frontmatter(read(skill, "SKILL.md"))
+                self.assertEqual(fm.get("name"), skill)
+                desc = fm.get("description", "").lower()
+                self.assertTrue(re.search(pattern, desc),
+                                 f"{skill}: description should show a trigger matching {pattern!r}")
 
 
-class SkillInstallTest(unittest.TestCase):  # T1 -> AC1
+class SkillInstallTest(unittest.TestCase):  # T1 -> AC1 (#8, #7)
     def test_installs_with_marker(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as td:
             claude = Path(td) / ".claude"
             report: list[str] = []
             install.install_skills(claude, report)
-            dest = claude / "skills" / "implement-story"
-            self.assertTrue((dest / "SKILL.md").is_file())
-            self.assertTrue((dest / "reviewer.md").is_file())
-            self.assertTrue((dest / install.SKILL_MARKER).exists())
-            self.assertTrue(any("implement-story" in r for r in report))
+            for skill, (_pattern, ref) in SKILLS.items():
+                with self.subTest(skill=skill):
+                    dest = claude / "skills" / skill
+                    self.assertTrue((dest / "SKILL.md").is_file())
+                    self.assertTrue((dest / ref).is_file())
+                    self.assertTrue((dest / install.SKILL_MARKER).exists())
+                    self.assertTrue(any(skill in r for r in report))
 
 
-class VaultCommandsTest(unittest.TestCase):  # T2 -> AC10
+class VaultCommandsTest(unittest.TestCase):  # T2 -> AC10 (#8), AC11 (#7)
     def test_every_command_and_option_exists(self):
         top = vault.build_parser()
         problems, calls = [], []
-        for name in ("SKILL.md", "reviewer.md"):
-            found = vault_calls(read(name))
-            calls += found
-            problems += [f"{name}: {p}" for p in (p for call in found for p in check_call(top, call))]
+        for skill, (_pattern, ref) in SKILLS.items():
+            for name in ("SKILL.md", ref):
+                found = vault_calls(read(skill, name))
+                calls += found
+                problems += [f"{skill}/{name}: {p}" for p in (p for call in found for p in check_call(top, call))]
         self.assertGreaterEqual(len(calls), 3,
                                  "expected several 'vault.py ...' mentions to check; found none — "
-                                 "did the extraction regex break, or did the skill stop naming any?")
+                                 "did the extraction regex break, or did the skills stop naming any?")
         self.assertEqual(problems, [])
+        for skill, (_pattern, ref) in SKILLS.items():
+            with self.subTest(skill=skill):
+                found = sum(len(vault_calls(read(skill, name))) for name in ("SKILL.md", ref))
+                self.assertGreaterEqual(found, 1, f"{skill}: expected at least one 'vault.py ...' mention")
 
 
-class ProcedureContentTest(unittest.TestCase):  # T3 -> AC2-AC9
-    def setUp(self):
-        self.skill = read("SKILL.md")
-        self.reviewer = read("reviewer.md")
-
+class AssertMentionsMixin:
     def assertMentions(self, *needles: str, text: str | None = None):
         # collapse wrapped-prose whitespace so a phrase split across a line
         # wrap by markdown formatting still matches
-        text = re.sub(r"\s+", " ", (text or self.skill).lower())
+        text = re.sub(r"\s+", " ", (text if text is not None else self.skill).lower())
         for n in needles:
             self.assertIn(re.sub(r"\s+", " ", n.lower()), text, f"expected {n!r} in the skill files")
+
+
+class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> AC2-AC9 (#8)
+    def setUp(self):
+        self.skill = read("implement-story", "SKILL.md")
+        self.reviewer = read("implement-story", "reviewer.md")
 
     def test_start_resolves_repo_issue_and_gates_on_preflight(self):  # AC2
         self.assertMentions("vault.py preflight", "git config --get remote.origin.url",
@@ -176,7 +192,7 @@ class ProcedureContentTest(unittest.TestCase):  # T3 -> AC2-AC9
                              "never run `install.py`")
 
 
-class ImplNoteFormatTest(unittest.TestCase):  # T3 -> AC3, AC4, AC7 (schema fidelity)
+class ImplNoteFormatTest(unittest.TestCase):  # T3 -> AC3, AC4, AC7 (schema fidelity) (#8)
     def test_finding_line_convention_matches_the_fixed_schema(self):
         """The three tags the skill uses (Step/Final review/PR review) still produce a
         line lib.py's own IMPL-REV format actually accepts — not just something that
@@ -189,6 +205,61 @@ class ImplNoteFormatTest(unittest.TestCase):  # T3 -> AC3, AC4, AC7 (schema fide
         for line in samples:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["IMPL-REV"]),
                              f"{line!r} should match lib.py's IMPL-REV format")
+
+
+class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> AC2-AC10 (#7)
+    def setUp(self):
+        self.skill = read("plan-story", "SKILL.md")
+        self.reviewer = read("plan-story", "plan-reviewer.md")
+
+    def test_research_before_asking(self):  # AC2
+        self.assertMentions("## research", "before asking the user anything",
+                             "gh issue view", "don't count as requirements",
+                             "other open issues", "spec sections",
+                             "read the repo's `claude.md`", "project overview note",
+                             "the code the issue will touch")
+
+    def test_interview_batched_with_trade_offs(self):  # AC3
+        self.assertMentions("## interview", "states the fact that raised it",
+                             "recommended one first", "trade-offs", "at most 4",
+                             "would change the plan is still ambiguous")
+
+    def test_draft_validated_with_user_decisions(self):  # AC4
+        self.assertMentions("vault.py new plan", "vault.py validate",
+                             "no errors or warnings", '"(user decision)"')
+
+    def test_plan_reviewer_runs_on_opus_with_own_prompt_and_fixed_format(self):  # AC5
+        self.assertMentions("see `plan-reviewer.md`", "fix what you can")
+        self.assertMentions('model: "opus"', "exercise it", "neighbouring issue's scope",
+                             "go beyond the issue itself", text=self.reviewer)
+        self.assertMentions("no findings.", "(major)", "(minor)", text=self.reviewer)
+
+    def test_summary_never_asks_to_read_the_raw_plan(self):  # AC6
+        self.assertMentions("## summary", "plain-language summary",
+                             "never asking the user to read the raw plan",
+                             "the user's decisions from the interview",
+                             "the skill's own judgment calls, flagged for the user to check",
+                             "when the implementer must stop and ask")
+
+    def test_approval_seals_only_after_explicit_approval(self):  # AC7
+        self.assertMentions("## approval", "vault.py seal plan", "explicit approval",
+                             "change list")
+
+    def test_issue_hygiene_approved_before_posting(self):  # AC8
+        self.assertMentions("## issue hygiene",
+                             "discoveries that belong to a different, unplanned issue",
+                             "criteria that turned out impossible",
+                             "propose the exact wording to the user before doing anything",
+                             "post github edits only after the user approves that wording",
+                             "before sealing, so the sealed plan matches the issue")
+
+    def test_handoff_suggests_worktree_and_never_branches(self):  # AC9
+        self.assertMentions("## handoff", "a fresh session on", "sonnet", "git worktree",
+                             '"implement #<issue>"', "never creates the branch")
+
+    def test_never_writes_code_branches_or_edits_sealed_plan(self):  # AC10
+        self.assertMentions("## never", "never write code", "never create a branch",
+                             "never edit a sealed plan")
 
 
 if __name__ == "__main__":
