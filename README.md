@@ -18,8 +18,9 @@ The installer is safe to rerun after every `git pull`. It:
 
 - copies the code to `~/.claude/agent-vault/` and any skills to `~/.claude/skills/`;
 - writes `~/.claude/agent-vault.json` with the vault path;
-- merges its hooks into `~/.claude/settings.json` and `<vault>/.claude/settings.json`,
-  only ever replacing entries it created, and backing up each file to `.bak` first;
+- merges every hook and the permission to run the CLI into `~/.claude/settings.json`,
+  only ever replacing entries it created, backing the file up to `.bak` first, and removes
+  the entries older versions put in `<vault>/.claude/settings.json`;
 - writes `<vault>/CLAUDE.md`;
 - deletes the v1 scripts from `<vault>/Agent/_system/` if they're still there (the handoff log is kept);
 - turns on this repo's git hooks (`agent_vault/githooks/`); other repos get the installed copy from `repo-init`.
@@ -28,7 +29,9 @@ Hooks run with the same Python that ran the installer, so if you switch Python
 installs, rerun it.
 
 **To verify:** run the `check:` command it prints last. Then start Claude Code in
-the vault: its first reply should contain "Vault context".
+the vault and ask it to quote the context it was given at session start: it should
+begin with "Vault context". (The app doesn't display that context; it goes straight
+into Claude's context.)
 
 ## Git conventions
 

@@ -258,6 +258,38 @@ class SessionStartTest(HookCase):
         self.assertIn("isn't tied to an issue", out)
         self.assertIn("Build widgets.", out)
 
+    def test_claudemd_lint_failures_shown(self):  # T2 -> AC8
+        self.put(self.repo / "CLAUDE.md", "# widget\n\n## Layout\n- `missing.py`: nope.\n")
+        git("add", "CLAUDE.md", cwd=self.repo)
+        git("commit", "-q", "-m", "docs", cwd=self.repo)
+        out = self.start(self.repo)
+        self.assertIn("claudemd-lint found 1 problem(s):", out)
+        self.assertIn("missing.py", out)
+
+    def test_claudemd_lint_ok_and_stale_count(self):  # T2 -> AC8
+        self.put(self.repo / "CLAUDE.md", "# widget\n\n## Purpose\nx.\n")
+        git("add", "CLAUDE.md", cwd=self.repo)
+        git("commit", "-q", "-m", "docs", cwd=self.repo)
+        out = self.start(self.repo)
+        self.assertIn("claudemd-lint: OK", out)
+        self.assertNotIn("stale section", out)
+
+    def test_claudemd_crash_gives_a_notice_and_never_blocks(self):  # T4 -> AC8
+        script = self.root / "crash_claudemd.py"
+        script.write_text(textwrap.dedent(f"""
+            import sys
+            sys.path[:0] = [{str(CODE)!r}, {str(HOOKS)!r}]
+            import session_start, lib, claudemd
+            def boom(*a, **k):
+                raise RuntimeError("boom")
+            claudemd.lint = boom
+            lib.run_hook(session_start.main, "SessionStart", stream=sys.stdout)
+        """), encoding="utf-8")
+        r = run_py(script, stdin={"session_id": self.sid, "cwd": str(self.repo)}, config=self.cfg, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("claudemd-lint unavailable", r.stdout)
+        self.assertIn("Build widgets.", r.stdout)                   # the rest still printed
+
     def test_silent_when_not_registered_or_not_git(self):
         self.assertEqual(self.start(self.other), "")
         self.assertEqual(self.start(self.root), "")
