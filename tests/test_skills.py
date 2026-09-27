@@ -226,10 +226,11 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
 
     def test_draft_validated_with_user_decisions(self):  # AC4
         self.assertMentions("vault.py new plan", "vault.py validate",
-                             "no errors or warnings", '"(user decision)"')
+                             "no errors or warnings", "(user decision)")
 
     def test_plan_reviewer_runs_on_opus_with_own_prompt_and_fixed_format(self):  # AC5
-        self.assertMentions("see `plan-reviewer.md`", "fix what you can")
+        self.assertMentions("see `plan-reviewer.md`", "fix what you can",
+                             "goes into the summary instead of being silently dropped")
         self.assertMentions('model: "opus"', "exercise it", "neighbouring issue's scope",
                              "go beyond the issue itself", text=self.reviewer)
         self.assertMentions("no findings.", "(major)", "(minor)", text=self.reviewer)
@@ -239,6 +240,7 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
                              "never asking the user to read the raw plan",
                              "the user's decisions from the interview",
                              "the skill's own judgment calls, flagged for the user to check",
+                             "what's out of scope,",
                              "when the implementer must stop and ask")
 
     def test_approval_seals_only_after_explicit_approval(self):  # AC7
