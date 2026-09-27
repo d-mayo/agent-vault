@@ -310,6 +310,14 @@ class BumpVerifiedTest(ClaudemdCase):        # used by `seal retro` (AC6)
         self.assertEqual(bumped, [])
         self.assertEqual(new_text, text)
 
+    def test_already_verified_today_is_not_rebumped(self):
+        # Two issues' retros sealed the same day must not produce a no-op commit.
+        text = ("# demo\n\n## Commands\n<!-- covers: install.py; verified: 2026-02-01 -->\n- x\n")
+        sections, _ = claudemd.parse(text)
+        new_text, bumped = claudemd.bump_verified(text, sections, {"Commands"}, dt.date(2026, 2, 1))
+        self.assertEqual(bumped, [])
+        self.assertEqual(new_text, text)
+
 
 if __name__ == "__main__":
     unittest.main()
