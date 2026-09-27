@@ -14,6 +14,7 @@ from tests.helpers import REPO
 
 sys.path.insert(0, str(REPO / "agent_vault"))
 sys.path.insert(0, str(REPO))
+import lib  # noqa: E402
 import vault  # noqa: E402
 import install  # noqa: E402
 
@@ -33,7 +34,10 @@ def frontmatter(text: str) -> dict:
     data = {}
     for ln in lines[1:end]:
         key, _, val = ln.partition(":")
-        data[key.strip()] = val.strip()
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]     # a quoted YAML scalar, e.g. to keep a literal ' #' out of a comment
+        data[key.strip()] = val
     return data
 
 
@@ -145,7 +149,7 @@ class ProcedureContentTest(unittest.TestCase):  # T3 -> AC2-AC9
                              "vault.py branch")
 
     def test_per_step_commits_and_reviews(self):  # AC3
-        self.assertMentions("one commit per step", "review findings",
+        self.assertMentions("(#<issue>)", "one commit per step", "review findings",
                              "(major|minor)", "fixed in", "won't fix")
 
     def test_reviewer_runs_on_opus_with_own_prompt_and_fixed_format(self):  # AC4
@@ -161,7 +165,8 @@ class ProcedureContentTest(unittest.TestCase):  # T3 -> AC2-AC9
                              "## discoveries", "vault.py open-pr")
 
     def test_address_pr_review(self):  # AC7
-        self.assertMentions("address pr review", "pr review:", "gh pr view", "leave the impl note open")
+        self.assertMentions("address pr review", "pr review:", "gh pr view", "--paginate",
+                             "leave the impl note open")
 
     def test_resume_from_commits_and_impl_note(self):  # AC8
         self.assertMentions("## resume", "git log --oneline <base>..head", "impl note")
@@ -169,6 +174,21 @@ class ProcedureContentTest(unittest.TestCase):  # T3 -> AC2-AC9
     def test_never_merges_pushes_main_edits_plan_or_installs(self):  # AC9
         self.assertMentions("never merge", "never push to `main`", "never edit a sealed plan",
                              "never run `install.py`")
+
+
+class ImplNoteFormatTest(unittest.TestCase):  # T3 -> AC3, AC4, AC7 (schema fidelity)
+    def test_finding_line_convention_matches_the_fixed_schema(self):
+        """The three tags the skill uses (Step/Final review/PR review) still produce a
+        line lib.py's own IMPL-REV format actually accepts — not just something that
+        looks plausible in prose."""
+        samples = [
+            "- R1 (major): Step 1: example finding → fixed in 1234567",
+            "- R2 (minor): Final review: example finding → won't fix: not worth it",
+            "- R3 (minor): PR review: example finding → fixed in abcdef1",
+        ]
+        for line in samples:
+            self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["IMPL-REV"]),
+                             f"{line!r} should match lib.py's IMPL-REV format")
 
 
 if __name__ == "__main__":

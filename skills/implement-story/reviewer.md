@@ -67,6 +67,7 @@ the numbering already in the impl note's `## Review findings`:
 
 A review that comes back `No findings.` still needs recording — not as a
 `## Review findings` line (there's no finding to put there), but as a
-`## Verification` line (`- Step <s> reviewed: no findings` or
-`- Final review: no findings`), so a later session can tell a step that was
-reviewed clean from one that was never reviewed at all.
+`## Verification` line (`- Step <s> reviewed: no findings`,
+`- Final review: no findings`, or `- PR review reviewed: no findings`), so a
+later session can tell a step that was reviewed clean from one that was
+never reviewed at all.

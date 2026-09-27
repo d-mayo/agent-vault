@@ -1,6 +1,6 @@
 ---
 name: implement-story
-description: Take a GitHub issue with a sealed agent-vault plan from its branch to an open pull request, or address PR review comments already requested on one. Implements step by step with an independent review after every step, runs the relevant tests, keeps the impl note current, and resumes cleanly in a new session. Use for requests like "implement #9", "implement issue 9", "continue implementing agent-vault#9", or "address the review on #9".
+description: 'Take a GitHub issue with a sealed agent-vault plan from its branch to an open pull request, or address PR review comments already requested on one. Implements step by step with an independent review after every step, runs the relevant tests, keeps the impl note current, and resumes cleanly in a new session. Use for requests like "implement #9", "implement issue 9", "continue implementing agent-vault#9", or "address the review on #9".'
 ---
 
 # implement-story
@@ -25,11 +25,17 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 - The impl note already has a `pr:`, or the request is about review comments
   or requested changes rather than implementing: go to **Address PR review**.
-- Otherwise: **Start** (nothing has run yet) or **Resume** (a branch already
-  exists), then work through **Per step** to **Finish**.
+- Otherwise: go to **Start** — it reads the plan regardless of whether a
+  branch already exists, and its own step 3 hands off to **Resume** for
+  whatever's already committed. Never jump straight to **Resume**: it has no
+  preflight check and doesn't read the plan or check out anything.
 
 ## Resolve the repo and issue
 
+- Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
+  path; the exact `vault.py` invocation is the line under "CLI after
+  install" in `<vault>/CLAUDE.md`. A repo session's own startup context
+  doesn't carry either.
 - Repo: `git config --get remote.origin.url` in the current clone gives a
   URL such as `git@github.com:owner/name.git` or `https://github.com/owner/name`;
   strip the host and any trailing `.git` to get `owner/name`. The part after
@@ -62,8 +68,10 @@ name (e.g. `agent-vault`), never `owner/name`.
      `feat`, `--slug` to override the default slug). This checks out the new
      branch and records it in the impl note.
    - Found: fetch and check it out (`git switch <branch>`, or
-     `git switch -c <branch> origin/<branch>` if it isn't local yet), then go
-     to **Resume**.
+     `git switch -c <branch> origin/<branch>` if it isn't local yet). If the
+     impl note's `branch:` field is still empty (e.g. the branch was made by
+     hand), record it there now, directly — `open-pr` needs it later and
+     nothing else will set it. Then go to **Resume**.
 
 ## Resume (a step, or the whole issue, already has commits)
 
@@ -95,13 +103,16 @@ Work through the plan's `## Steps` in order. For each step (numbered `<s>`):
    `feat fix chore docs refactor test perf hotfix`, `<scope>` is the area the
    step touches, and `<step title>` is the step's own title. One commit per
    step: never squash two steps together, never split one step across
-   commits — amend the step's commit if a later fix in this same step
-   changes it.
-5. Review the step (see `reviewer.md`): send the reviewer the step's
-   `Files:`/`Do:`/`Done when:`, the plan's `## Acceptance criteria`, the
-   repo's `CLAUDE.md`, and `git diff <prev-step-commit>..HEAD` (`<base>`, for
-   step 1).
-6. Record what the review did, in the impl note:
+   commits.
+5. Review the step: follow `reviewer.md`'s "Prompt" section exactly — it
+   lists everything to send the reviewer and the format it must answer in.
+   Diff to send: `git diff <prev-step-commit>..HEAD` (`<base>`, for step 1).
+6. Fix every `major` finding before moving to the next step, and a `minor`
+   one now if it's quick (leave it otherwise). Amend the step's commit for
+   each fix, so the diff a later review sees is still exactly this step's
+   change. Once you're done fixing for this step, record the outcome in the
+   impl note — write the resolution against the commit's *final* sha, not an
+   intermediate one an earlier amend already replaced:
    - Under `## Verification`, note that the step was reviewed, e.g.
      `- Step <s> reviewed: no findings` or `- Step <s> reviewed: R<r>-R<r2>`
      — **Resume** relies on this line existing to know the review ran, since
@@ -110,8 +121,6 @@ Work through the plan's `## Steps` in order. For each step (numbered `<s>`):
      from the highest existing `R<n>`:
      `- R<n> (major|minor): Step <s>: <finding> → fixed in <sha>` or
      `→ won't fix: <reason>`.
-     - `major`: fix it before moving to the next step.
-     - `minor`: fix it now if it's quick, else record `won't fix` and move on.
 
 ## Finish
 
@@ -121,16 +130,19 @@ Once every step is committed and reviewed:
    fails, fix it before opening the PR, and record what broke under
    `## Discoveries` (or as a deviation, if the fix touched files beyond the
    step that broke it).
-2. Review the whole PR diff the same way as a step (`git diff <base>..HEAD`),
-   against every acceptance criterion and the repo `CLAUDE.md`, not only the
-   last step. Record its findings the same way, tagged `Final review:`
-   instead of a step number (e.g. `- R<n> (major|minor): Final review:
-   <finding> → …`), and note the review itself under `## Verification`
-   (`- Final review: no findings` or `- Final review: R<n>-R<n2>`).
+2. Review the whole PR diff the same way as a step (`git diff <base>..HEAD`,
+   following `reviewer.md`'s "Prompt" section), against every acceptance
+   criterion and the repo `CLAUDE.md`, not only the last step. There's no
+   step to amend here: fix findings with their own commit(s). Record them
+   tagged `Final review:` instead of a step number (e.g. `- R<n>
+   (major|minor): Final review: <finding> → …`), and note the review itself
+   under `## Verification` (`- Final review: no findings` or
+   `- Final review: R<n>-R<n2>`). If you fixed anything, re-run the plan's
+   `Full check:` again before opening the PR.
 3. Fill in the impl note's `## Verification` (each command you ran and what
    it showed, alongside the per-step review lines already there) and
    `## Discoveries` (anything worth the retro that isn't already a deviation
-   or a finding).
+   or a finding). Keep both terse — impl notes cap at 80 body lines.
 4. Write a short summary of the impl note (goal, what changed, notable
    findings — not the raw note) to a temp file *outside* the clone (e.g. your
    scratchpad directory); an untracked file inside the clone would make the
@@ -141,19 +153,24 @@ Once every step is committed and reviewed:
 
 ## Address PR review
 
-Asked to act on review comments for an issue that already has an open PR:
+Asked to act on review comments for an issue that already has an open PR
+(the impl note's `pr:`):
 
 1. From inside the clone, on the issue's branch: read both
    `gh pr view --json reviews,comments` (review summaries and general PR
-   comments) **and** `gh api repos/<owner>/<repo>/pulls/<pr>/comments`
-   (inline line comments) — neither alone has everything that was requested.
-2. For each requested change, fix it with the same discipline as a step (its
-   own commit, its own review by the reviewer against the plan's acceptance
-   criteria and the repo `CLAUDE.md`), then add a line under the impl note's
-   `## Review findings`: `- R<n> (major|minor): PR review: <what was asked>
-   → fixed in <sha>`, or `→ won't fix: <reason>` if you're declining a
-   request or need to ask the user about it first — major if it blocks the
-   change, minor otherwise.
+   comments) **and**
+   `gh api --paginate repos/<owner>/<repo>/pulls/<pr>/comments` (inline line
+   comments) — neither alone has everything that was requested.
+2. For each requested change: if it conflicts with the plan or you're unsure
+   how to resolve it, stop and ask the user first (see "Stop and ask if")
+   rather than recording a resolution before you have one. Otherwise fix it
+   with the same discipline as a step (its own commit, its own review
+   following `reviewer.md`) or decline it with a reason, then add a line
+   under the impl note's `## Review findings`:
+   `- R<n> (major|minor): PR review: <what was asked> → fixed in <sha>` or
+   `→ won't fix: <reason>` — major if it blocks the change, minor otherwise.
+   Note the review under `## Verification` too (`- PR review reviewed: no
+   findings` or `- PR review: R<n>-R<n2>`).
 3. Push the branch.
 4. Leave the impl note open; don't reseal or reopen anything else.
 
