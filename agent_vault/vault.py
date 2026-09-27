@@ -127,6 +127,7 @@ def retro_note(repo: str, issue: str, pr: str) -> str:
     return (f"{fm}# {repo}-{issue}-retro\n\n"
             "## Summary\n<!-- What was built and how it went. -->\n\n"
             "## CLAUDE.md audit\n\n"
+            "## README audit\n\n"
             "## Overview audit\n\n"
             "## Follow-ups\nNone\n")
 
@@ -336,6 +337,19 @@ def audit_gaps(current: list[str], audit: list[tuple[str, str]]) -> tuple[list, 
     return missing, duplicate, leftover
 
 
+def audit_problems(label: str, current: list[str], audit: list[tuple[str, str]]) -> list[str]:
+    """Human-readable problems for one audited doc, from `audit_gaps`."""
+    missing, dup, leftover = audit_gaps(current, audit)
+    out = []
+    if missing:
+        out.append(f"{label}: missing an audit line for: {', '.join(missing)}")
+    if dup:
+        out.append(f"{label}: more than one audit line for: {', '.join(dup)}")
+    if leftover:
+        out.append(f"{label}: marked removed but still there: {', '.join(leftover)}")
+    return out
+
+
 def trial_seal_errors(path: Path, fm: dict, body: str) -> list[str]:
     trial = {**fm, "status": "sealed"}
     return lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
@@ -354,13 +368,22 @@ def cmd_seal_retro(args) -> None:
             die(f"{lib.rel(path)} is already sealed")
 
     top = require_clone(slug)
-    branch = impl_fm.get("branch")
-    if not branch:
-        die(f"{lib.rel(impl_path)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
+    info = github.issue_info(slug, args.issue)
     current_branch = github.git("branch", "--show-current", cwd=top)
-    if current_branch != branch:
-        die(f"the current branch is {current_branch or '(detached)'}, but {lib.rel(impl_path)} "
-            f"says {branch}; check out {branch} first")
+    closed = info["state"] != "OPEN"
+    if closed:
+        default = github.default_branch(slug)
+        if current_branch == default or not current_branch:
+            die(f"issue #{args.issue} is closed; check out a branch other than {default} "
+                f"(currently {current_branch or '(detached)'}; the impl note's own branch "
+                "may already be deleted)")
+    else:
+        branch = impl_fm.get("branch")
+        if not branch:
+            die(f"{lib.rel(impl_path)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
+        if current_branch != branch:
+            die(f"the current branch is {current_branch or '(detached)'}, but {lib.rel(impl_path)} "
+                f"says {branch}; check out {branch} first")
     if github.git("status", "--porcelain", cwd=top):
         die("the working tree isn't clean; commit or stash your changes first")
 
@@ -376,20 +399,26 @@ def cmd_seal_retro(args) -> None:
     _, overview_body, _ = lib.split_frontmatter(lib.read_text(project_path))
     overview_headings = [n for n, _ in lib.split_sections(lib.blank_code_blocks(overview_body))]
 
+    readme_path = top / "README.md"
+    readme_headings = None
+    if readme_path.is_file():
+        readme_headings = [n for n, _ in lib.split_sections(lib.blank_code_blocks(lib.read_text(readme_path)))]
+
     retro_secs = dict(lib.split_sections(lib.blank_code_blocks(retro_body)))
     claude_audit = parse_audit_lines(retro_secs.get("CLAUDE.md audit", []))
+    readme_lines = retro_secs.get("README audit", [])
+    readme_audit = parse_audit_lines(readme_lines)
     overview_audit = parse_audit_lines(retro_secs.get("Overview audit", []))
 
     problems = []
     for label, current, audit in (("CLAUDE.md", claude_headings, claude_audit),
                                   ("the project overview", overview_headings, overview_audit)):
-        missing, dup, leftover = audit_gaps(current, audit)
-        if missing:
-            problems.append(f"{label}: missing an audit line for: {', '.join(missing)}")
-        if dup:
-            problems.append(f"{label}: more than one audit line for: {', '.join(dup)}")
-        if leftover:
-            problems.append(f"{label}: marked removed but still there: {', '.join(leftover)}")
+        problems += audit_problems(label, current, audit)
+    if readme_headings:
+        problems += audit_problems("README.md", readme_headings, readme_audit)
+    elif [ln.strip() for ln in readme_lines if ln.strip()] != [lib.NONE_LINE]:
+        problems.append("README.md: no README.md here, or none with '##' headings; "
+                        "the README audit must be 'None'")
     if problems:
         die(f"{lib.rel(retro_path)} doesn't cover every heading yet:\n  " + "\n  ".join(problems))
 
@@ -404,7 +433,11 @@ def cmd_seal_retro(args) -> None:
         lib.write_text(claude_path, new_text)
         github.git("add", "CLAUDE.md", cwd=top)
         github.git("commit", "-q", "-m", f"docs(claude): verify audited sections (#{args.issue})", cwd=top)
-        github.git("push", cwd=top)
+        if closed and not github.git("rev-parse", "--abbrev-ref", "--symbolic-full-name",
+                                     "@{u}", cwd=top, check=False):
+            github.git("push", "-u", "origin", "HEAD", cwd=top)
+        else:
+            github.git("push", cwd=top)
 
     update_note(impl_path, status="sealed")
     update_note(retro_path, status="sealed")

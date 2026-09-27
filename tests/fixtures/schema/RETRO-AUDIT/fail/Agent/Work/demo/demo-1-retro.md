@@ -13,6 +13,9 @@ It went fine.
 ## CLAUDE.md audit
 - Commands: kept
 
+## README audit
+None
+
 ## Overview audit
 - Purpose: rewritten — new goal
 

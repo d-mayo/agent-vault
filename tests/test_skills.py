@@ -22,10 +22,11 @@ import install  # noqa: E402
 SKILLS_DIR = REPO / "skills"
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 
-# skill name -> (frontmatter trigger pattern, reference file next to SKILL.md)
+# skill name -> (frontmatter trigger pattern, reference file next to SKILL.md, or None)
 SKILLS = {
     "implement-story": (r"implement (#\d|issue \d)", "reviewer.md"),
     "plan-story": (r"plan (#\d|issue \d)", "plan-reviewer.md"),
+    "retro": (r"retro (#\d|issue \d)", None),
 }
 
 
@@ -122,7 +123,8 @@ class SkillInstallTest(unittest.TestCase):  # T1 -> AC1 (#8, #7)
                 with self.subTest(skill=skill):
                     dest = claude / "skills" / skill
                     self.assertTrue((dest / "SKILL.md").is_file())
-                    self.assertTrue((dest / ref).is_file())
+                    if ref:
+                        self.assertTrue((dest / ref).is_file())
                     self.assertTrue((dest / install.SKILL_MARKER).exists())
                     self.assertTrue(any(skill in r for r in report))
 
@@ -132,7 +134,7 @@ class VaultCommandsTest(unittest.TestCase):  # T2 -> AC10 (#8), AC11 (#7)
         top = vault.build_parser()
         problems, calls = [], []
         for skill, (_pattern, ref) in SKILLS.items():
-            for name in ("SKILL.md", ref):
+            for name in ("SKILL.md", *([ref] if ref else [])):
                 found = vault_calls(read(skill, name))
                 calls += found
                 problems += [f"{skill}/{name}: {p}" for p in (p for call in found for p in check_call(top, call))]
@@ -142,7 +144,7 @@ class VaultCommandsTest(unittest.TestCase):  # T2 -> AC10 (#8), AC11 (#7)
         self.assertEqual(problems, [])
         for skill, (_pattern, ref) in SKILLS.items():
             with self.subTest(skill=skill):
-                found = sum(len(vault_calls(read(skill, name))) for name in ("SKILL.md", ref))
+                found = sum(len(vault_calls(read(skill, name))) for name in ("SKILL.md", *([ref] if ref else [])))
                 self.assertGreaterEqual(found, 1, f"{skill}: expected at least one 'vault.py ...' mention")
 
 
@@ -262,6 +264,59 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
     def test_never_writes_code_branches_or_edits_sealed_plan(self):  # AC10
         self.assertMentions("## never", "never write code", "never create a branch",
                              "never edit a sealed plan")
+
+
+class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-AC5, AC7 (#9)
+    def setUp(self):
+        self.skill = read("retro", "SKILL.md")
+
+    def test_preflight_needs_a_pr_and_the_right_branch(self):  # AC1, AC7
+        self.assertMentions("## preflight", "no `pr:`", "check out the impl note's", "branch")
+
+    def test_audit_runs_lint_new_retro_and_reads_context(self):  # AC2
+        self.assertMentions("vault.py claudemd-lint", "vault.py new retro", "resume",
+                             "gh pr diff", "the issue", "the sealed plan", "the impl note")
+
+    def test_audits_all_three_docs_with_one_line_each(self):  # AC2, AC6
+        self.assertMentions("claude.md", "readme.md", "project overview", "confirmed",
+                             "rewritten", "removed", "committed and pushed",
+                             "never gets in-flight work", "single-repo facts")
+
+    def test_asks_about_restated_facts(self):  # AC3
+        self.assertMentions("restate", "the code", "another doc", "the design")
+
+    def test_follow_ups_sorted_with_approval(self):  # AC4
+        self.assertMentions("issue #<n> created", "issue #<n> amended", "idea [[<idea>]]",
+                             "dropped:", "approve", "vault.py idea add", "vault.py idea drop",
+                             "vault.py ideas --project")
+
+    def test_seal_after_validate_and_summary_approval(self):  # AC5
+        self.assertMentions("vault.py validate", "plain-language summary", "vault.py seal retro")
+
+    def test_never_merges_pushes_main_edits_sealed_or_installs(self):  # AC5
+        self.assertMentions("never merge", "never push to `main`", "never edit a sealed",
+                             "never run `install.py`")
+
+    def test_closed_issue_backfill_path(self):  # AC7
+        self.assertMentions("## backfill", "closed", "no `branch:`", "dirty tree", "upstream")
+
+    def test_stop_and_ask(self):
+        self.assertMentions("## stop and ask if")
+
+
+class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (#9)
+    def test_sample_lines_match_the_fixed_schema(self):
+        """The four follow-up shapes the skill uses still produce lines lib.py's own
+        RETRO-FOLLOW format actually accepts."""
+        samples = [
+            "- issue #12 created",
+            "- issue #13 amended",
+            "- idea [[2026-09-27-example]]",
+            "- dropped: not needed",
+        ]
+        for line in samples:
+            self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
+                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
 
 
 if __name__ == "__main__":
