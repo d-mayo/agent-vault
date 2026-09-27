@@ -10,11 +10,12 @@ interview, a draft checked by an independent reviewer, a plain-language
 summary, and sealing only on explicit approval. The reviewer's brief and
 findings format are in `plan-reviewer.md`, next to this file.
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
-`vault.py`, so `vault.py new plan <repo> <issue>` means "run that string
-followed by `new plan <repo> <issue>`". `<repo>` is always the plain repo
-name (e.g. `agent-vault`), never `owner/name`.
+Every `vault.py <command>` below means the exact CLI string embedded in any
+command shown in the current vault's `CLAUDE.md` (the `{{CLI}}` placeholder
+there is expanded to it at install time); it always ends in `vault.py`, so
+`vault.py new plan <repo> <issue>` means "run that string followed by
+`new plan <repo> <issue>`". `<repo>` is always the plain repo name (e.g.
+`agent-vault`), never `owner/name`.
 
 ## Never
 
@@ -25,9 +26,9 @@ name (e.g. `agent-vault`), never `owner/name`.
 ## Resolve the repo and issue
 
 - Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
-  path; the exact `vault.py` invocation is the line under "CLI after
-  install" in `<vault>/CLAUDE.md`. A repo session's own startup context
-  doesn't carry either.
+  path; the exact `vault.py` invocation is embedded in any command shown in
+  `<vault>/CLAUDE.md`. A repo session's own startup context doesn't carry
+  either.
 - Repo: `git config --get remote.origin.url` in the current clone gives a
   URL such as `git@github.com:owner/name.git` or `https://github.com/owner/name`;
   strip the host and any trailing `.git` to get `owner/name`. The part after
@@ -63,8 +64,11 @@ would change the plan is still ambiguous.
 1. `vault.py new plan <repo> <issue>` scaffolds the draft plan and an open
    impl note.
 2. Fill in the plan format: `Goal` · `Acceptance criteria` (`- AC<n>: …`) ·
-   `Decisions` (`- D<n>: <decision>, because <reason>`; the user's answers
-   from the interview are marked "(user decision)") · `Implementer's
+   `Decisions` (`- D<n>: <decision>, because <reason>`; a decision that came
+   from the user's answer in the interview ends the line with
+   " (user decision)" after the reason, e.g. `- D1: <decision>, because
+   <reason> (user decision)` — `lib.py`'s format only allows text after
+   "because", never between the number and the colon) · `Implementer's
    discretion` · `Context` (pointers to code, not copies) · `Steps`
    (`### <n>. <title>`, each with `Files:`, `Do:`, `Done when:`) · `Tests`
    (`- T<n> → AC<m>: …`, then a `Full check:` line) · `Stop and ask if` ·
@@ -102,7 +106,8 @@ Run `vault.py seal plan <repo> <issue>` only after the user's explicit
 approval of the summary, and only after any approved issue-hygiene edits to
 the planned issue (see below) are posted — sealing records the issue's
 current edit time, so an edit made afterwards would make `preflight` reject
-the sealed plan later. For requested changes: edit the draft, re-run
+the sealed plan later. For requested changes: edit the draft, running
+another plan review (see Plan review) if the change is substantial, re-run
 `vault.py validate`, summarise the change list, and ask again — never seal
 against a draft the user hasn't approved.
 
