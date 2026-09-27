@@ -18,6 +18,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - `templates/vault-CLAUDE.md`: the vault's `CLAUDE.md`, with `{{CLI}}` filled in at install.
 - `skills/`: user-level skills; each subfolder is copied to `~/.claude/skills/`.
 - `skills/implement-story/`: takes a sealed plan from branch to open PR, step by step, with a review after every step; `skills/implement-story/reviewer.md` holds the reviewer's own prompt and findings format.
+- `skills/plan-story/`: turns an issue into a sealed plan, researching first, interviewing only where research leaves something ambiguous, and reviewing the draft with an independent reviewer before the user approves it; `skills/plan-story/plan-reviewer.md` holds the reviewer's own prompt and findings format.
 - `agent_vault/githooks/pre-push`: blocks pushes to `main` and bad branch names. The one copy: this repo's `core.hooksPath` points at it, and `repo-init` points other repos at the installed `~/.claude/agent-vault/githooks/`.
 - `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`. `tests/fake_gh.py` stands in for `gh` (`AGENT_VAULT_GH`); tests never touch GitHub.
 
