@@ -59,7 +59,7 @@ PATHS = {                                  # note type -> layout (for `schema`)
 REQUIRED = {
     "project": ["type", "id", "status", "repos"],
     "plan": ["type", "repo", "issue", "status"],
-    "impl": ["type", "repo", "issue", "branch", "status"],
+    "impl": ["type", "repo", "issue", "status"],
     "retro": ["type", "repo", "issue", "pr", "status"],
     "idea": ["type", "status", "created", "source"],
     "daily": ["type", "date"],
@@ -67,7 +67,7 @@ REQUIRED = {
 OPTIONAL = {
     "project": ["audited"],
     "plan": ["issue_updated", "base_sha"],
-    "impl": ["pr"],
+    "impl": ["branch", "pr"],
     "retro": [],
     "idea": ["project", "promoted_to"],
     "daily": [],
@@ -97,7 +97,10 @@ SECTIONS = {                               # required `##` sections, in order
 }
 SIZE_CAPS = {"project": 60, "impl": 80, "retro": 40, "idea": 8}   # body lines; errors
 PLAN_WARN_LINES = 400                                            # body lines; warning
-EVENTS = ["planned", "started", "pr-opened", "retro-done", "idea-added", "idea-promoted"]
+EVENTS = ["planned", "started", "pr-opened", "retro-done"]          # '<repo>#<n> <event>' lines
+IDEA_EVENTS = ["idea-added", "idea-promoted"]                       # '<event> — <title> [[<idea>]]' lines
+# Completeness rules that only warn while a plan is a draft (errors once sealed).
+DRAFT_SOFT = ["PLAN-AC", "PLAN-STEP", "PLAN-T", "PLAN-COVER", "PLAN-FULL"]
 LOG_HEADING = "## Log"
 NONE_LINE = "None"
 
@@ -140,6 +143,8 @@ LINE_FORMATS = {
          re.compile(rf"^- {_TIME} [A-Za-z0-9._-]+#[1-9]\d* (?:{'|'.join(EVENTS)})(?: — \S.*)?$")),
         ("- HH:MM session — <summary>[ [[<project>]]]",
          re.compile(rf"^- {_TIME} session — \S.*?(?: \[\[[^\]]+\]\])?$")),
+        ("- HH:MM idea-added|idea-promoted — <title> [[<idea>]]",
+         re.compile(rf"^- {_TIME} (?:{'|'.join(IDEA_EVENTS)}) — \S.*? \[\[[^\]]+\]\]$")),
     ],
 }
 # note type -> section -> (rule, "None" is a valid line)
@@ -174,19 +179,19 @@ RULES = {
     "SEC-EXTRA": ("error", "Other (or duplicate) '##' sections are rejected"),
     "SIZE-CAP": ("error", "Body line caps: project 60, impl 80, retro 40, idea 8"),
     "SIZE-WARN": ("warning", "A plan over 400 body lines should be split into several issues"),
-    "PLAN-AC": ("error", "Acceptance criteria are '- AC<n>: …' lines, at least one, numbers unique"),
+    "PLAN-AC": ("error", "Acceptance criteria are '- AC<n>: …' lines, numbers unique; at least one (warning while draft)"),
     "PLAN-D": ("error", "Decisions are '- D<n>: <decision>, because <reason>' lines"),
-    "PLAN-STEP": ("error", "Each '### <n>. <title>' step has 'Files:' and 'Done when:'; at least one step"),
-    "PLAN-T": ("error", "Tests are '- T<n> → AC<m>[, AC<k>]: …' lines, at least one"),
-    "PLAN-COVER": ("error", "Every acceptance criterion is referenced by at least one test"),
+    "PLAN-STEP": ("error", "Each '### <n>. <title>' step has 'Files:' and 'Done when:'; at least one step (warning while draft)"),
+    "PLAN-T": ("error", "Tests are '- T<n> → AC<m>[, AC<k>]: …' lines; at least one (warning while draft)"),
+    "PLAN-COVER": ("error", "Every acceptance criterion is referenced by at least one test (warning while draft)"),
     "PLAN-REF": ("error", "Every AC a test references must exist"),
-    "PLAN-FULL": ("error", "The Tests section has a 'Full check:' line"),
+    "PLAN-FULL": ("error", "The Tests section has a 'Full check:' line (warning while draft)"),
     "PLAN-SEALED": ("error", "A sealed plan has issue_updated and base_sha"),
     "IMPL-DEV": ("error", "Deviation lines are '- Step <n>: …' (or None)"),
     "IMPL-REV": ("error", "Review findings end in '→ fixed in <sha>' or '→ won't fix: <reason>' (or None)"),
     "RETRO-AUDIT": ("error", "Audit lines are '- <heading>: confirmed|rewritten|removed — <reason>'"),
     "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link or dropped"),
-    "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]' or '- HH:MM session — …'"),
+    "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]', '- HH:MM session — …' or an idea event line"),
     "X-REPO-DUP": ("error", "A repo name appears in the repos: of at most one project"),
     "X-REPO-UNREG": ("error", "Work/<repo>/ belongs to a repo listed in some project's repos:"),
     "X-PROJECT": ("error", "An idea's 'project:' names an existing project"),
@@ -342,8 +347,10 @@ class Result:
     def __init__(self):
         self.errors, self.warnings = [], []
 
-    def add(self, rule: str, msg: str) -> None:
-        (self.errors if RULES[rule][0] == "error" else self.warnings).append(f"[{rule}] {msg}")
+    def add(self, rule: str, msg: str, soft: bool = False) -> None:
+        """soft: report as a warning although the rule is an error (draft plans, D1)."""
+        is_error = RULES[rule][0] == "error" and not soft
+        (self.errors if is_error else self.warnings).append(f"[{rule}] {msg}")
 
 
 def blank_code_blocks(text: str) -> list[str]:
@@ -512,14 +519,15 @@ def _check_line_formats(res: Result, ntype: str, secs: list) -> None:
                 res.add(rule, f"'## {name}' line must look like {shapes}{' (or None)' if none_ok else ''}: {ln[:60]!r}")
 
 
-def _check_plan(res: Result, secs: list) -> None:
+def _check_plan(res: Result, secs: list, draft: bool = False) -> None:
+    soft = draft   # completeness rules only warn on a draft; format rules stay errors
     by_name = {}
     for name, body in secs:
         by_name.setdefault(name, body)
     acs = [int(m.group(1)) for ln in by_name.get("Acceptance criteria", [])
            if (m := AC_LINE_RE.match(ln))]
     if not acs:
-        res.add("PLAN-AC", "'## Acceptance criteria' needs at least one '- AC<n>: …' line")
+        res.add("PLAN-AC", "'## Acceptance criteria' needs at least one '- AC<n>: …' line", soft)
     for n in sorted({a for a in acs if acs.count(a) > 1}):
         res.add("PLAN-AC", f"AC{n} is defined more than once")
 
@@ -530,12 +538,12 @@ def _check_plan(res: Result, secs: list) -> None:
         elif ln.startswith("Full check:") and LINE_FORMATS["PLAN-T"][1][1].match(ln):
             full = True
     if not tests:
-        res.add("PLAN-T", "'## Tests' needs at least one '- T<n> → AC<m>: …' line")
+        res.add("PLAN-T", "'## Tests' needs at least one '- T<n> → AC<m>: …' line", soft)
     if not full:
-        res.add("PLAN-FULL", "'## Tests' needs a 'Full check: <command>' line")
+        res.add("PLAN-FULL", "'## Tests' needs a 'Full check: <command>' line", soft)
     referenced = {int(n) for t in tests for n in re.findall(r"AC(\d+)", t)}
     for n in sorted(set(acs) - referenced):
-        res.add("PLAN-COVER", f"AC{n} is not referenced by any test")
+        res.add("PLAN-COVER", f"AC{n} is not referenced by any test", soft)
     for n in sorted(referenced - set(acs)):
         res.add("PLAN-REF", f"a test references AC{n}, which doesn't exist")
 
@@ -549,7 +557,7 @@ def _check_plan(res: Result, secs: list) -> None:
         elif cur:
             cur[1].append(ln)
     if not steps:
-        res.add("PLAN-STEP", "'## Steps' needs at least one '### <n>. <title>' step")
+        res.add("PLAN-STEP", "'## Steps' needs at least one '### <n>. <title>' step", soft)
     for head, body in steps:
         for label in ("Files:", "Done when:"):
             if not any(re.match(rf"^{label} ?\S", b) for b in body):
@@ -584,7 +592,7 @@ def validate_file(path: Path, index: Index | None = None) -> Result:
     _check_sections(res, etype, secs)
     _check_line_formats(res, etype, secs)
     if etype == "plan":
-        _check_plan(res, secs)
+        _check_plan(res, secs, draft=fm.get("status") == "draft")
 
     n_lines = len(body.splitlines())
     if etype in SIZE_CAPS and n_lines > SIZE_CAPS[etype]:
@@ -654,10 +662,11 @@ def schema_text() -> str:
         for sec, (rule, none_ok) in secs.items():
             out.append(f"  {t} '## {sec}' [{rule}]{' (None allowed)' if none_ok else ''}:")
             out += [f"    {shape}" for shape, _ in LINE_FORMATS[rule]]
-    out.append(f"Daily events: {', '.join(EVENTS)}.")
+    out.append(f"Daily events: {', '.join(EVENTS)} (with <repo>#<n>); {', '.join(IDEA_EVENTS)} (with <title> and idea link).")
     out.append("Plan checks: every AC is referenced by a test and every referenced AC exists; "
                "each step has Files: and Done when:; Tests ends with a Full check: line; "
-               "a sealed plan has issue_updated and base_sha.")
+               "a sealed plan has issue_updated and base_sha. On a draft plan the completeness checks "
+               f"({', '.join(DRAFT_SOFT)}) only warn.")
     out.append("Rules (validate exits 1 on errors only):")
     out += [f"  {rid:13} {sev:8} {desc}" for rid, (sev, desc) in RULES.items()]
     return "\n".join(out)
