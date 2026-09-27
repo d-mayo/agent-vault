@@ -12,7 +12,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 
 ## Layout
 <!-- covers: agent_vault/**, install.py, templates/**, skills/**, agent_vault/githooks/** -->
-- `agent_vault/`: everything copied to `~/.claude/agent-vault/`. `agent_vault/lib.py` holds the schema and shared helpers; `agent_vault/vault.py` is the CLI; `agent_vault/github.py` is the only place that runs `gh` and `git` (`AGENT_VAULT_GH` overrides where `gh` is found); `agent_vault/hooks/` holds the Claude Code hooks.
+- `agent_vault/`: everything copied to `~/.claude/agent-vault/`. `agent_vault/lib.py` holds the schema and shared helpers; `agent_vault/vault.py` is the CLI; `agent_vault/github.py` is the only place that runs `gh` and `git` (`AGENT_VAULT_GH` overrides where `gh` is found); `agent_vault/claudemd.py` lints `CLAUDE.md` (paths, commands, covers globs, size cap and staleness; `vault.py claudemd-lint` runs it); `agent_vault/hooks/` holds the Claude Code hooks.
 - `agent_vault/hooks/push_guard.py`: user-level Bash guard (no pushes to main, no `--no-verify`).
 - `install.py`: idempotent installer; owns only settings entries whose command contains `/.claude/agent-vault/`.
 - `templates/vault-CLAUDE.md`: the vault's `CLAUDE.md`, with `{{CLI}}` filled in at install.
