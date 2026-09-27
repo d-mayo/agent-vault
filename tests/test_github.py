@@ -1,0 +1,580 @@
+"""Git and GitHub commands (#4). Real git runs against temporary repos with a local bare
+remote; `gh` is tests/fake_gh.py, selected by AGENT_VAULT_GH. Nothing here touches GitHub."""
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from tests.helpers import CODE, REPO, make_vault, run_py, tmpdir, write_config
+
+sys.path.insert(0, str(CODE))
+import github  # noqa: E402
+
+VAULT_PY = CODE / "vault.py"
+FAKE_GH = REPO / "tests" / "fake_gh.py"
+SLUG = "acme/widget"
+TITLE = "feat: add widget frobbing"
+CREATED = "2026-09-20T10:00:00Z"
+SEALED_PLAN = """---
+type: plan
+repo: widget
+issue: 7
+status: draft
+---
+# widget-7-plan
+
+## Goal
+Frob the widgets.
+
+## Acceptance criteria
+- AC1: widgets frob
+
+## Decisions
+
+## Implementer's discretion
+Naming.
+
+## Context
+- `src/a.py`
+
+## Steps
+### 1. Frob
+Files: `src/a.py`, `src/b.py` (new)
+Do: frob
+Done when: AC1 holds
+
+## Tests
+- T1 → AC1: frobbing works
+Full check: make test
+
+## Stop and ask if
+- never
+
+## Out of scope
+- nothing
+"""
+
+
+def git(*args, cwd, check=True):
+    return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True, text=True).stdout.strip()
+
+
+class GhCase(unittest.TestCase):
+    """A vault with project `widgets` (repo acme/widget), a clone whose origin looks like the
+    GitHub URL but really points at a local bare remote, and a fake gh."""
+
+    def setUp(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        self.vault = make_vault(self.root)
+        self.cfg = write_config(self.root, self.vault)
+        self.state_path = self.root / "gh.json"
+        self.bare = self.root / "remote.git"
+        self.clone = self.root / "clone"
+        empty = self.root / "empty-gitconfig"
+        empty.write_text("", encoding="utf-8")
+        patch = mock.patch.dict(os.environ, {
+            "GIT_CONFIG_GLOBAL": str(empty), "GIT_CONFIG_NOSYSTEM": "1",
+            "AGENT_VAULT_GH": str(FAKE_GH), "FAKE_GH_STATE": str(self.state_path)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(self._t.cleanup)
+
+        git("init", "-q", "--bare", "-b", "main", str(self.bare), cwd=self.root)
+        git("init", "-q", "-b", "main", str(self.clone), cwd=self.root)
+        for k, v in (("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")):
+            git("config", k, v, cwd=self.clone)
+        git("config", f"url.{self.bare.as_posix()}.insteadOf", f"https://github.com/{SLUG}.git", cwd=self.clone)
+        git("remote", "add", "origin", f"https://github.com/{SLUG}.git", cwd=self.clone)
+        (self.clone / "README.md").write_text("hi\n", encoding="utf-8")
+        git("add", ".", cwd=self.clone)
+        git("commit", "-q", "-m", "init", cwd=self.clone)
+        git("push", "-q", "origin", "main", cwd=self.clone)
+
+        self.state = {"repos": {SLUG: {
+            "default_branch": "main", "head_sha": git("rev-parse", "HEAD", cwd=self.clone), "labels": ["bug"],
+            "settings": {"allow_squash_merge": True, "allow_merge_commit": True,
+                         "allow_rebase_merge": True, "delete_branch_on_merge": False},
+            "refuse_settings": False, "branches": [], "prs": [],
+            "compare": {"total_commits": 0, "files": []},
+            "issues": {"7": {"state": "OPEN", "title": TITLE, "created": CREATED, "body_edited": None,
+                             "renamed": None, "labels": []}},
+            "created_prs": [], "created_issues": [], "next_number": 20}}, "calls": []}
+        self.save()
+        self.ok(self.cli("new", "project", "widgets", "--repo", SLUG))
+
+    # --- helpers ---
+    def save(self):
+        self.state_path.write_text(json.dumps(self.state), encoding="utf-8")
+
+    def load(self):
+        self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        return self.state["repos"][SLUG]
+
+    def issue(self, n="7"):
+        return self.state["repos"][SLUG]["issues"][n]
+
+    def cli(self, *args, cwd=None, env=None):
+        return run_py(VAULT_PY, args, config=self.cfg, cwd=cwd or self.clone, env=env)
+
+    def ok(self, r):
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r
+
+    def refused(self, r, *words):
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        for w in words:
+            self.assertIn(w.lower(), (r.stderr + r.stdout).lower())
+        return r
+
+    def calls(self, *prefix):
+        self.load()
+        return [c for c in self.state["calls"] if c[:len(prefix)] == list(prefix)]
+
+    def note(self, name):
+        return self.vault / "Agent" / "Work" / "widget" / f"widget-7-{name}.md"
+
+    def fm(self, path):
+        text = path.read_text(encoding="utf-8")
+        return dict(ln.split(": ", 1) for ln in text.split("---")[1].strip().splitlines())
+
+    def daily(self):
+        p = self.vault / "Agent" / "Daily" / f"{dt.date.today().isoformat()}.md"
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    def assert_valid(self):
+        r = self.cli("validate")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn(": error:", r.stdout)
+
+    def new_plan(self, text=SEALED_PLAN):
+        self.ok(self.cli("new", "plan", "widget", "7"))
+        self.note("plan").write_text(text, encoding="utf-8", newline="\n")
+
+    def sealed(self):
+        self.new_plan()
+        self.ok(self.cli("seal", "plan", "widget", "7"))
+        self.load()
+
+    def branch(self, *extra):
+        return self.cli("branch", "widget", "7", *extra)
+
+
+class SealPlanTest(GhCase):  # T1 -> AC1, AC11
+    def test_refuses_missing_plan(self):
+        self.refused(self.cli("seal", "plan", "widget", "7"), "doesn't exist")
+
+    def test_refuses_incomplete_plan(self):
+        self.ok(self.cli("new", "plan", "widget", "7"))          # the bare scaffold
+        self.refused(self.cli("seal", "plan", "widget", "7"), "can't be sealed")
+        self.assertEqual(self.fm(self.note("plan"))["status"], "draft")
+        self.assertEqual(self.calls("issue", "edit"), [])
+        self.assertEqual(self.load()["labels"], ["bug"])
+
+    def test_seal_records_everything(self):
+        self.new_plan()
+        self.ok(self.cli("seal", "plan", "widget", "7"))
+        repo = self.load()
+        fm = self.fm(self.note("plan"))
+        self.assertEqual(fm["status"], "sealed")
+        self.assertEqual(fm["issue_updated"], CREATED)
+        self.assertEqual(fm["base_sha"], repo["head_sha"][:7])
+        self.assertIn("planned", repo["labels"])                  # created because it was missing
+        self.assertIn("planned", repo["issues"]["7"]["labels"])
+        order = [c[:2] for c in self.state["calls"]]
+        self.assertLess(order.index(["issue", "edit"]), order.index(["api", "graphql"]))
+        self.assertRegex(self.daily(), r"- \d\d:\d\d widget#7 planned\n")
+        self.assert_valid()
+
+    def test_edit_time_is_the_latest_title_or_body_edit(self):
+        self.issue()["body_edited"] = "2026-09-21T09:00:00Z"
+        self.issue()["renamed"] = "2026-09-22T09:00:00Z"
+        self.save()
+        self.new_plan()
+        self.ok(self.cli("seal", "plan", "widget", "7"))
+        self.assertEqual(self.fm(self.note("plan"))["issue_updated"], "2026-09-22T09:00:00Z")
+
+    def test_refuses_sealed_plan(self):
+        self.sealed()
+        before = self.note("plan").read_bytes()
+        self.refused(self.cli("seal", "plan", "widget", "7"), "already sealed")
+        self.assertEqual(before, self.note("plan").read_bytes())
+
+    def test_sealed_plan_without_label_gets_it_back(self):
+        self.sealed()
+        self.issue()["labels"] = []
+        self.save()
+        before = self.note("plan").read_bytes()
+        self.ok(self.cli("seal", "plan", "widget", "7"))
+        self.assertIn("planned", self.load()["issues"]["7"]["labels"])
+        self.assertEqual(before, self.note("plan").read_bytes())
+
+
+class PreflightTest(GhCase):  # T2 -> AC2
+    def pre(self):
+        return self.cli("preflight", "widget", "7")
+
+    def test_missing_and_unsealed(self):
+        self.refused(self.pre(), "doesn't exist")
+        self.new_plan()
+        self.refused(self.pre(), "not sealed")
+
+    def test_closed_issue(self):
+        self.sealed()
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.refused(self.pre(), "closed")
+
+    def test_body_or_title_edit_fails(self):
+        self.sealed()
+        for field in ("body_edited", "renamed"):
+            with self.subTest(field=field):
+                self.issue()[field] = "2026-09-25T00:00:00Z"
+                self.save()
+                self.refused(self.pre(), "edited", "re-plan")
+                self.issue()[field] = None
+                self.save()
+
+    def test_comments_and_labels_do_not_count(self):
+        self.sealed()
+        self.issue()["labels"] += ["needs-triage"]
+        self.issue()["comment_at"] = "2026-09-25T00:00:00Z"
+        self.save()
+        self.ok(self.pre())
+        query = " ".join(c[3] for c in self.calls("api", "graphql"))
+        self.assertNotIn("updatedAt", query)
+
+    def test_base_drift_warning_lists_overlap(self):
+        self.sealed()
+        self.state["repos"][SLUG]["compare"] = {"total_commits": 3, "files": [
+            {"filename": "src/a.py"}, {"filename": "docs/x.md"}]}
+        self.save()
+        out = self.ok(self.pre()).stdout
+        self.assertIn("warning: 3 commit(s)", out)
+        self.assertIn("src/a.py", out)
+        self.assertNotIn("docs/x.md", out)
+        self.assertIn("preflight OK", out)
+
+    def test_no_warning_without_overlap(self):
+        self.sealed()
+        self.state["repos"][SLUG]["compare"] = {"total_commits": 2, "files": [{"filename": "docs/x.md"}]}
+        self.save()
+        self.assertNotIn("warning", self.ok(self.pre()).stdout)
+
+
+class BranchTest(GhCase):  # T3 -> AC3, AC11
+    def test_creates_pushes_and_records(self):
+        self.sealed()
+        self.ok(self.branch())
+        name = "feat/7-add-widget-frobbing"                       # the `feat:` prefix is dropped
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), name)
+        self.assertIn(name, git("ls-remote", "--heads", "origin", cwd=self.clone))
+        self.assertEqual(git("rev-parse", "--abbrev-ref", "@{u}", cwd=self.clone), f"origin/{name}")
+        self.assertEqual(self.fm(self.note("impl"))["branch"], name)
+        self.assertRegex(self.daily(), rf"- \d\d:\d\d widget#7 started — {name}\n")
+        self.assert_valid()
+
+    def test_type_and_slug_options(self):
+        self.sealed()
+        self.ok(self.branch("--type", "fix", "--slug", "frob-fix"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-frob-fix")
+
+    def test_refuses_existing_local_branch(self):
+        self.sealed()
+        git("branch", "chore/7-old", cwd=self.clone)
+        self.refused(self.branch(), "already has a branch", "chore/7-old")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+
+    def test_refuses_existing_remote_branch(self):
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["fix/7-elsewhere"]
+        self.save()
+        self.refused(self.branch(), "already has a branch", "on GitHub")
+
+    def test_refuses_bad_slug(self):
+        self.sealed()
+        self.refused(self.branch("--slug", "Bad Slug"), "must match")
+
+    def test_needs_preflight_and_the_right_clone(self):
+        self.new_plan()
+        self.refused(self.branch(), "not sealed")
+        git("remote", "set-url", "origin", "https://github.com/acme/other.git", cwd=self.clone)
+        self.ok(self.cli("seal", "plan", "widget", "7"))
+        self.refused(self.branch(), "acme/other", SLUG)
+
+
+class OpenPrTest(GhCase):  # T4 -> AC4, AC11
+    def started(self):
+        self.sealed()
+        self.ok(self.branch())
+        self.name = "feat/7-add-widget-frobbing"
+
+    def commit(self):
+        (self.clone / "src.txt").write_text("x\n", encoding="utf-8")
+        git("add", ".", cwd=self.clone)
+        git("commit", "-q", "-m", "feat: x", cwd=self.clone)
+
+    def test_refuses_wrong_branch_and_dirty_tree(self):
+        self.started()
+        git("switch", "-q", "-c", "chore/9-other", cwd=self.clone)
+        self.refused(self.cli("open-pr", "widget", "7"), "current branch", self.name)
+        git("switch", "-q", self.name, cwd=self.clone)
+        (self.clone / "dirty.txt").write_text("x", encoding="utf-8")
+        self.refused(self.cli("open-pr", "widget", "7"), "isn't clean")
+        self.assertEqual(self.load()["created_prs"], [])
+
+    def test_needs_a_recorded_branch(self):
+        self.new_plan()
+        self.refused(self.cli("open-pr", "widget", "7"), "no 'branch:'")
+
+    def test_creates_pr_and_records_it(self):
+        self.started()
+        self.commit()
+        body = self.root / "body.md"
+        body.write_text("Summary here.\n", encoding="utf-8")
+        self.ok(self.cli("open-pr", "widget", "7", "--body-file", str(body)))
+        pr = self.load()["created_prs"][0]
+        self.assertEqual(pr["title"], TITLE)
+        self.assertEqual(pr["headRefName"], self.name)
+        self.assertEqual(pr["base"], "main")
+        self.assertTrue(pr["body"].startswith("Closes #7\n"))
+        self.assertIn("Summary here.", pr["body"])
+        self.assertEqual(self.fm(self.note("impl"))["pr"], "20")
+        self.assertRegex(self.daily(), r"widget#7 pr-opened — https://github.com/acme/widget/pull/20\n")
+        self.assertIn(self.name, git("ls-remote", "--heads", "origin", cwd=self.clone))
+        self.assert_valid()
+
+    def test_adopts_existing_open_pr(self):
+        self.started()
+        self.commit()
+        self.state["repos"][SLUG]["prs"] = [{"number": 5, "headRefName": self.name,
+                                             "url": "https://github.com/acme/widget/pull/5"}]
+        self.save()
+        self.ok(self.cli("open-pr", "widget", "7"))
+        self.assertEqual(self.load()["created_prs"], [])
+        self.assertEqual(self.fm(self.note("impl"))["pr"], "5")
+        self.ok(self.cli("open-pr", "widget", "7"))               # rerun: recorded once, logged once
+        self.assertEqual(self.daily().count("pr-opened"), 1)
+
+
+class StageTest(GhCase):  # T5 -> AC5
+    def stage(self):
+        r = self.ok(self.cli("stage", "widget", "7"))
+        self.assertEqual(len(r.stdout.strip().splitlines()), 1)
+        return r.stdout.strip()
+
+    def test_backlog_without_plan_or_with_draft(self):
+        self.assertTrue(self.stage().startswith("backlog:"))
+        self.new_plan()
+        self.assertTrue(self.stage().startswith("backlog:"))
+
+    def test_sealed_plan_without_label_says_to_rerun_seal(self):
+        self.sealed()
+        self.issue()["labels"] = []
+        self.save()
+        out = self.stage()
+        self.assertTrue(out.startswith("backlog:"))
+        self.assertIn("seal plan widget 7", out)
+
+    def test_planned(self):
+        self.sealed()
+        self.assertTrue(self.stage().startswith("planned:"))
+
+    def test_in_progress_and_in_review(self):
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["feat/7-x", "feat/70-other"]
+        self.save()
+        self.assertTrue(self.stage().startswith("in progress:"))
+        self.state["repos"][SLUG]["prs"] = [{"number": 3, "headRefName": "feat/7-x", "url": "u/3"}]
+        self.save()
+        self.assertTrue(self.stage().startswith("in review:"))
+
+    def test_other_issues_branches_do_not_count(self):
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["feat/70-other"]
+        self.save()
+        self.assertTrue(self.stage().startswith("planned:"))
+
+    def test_done(self):
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["feat/7-x"]
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.assertTrue(self.stage().startswith("done:"))
+
+
+class PromoteTest(GhCase):  # T6 -> AC6, AC11
+    def idea(self, *args):
+        r = self.ok(self.cli("idea", "add", "Frobnicate the gadget", *args))
+        return r.stdout.split()[-1].split("/")[-1]
+
+    def test_promotes_into_the_projects_single_repo(self):
+        name = self.idea("--project", "widgets")
+        self.ok(self.cli("idea", "promote", name))
+        made = self.load()["created_issues"][0]
+        self.assertEqual(made["title"], "Frobnicate the gadget")
+        self.assertIn(name.removesuffix(".md"), made["body"])
+        fm = self.fm(self.vault / "Agent" / "Ideas" / name)
+        self.assertEqual(fm["status"], "promoted")
+        self.assertEqual(fm["promoted_to"].strip('"'), made["url"])
+        self.assertRegex(self.daily(), r"idea-promoted — Frobnicate the gadget \[\[")
+        self.assert_valid()
+
+    def test_title_override(self):
+        name = self.idea("--project", "widgets")
+        self.ok(self.cli("idea", "promote", name, "--title", "feat: frobnicate"))
+        self.assertEqual(self.load()["created_issues"][0]["title"], "feat: frobnicate")
+
+    def test_refuses_dropped_and_promoted_ideas(self):
+        name = self.idea("--project", "widgets")
+        self.ok(self.cli("idea", "drop", name, "--reason", "no"))
+        self.refused(self.cli("idea", "promote", name), "dropped")
+        other = self.idea("--project", "widgets")
+        self.ok(self.cli("idea", "promote", other))
+        self.refused(self.cli("idea", "promote", other), "promoted")
+        self.assertEqual(len(self.load()["created_issues"]), 1)
+
+    def test_repo_required_without_project_or_with_many_repos(self):
+        self.refused(self.cli("idea", "promote", self.idea()), "--repo")
+        self.ok(self.cli("new", "project", "multi", "--repo", "acme/a", "--repo", "acme/b"))
+        self.ok(self.cli("new", "project", "empty"))
+        multi, empty = self.idea("--project", "multi"), self.idea("--project", "empty")
+        self.refused(self.cli("idea", "promote", multi), "--repo")
+        self.refused(self.cli("idea", "promote", empty), "0 repos")
+        self.ok(self.cli("idea", "promote", multi, "--repo", "b"))
+        self.load()
+        self.assertEqual(self.state["repos"]["acme/b"]["created_issues"][0]["title"], "Frobnicate the gadget")
+        self.refused(self.cli("idea", "promote", self.idea("--project", "multi"), "--repo", "widget"),
+                     "doesn't belong")
+        self.refused(self.cli("idea", "promote", self.idea(), "--repo", "nope"), "not listed")
+
+
+class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
+    def init(self):
+        return self.cli("repo-init", str(self.clone), cwd=self.root)
+
+    def test_fresh_clone_gets_everything(self):
+        self.ok(self.init())
+        repo = self.load()
+        self.assertEqual(repo["settings"], {"allow_squash_merge": True, "allow_merge_commit": False,
+                                            "allow_rebase_merge": False, "delete_branch_on_merge": True})
+        self.assertIn("planned", repo["labels"])
+        hooks = git("config", "--local", "core.hooksPath", cwd=self.clone)
+        self.assertEqual(Path(hooks), CODE / "githooks")
+        text = (self.clone / "CLAUDE.md").read_text(encoding="utf-8")
+        for section in ("Purpose", "Commands", "Layout", "Conventions", "Gotchas"):
+            self.assertIn(f"## {section}", text)
+        self.assertIn("widgets", text)
+        self.assertEqual(git("status", "--porcelain", cwd=self.clone), "?? CLAUDE.md")   # not committed
+
+    def test_rerun_changes_nothing(self):
+        self.ok(self.init())
+        before = (self.clone / "CLAUDE.md").read_bytes(), self.load(), git("config", "--local", "-l", cwd=self.clone)
+        n_calls = len(self.state["calls"])
+        self.ok(self.init())
+        self.assertEqual(before, ((self.clone / "CLAUDE.md").read_bytes(), self.load(),
+                                  git("config", "--local", "-l", cwd=self.clone)))
+        writes = [c for c in self.state["calls"][n_calls:] if "PATCH" in c or c[:2] == ["label", "create"]]
+        self.assertEqual(writes, [])
+
+    def test_unregistered_repo_refused(self):
+        git("remote", "set-url", "origin", "https://github.com/acme/unlisted.git", cwd=self.clone)
+        self.refused(self.init(), "acme/unlisted", "not listed")
+        self.assertEqual(self.calls("api"), [])
+        self.assertFalse((self.clone / "CLAUDE.md").exists())
+
+    def test_existing_claude_md_left_alone(self):
+        (self.clone / "CLAUDE.md").write_text("mine\n", encoding="utf-8")
+        self.ok(self.init())
+        self.assertEqual((self.clone / "CLAUDE.md").read_text(encoding="utf-8"), "mine\n")
+
+    def test_refused_settings_name_the_manual_steps(self):
+        self.state["repos"][SLUG]["refuse_settings"] = True
+        self.save()
+        r = self.refused(self.init(), "Settings", "Pull Requests", "Squash")
+        self.assertNotIn("planned", self.load()["labels"])
+        self.assertEqual(r.returncode, 1)
+
+    def test_foreign_hooks_path_refused(self):
+        theirs = self.root / "theirs"
+        theirs.mkdir()
+        (theirs / "pre-push").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        git("config", "core.hooksPath", str(theirs), cwd=self.clone)
+        self.refused(self.init(), "core.hooksPath", "isn't agent-vault's")
+        self.assertEqual(git("config", "core.hooksPath", cwd=self.clone), str(theirs))
+        self.assertEqual(self.calls("api"), [])                  # refused before any change
+
+    def test_own_hook_at_another_path_is_accepted(self):
+        git("config", "core.hooksPath", str(REPO / "agent_vault" / "githooks"), cwd=self.clone)
+        self.ok(self.init())
+        self.assertEqual(git("config", "core.hooksPath", cwd=self.clone),
+                         str(REPO / "agent_vault" / "githooks"))
+
+    def test_signed_out_gh_is_reported_not_a_settings_hint(self):
+        self.state["signed_out"] = True
+        self.save()
+        r = self.refused(self.init(), "gh auth login")
+        self.assertNotIn("Pull Requests", r.stderr)
+
+
+class GhHelperTest(GhCase):  # T10 -> AC10
+    def test_signed_out(self):
+        self.state["signed_out"] = True
+        self.save()
+        self.refused(self.cli("stage", "widget", "7"), "not signed in", "gh auth login")
+
+    def test_override_wins(self):
+        self.assertEqual(github.gh_command(), [sys.executable, str(FAKE_GH)])
+
+    def test_override_pointing_nowhere(self):
+        with mock.patch.dict(os.environ, {"AGENT_VAULT_GH": str(self.root / "nope.py")}):
+            with self.assertRaises(github.CmdError) as cm:
+                github.gh_command()
+        self.assertEqual(cm.exception.kind, "missing")
+        self.assertIn("AGENT_VAULT_GH", str(cm.exception))
+
+    def test_missing_gh(self):
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_VAULT_GH"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(github.shutil, "which", return_value=None), \
+                mock.patch.object(github, "_windows_gh_paths", return_value=[self.root / "no" / "gh.exe"]):
+            with self.assertRaises(github.CmdError) as cm:
+                github.gh_command()
+        self.assertEqual(cm.exception.kind, "missing")
+        self.assertIn("cli.github.com", str(cm.exception))
+
+    def test_falls_back_to_the_standard_windows_path(self):
+        exe = self.root / "GitHub CLI" / "gh.exe"
+        exe.parent.mkdir()
+        exe.write_text("", encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_VAULT_GH"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(github.shutil, "which", return_value=None), \
+                mock.patch.object(github.sys, "platform", "win32"), \
+                mock.patch.object(github, "_windows_gh_paths", return_value=[exe]):
+            self.assertEqual(github.gh_command(), [str(exe)])
+
+    def test_missing_gh_through_the_cli(self):
+        r = self.cli("stage", "widget", "7", env={"AGENT_VAULT_GH": str(self.root / "nope.py")})
+        self.refused(r, "AGENT_VAULT_GH")
+
+    def test_only_gh_and_git_run(self):
+        with self.assertRaises(ValueError):
+            github.run(["rm", "-rf", "x"])
+
+    def test_origin_slug_forms(self):
+        for url, want in (("https://github.com/o/n.git", "o/n"), ("git@github.com:o/n.git", "o/n"),
+                          ("https://github.com/o/n", "o/n")):
+            git("config", "remote.origin.url", url, cwd=self.clone)
+            self.assertEqual(github.origin_slug(self.clone), want)
+        git("config", "remote.origin.url", "https://example.com/o/n.git", cwd=self.clone)
+        with self.assertRaises(github.CmdError):
+            github.origin_slug(self.clone)
+
+
+if __name__ == "__main__":
+    unittest.main()

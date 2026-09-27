@@ -5,13 +5,20 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   new project <id> [--repo owner/name ...] [--purpose "..."]
   new plan <repo> <issue>
   new retro <repo> <issue>
+  seal plan <repo> <issue>
+  preflight <repo> <issue>
+  branch <repo> <issue> [--type feat] [--slug <slug>]
+  open-pr <repo> <issue> [--body-file <file>]
+  stage <repo> <issue>
   idea add "<title>" [--project <id>] [--source <source>]
   idea drop <file> --reason "..."
+  idea promote <file> [--title "..."] [--repo <name>]
   ideas [--project <id>] [--status open|promoted|dropped]
   ideas review
   handoff list
   handoff pull "<phone path>" [--project <id>]
   log "what happened" [--project <id>]
+  repo-init <path>
   validate
   status
   schema
@@ -24,14 +31,17 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
+import github  # noqa: E402
 import lib  # noqa: E402
 from lib import AGENT, FOLDERS, VAULT
 
 REVIEW_DAYS = 90            # `ideas review` lists open ideas older than this
 SLUG_MAX = 60
+BRANCH_SLUG_MAX = 40        # default branch slug length
 
 
 def die(msg: str) -> None:
@@ -213,6 +223,355 @@ def set_fields(path: Path, **fields) -> None:
     fm = fm or {}
     fm.update(fields)
     lib.write_text(path, lib.render_frontmatter(fm) + body.lstrip("\n"))
+
+
+# --- git and GitHub commands (design §4, §10) ------------------------------------------
+REPO_SETTINGS = {"allow_squash_merge": True, "allow_merge_commit": False,
+                 "allow_rebase_merge": False, "delete_branch_on_merge": True}
+MANUAL_SETTINGS = ("on GitHub, Settings → General → Pull Requests: allow only 'Squash merging' "
+                   "and turn on 'Automatically delete head branches'")
+
+
+def update_note(path: Path, **fields) -> None:
+    """Set frontmatter fields on a note, keeping its body; refuses if that would leave it invalid."""
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    text = lib.render_frontmatter({**(fm or {}), **fields}) + body.lstrip("\n")
+    commit_note(path, text if text.endswith("\n") else text + "\n")
+
+
+def log_event(repo: str, issue: str, event: str, detail: str = "") -> None:
+    append_log(f"- {lib.now_hhmm()} {repo}#{issue} {event}" + (f" — {one_line(detail)}" if detail else ""))
+
+
+def load_plan(repo: str, issue: str) -> tuple[Path, dict, str]:
+    path = work_path(repo, issue, "plan")
+    if not path.is_file():
+        die(f"{lib.rel(path)} doesn't exist; `new plan {repo} {issue}` creates it")
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    return path, fm or {}, body
+
+
+def load_impl(repo: str, issue: str) -> tuple[Path, dict]:
+    path = work_path(repo, issue, "impl")
+    if not path.is_file():
+        die(f"{lib.rel(path)} doesn't exist; `new plan {repo} {issue}` creates it")
+    fm, _, _ = lib.split_frontmatter(lib.read_text(path))
+    return path, fm or {}
+
+
+def issue_branch_re(issue: str) -> re.Pattern:
+    return re.compile(rf"^[^/]+/{issue}-")
+
+
+def issue_context(args) -> str:
+    """Validate <repo> <issue>; returns the repo's owner/name."""
+    index = lib.Index()
+    require_number(args.issue)
+    require_repo(index, args.repo)
+    return index.slugs[args.repo]
+
+
+def add_planned_label(slug: str, issue: str) -> None:
+    name, color, desc = lib.PLANNED_LABEL
+    github.ensure_label(slug, name, color, desc)
+    github.gh("issue", "edit", issue, "--repo", slug, "--add-label", name)
+
+
+def cmd_seal_plan(args) -> None:
+    slug = issue_context(args)
+    path, fm, body = load_plan(args.repo, args.issue)
+    name = lib.PLANNED_LABEL[0]
+    if fm.get("status") == "sealed":
+        if name in github.issue_info(slug, args.issue)["labels"]:
+            die(f"{lib.rel(path)} is already sealed")
+        add_planned_label(slug, args.issue)     # `stage` reports this state as backlog and points here
+        print(f"the plan was already sealed; added the '{name}' label to {slug}#{args.issue}")
+        return
+    trial = {**fm, "status": "sealed", "issue_updated": "2000-01-01T00:00:00Z", "base_sha": "0000000"}
+    errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
+    if errors:
+        die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
+    add_planned_label(slug, args.issue)
+    info = github.issue_info(slug, args.issue)          # after the label: D1 ignores label changes anyway
+    sha = github.head_sha(slug, github.default_branch(slug))[:7]
+    update_note(path, status="sealed", issue_updated=info["edited"], base_sha=sha)
+    log_event(args.repo, args.issue, "planned")
+    print(f"sealed {lib.rel(path)} (issue_updated {info['edited']}, base_sha {sha}); "
+          f"added the '{name}' label")
+
+
+def plan_files(body: str) -> list[str]:
+    """Paths named on the `Files:` lines of the plan's steps."""
+    found = []
+    for ln in lib.blank_code_blocks(body):
+        m = re.match(r"^Files: ?(.*)", ln)
+        if not m:
+            continue
+        ticked = re.findall(r"`([^`]+)`", m.group(1))
+        found += ticked or [re.sub(r"\(.*?\)", "", t).strip() for t in m.group(1).split(",")]
+    return sorted({f.replace("\\", "/").strip() for f in found if f.strip()})
+
+
+def check_preflight(repo: str, issue: str, slug: str) -> tuple[dict, list[str]]:
+    """Dies unless the plan is sealed, the issue is open and its title and body are unchanged
+    since sealing. Returns (issue info, warnings)."""
+    path, fm, body = load_plan(repo, issue)
+    if fm.get("status") != "sealed":
+        die(f"{lib.rel(path)} is not sealed; seal it with `seal plan {repo} {issue}`")
+    info = github.issue_info(slug, issue)
+    if info["state"] != "OPEN":
+        die(f"issue #{issue} is {info['state'].lower()}")
+    if info["edited"] > fm["issue_updated"]:
+        die(f"issue #{issue}'s title or body was edited at {info['edited']}, after the plan was "
+            f"sealed ({fm['issue_updated']}); re-plan it (plan-story) before implementing")
+    try:
+        cmp = github.compare(slug, fm["base_sha"], github.default_branch(slug))
+    except github.CmdError as e:
+        if e.kind != "failed":
+            raise
+        return info, [f"could not compare base_sha {fm['base_sha']} with the default branch: {e}"]
+    named = plan_files(body)
+    touched = sorted({f["filename"] for f in cmp.get("files", [])
+                      if any(f["filename"] == n or f["filename"].endswith("/" + n) for n in named)})
+    if not touched:
+        return info, []
+    return info, [f"{cmp.get('total_commits', '?')} commit(s) since base_sha {fm['base_sha']} "
+                  f"touch files the plan names: {', '.join(touched)}"]
+
+
+def cmd_preflight(args) -> None:
+    slug = issue_context(args)
+    _, warnings = check_preflight(args.repo, args.issue, slug)
+    for w in warnings:
+        print(f"warning: {w}")
+    print(f"preflight OK: {args.repo}#{args.issue} has a sealed plan and the issue is unchanged")
+
+
+def require_clone(slug: str) -> Path:
+    """The git clone we're running in, checked to be a clone of `slug` (D5)."""
+    top = github.git("rev-parse", "--show-toplevel", check=False)
+    if not top:
+        die("this command runs inside a clone of the repo; cd into it first")
+    origin = github.origin_slug(top)
+    if origin.lower() != slug.lower():
+        die(f"this clone's origin is {origin}, not {slug}; run from a clone of {slug}")
+    return Path(top)
+
+
+def default_slug(title: str) -> str:
+    subject = re.sub(r"^\s*[A-Za-z]+(?:\([^)]*\))?!?:\s*", "", title)
+    return lib.slugify(subject)[:BRANCH_SLUG_MAX].strip("-") or "work"
+
+
+def cmd_branch(args) -> None:
+    slug = issue_context(args)
+    info, warnings = check_preflight(args.repo, args.issue, slug)
+    for w in warnings:
+        print(f"warning: {w}")
+    impl, _ = load_impl(args.repo, args.issue)
+    top = require_clone(slug)
+    name = f"{args.type}/{args.issue}-{args.slug or default_slug(info['title'])}"
+    if not lib.BRANCH_RE.match(name):
+        die(f"branch '{name}' must match <type>/<issue>-<slug> with a lowercase a-z0-9- slug")
+    pat = issue_branch_re(args.issue)
+    local = github.git("for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=top).splitlines()
+    found = [f"{b} (local)" for b in local if pat.match(b)]
+    found += [f"{b} (on GitHub)" for b in github.remote_branches(slug) if pat.match(b)]
+    if found:
+        die(f"issue #{args.issue} already has a branch: {', '.join(found)}")
+    base = github.default_branch(slug)
+    github.git("fetch", "origin", base, cwd=top)
+    github.git("switch", "--no-track", "-c", name, f"origin/{base}", cwd=top)
+    github.git("push", "-u", "origin", name, cwd=top)
+    update_note(impl, branch=name)
+    log_event(args.repo, args.issue, "started", name)
+    print(f"created and pushed {name} from {base}; recorded in {lib.rel(impl)}")
+
+
+def cmd_open_pr(args) -> None:
+    slug = issue_context(args)
+    impl, fm = load_impl(args.repo, args.issue)
+    branch = fm.get("branch")
+    if not branch:
+        die(f"{lib.rel(impl)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
+    top = require_clone(slug)
+    current = github.git("branch", "--show-current", cwd=top)
+    if current != branch:
+        die(f"the current branch is {current or '(detached)'}, but {lib.rel(impl)} says {branch}; "
+            f"check out {branch} first")
+    if github.git("status", "--porcelain", cwd=top):
+        die("the working tree isn't clean; commit or stash your changes first")
+    extra = ""
+    if args.body_file:
+        try:
+            extra = Path(args.body_file).read_text(encoding="utf-8")
+        except OSError as e:
+            die(f"can't read --body-file: {e}")
+    info = github.issue_info(slug, args.issue)
+    github.git("push", "-u", "origin", branch, cwd=top)
+    existing = [p for p in github.open_prs(slug) if p["headRefName"] == branch]
+    if existing:
+        url, verb = existing[0]["url"], "found the open PR"
+    else:
+        body = f"Closes #{args.issue}\n" + (f"\n{extra.strip()}\n" if extra.strip() else "")
+        url = create_with_body(["pr", "create", "--repo", slug, "--head", branch,
+                                "--base", github.default_branch(slug), "--title", info["title"]], body)
+        verb = "opened"
+    m = re.search(r"/pull/(\d+)", url)
+    if not m:
+        die(f"couldn't read a PR number from {url!r}")
+    update_note(impl, pr=m.group(1))
+    if fm.get("pr") != m.group(1):
+        log_event(args.repo, args.issue, "pr-opened", url)
+    print(f"{verb} {url}; recorded pr: {m.group(1)} in {lib.rel(impl)}")
+
+
+def create_with_body(cmd: list[str], body: str) -> str:
+    """Run a `gh ... create` command with the body from a temp file; returns the URL it prints."""
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8", newline="\n") as f:
+        f.write(body)
+    try:
+        out = github.gh(*cmd, "--body-file", f.name)
+    finally:
+        os.unlink(f.name)
+    return out.strip().splitlines()[-1].strip()
+
+
+def cmd_stage(args) -> None:
+    slug = issue_context(args)
+    info = github.issue_info(slug, args.issue)
+    pat = issue_branch_re(args.issue)
+    prs = [p for p in github.open_prs(slug) if pat.match(p["headRefName"])]
+    branches = [b for b in github.remote_branches(slug) if pat.match(b)]
+    plan = work_path(args.repo, args.issue, "plan")
+    sealed = False
+    if plan.is_file():
+        fm, _, _ = lib.split_frontmatter(lib.read_text(plan))
+        sealed = (fm or {}).get("status") == "sealed"
+    label = lib.PLANNED_LABEL[0]
+    if info["state"] != "OPEN":
+        stage, why = "done", f"issue #{args.issue} is {info['state'].lower()}"
+    elif prs:
+        stage, why = "in review", f"PR {prs[0]['url']} is open for {prs[0]['headRefName']}"
+    elif branches:
+        stage, why = "in progress", f"branch {branches[0]} exists and has no open PR"
+    elif sealed and label in info["labels"]:
+        stage, why = "planned", f"the plan is sealed and the issue has the '{label}' label"
+    elif sealed:
+        stage, why = "backlog", (f"the plan is sealed but the issue lacks the '{label}' label; "
+                                 f"rerun `seal plan {args.repo} {args.issue}` to add it")
+    else:
+        stage, why = "backlog", "the issue is open and has no sealed plan"
+    print(f"{stage}: {why}")
+
+
+def cmd_idea_promote(args) -> None:
+    index = lib.Index()
+    path = find_idea(args.file)
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    if not fm or fm.get("status") != "open":
+        die(f"{lib.rel(path)} is {(fm or {}).get('status', 'not a valid idea')}; only open ideas can be promoted")
+    project = fm.get("project")
+    if args.repo:
+        require_repo(index, args.repo)
+        if project and project not in index.repos[args.repo]:
+            die(f"repo '{args.repo}' doesn't belong to the idea's project '{project}'")
+        name = args.repo
+    else:
+        if not project:
+            die("the idea has no project; pass --repo <name> to say where the issue goes")
+        names = sorted(n for n, pids in index.repos.items() if project in pids)
+        if len(names) != 1:
+            die(f"project '{project}' has {len(names)} repos ({', '.join(names) or 'none'}); "
+                "pass --repo <name>")
+        name = names[0]
+    lines = body.splitlines()
+    heading = next((ln[2:].strip() for ln in lines if ln.startswith("# ")), "")
+    title = one_line(args.title or heading)
+    if not title:
+        die("the idea has no title; pass --title")
+    context = "\n".join(ln for ln in lines if not ln.startswith("# ")).strip()
+    issue_body = (context + "\n\n" if context else "") + f"Promoted from the vault idea `{path.stem}`.\n"
+    url = create_with_body(["issue", "create", "--repo", index.slugs[name], "--title", title], issue_body)
+    try:
+        update_note(path, status="promoted", promoted_to=url)
+    except SystemExit:
+        print(f"the issue was created: {url}", file=sys.stderr)
+        raise
+    log_idea_event("idea-promoted", title, path)
+    print(f"promoted {lib.rel(path)} to {url}")
+
+
+def hooks_path_state(top: Path, target: Path) -> tuple[str, str]:
+    """(state, current core.hooksPath): 'unset', 'ours' (the shared copy), 'accepted'
+    (another path whose pre-push is agent-vault's) or 'foreign'."""
+    cur = github.git("config", "--local", "--get", "core.hooksPath", cwd=top, check=False)
+    if not cur:
+        return "unset", cur
+    where = Path(cur) if Path(cur).is_absolute() else top / cur
+    if os.path.normcase(os.path.realpath(where)) == os.path.normcase(os.path.realpath(target)):
+        return "ours", cur
+    try:
+        marked = lib.HOOK_MARKER in (where / "pre-push").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        marked = False
+    return ("accepted" if marked else "foreign"), cur
+
+
+def cmd_repo_init(args) -> None:
+    index = lib.Index()
+    found = github.git("rev-parse", "--show-toplevel", cwd=args.path, check=False)
+    if not found:
+        die(f"{args.path} is not a git clone")
+    top = Path(found)
+    slug = github.origin_slug(top)
+    name = slug.split("/")[1]
+    if index.slugs.get(name, "").lower() != slug.lower():
+        die(f"{slug} is not listed in any project's repos:. Add it to a project "
+            f"(`new project <id> --repo {slug}`) before running repo-init")
+    hooks = lib.INSTALL_DIR / "githooks"
+    if not (hooks / "pre-push").is_file():
+        die(f"{hooks / 'pre-push'} is missing; run install.py first")
+    state, cur = hooks_path_state(top, hooks)
+    if state == "foreign":
+        die(f"core.hooksPath is already {cur}, and its pre-push isn't agent-vault's; not replacing "
+            "it. Change or unset it by hand, then rerun repo-init")
+    report = []
+
+    have = github.gh_json("api", f"repos/{slug}")
+    change = {k: v for k, v in REPO_SETTINGS.items() if have.get(k) != v}
+    if change:
+        fields = [a for k, v in change.items() for a in ("-F", f"{k}={'true' if v else 'false'}")]
+        try:
+            github.gh("api", "-X", "PATCH", f"repos/{slug}", *fields)
+        except github.CmdError as e:
+            if e.kind != "failed":
+                raise
+            die(f"GitHub refused the merge settings for {slug} ({e.stderr or e}). Set them by hand "
+                f"{MANUAL_SETTINGS}, then rerun repo-init")
+        report.append("merge settings: squash-only, delete branch on merge (updated)")
+    else:
+        report.append("merge settings: already squash-only with delete branch on merge")
+
+    label, color, desc = lib.PLANNED_LABEL
+    made = github.ensure_label(slug, label, color, desc)
+    report.append(f"label '{label}': " + ("created" if made else "already exists"))
+
+    if state == "unset":
+        github.git("config", "--local", "core.hooksPath", hooks.as_posix(), cwd=top)
+        report.append(f"core.hooksPath: set to {hooks.as_posix()}")
+    else:
+        report.append(f"core.hooksPath: already {cur}")
+
+    claude = top / "CLAUDE.md"
+    if claude.exists():
+        report.append("CLAUDE.md: already exists, left alone")
+    else:
+        tpl = (lib.INSTALL_DIR / "templates" / "repo-CLAUDE.md").read_text(encoding="utf-8")
+        lib.write_text(claude, tpl.replace("{{PROJECT}}", index.repos[name][0]).replace("{{REPO}}", name))
+        report.append("CLAUDE.md: wrote a skeleton (not committed; fill it in)")
+    print(f"repo-init {slug}:")
+    print("\n".join("  " + r for r in report))
 
 
 # --- ideas ---------------------------------------------------------------------
@@ -462,8 +821,29 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("issue")
         p.set_defaults(fn=fn)
 
-    idea = sub.add_parser("idea", help="add or drop an idea").add_subparsers(
-        dest="action", required=True, metavar="add|drop")
+    seal = sub.add_parser("seal", help="seal a plan").add_subparsers(
+        dest="kind", required=True, metavar="plan")
+    p = seal.add_parser("plan")
+    p.add_argument("repo")
+    p.add_argument("issue")
+    p.set_defaults(fn=cmd_seal_plan)
+    for name, fn in (("preflight", cmd_preflight), ("stage", cmd_stage), ("branch", cmd_branch),
+                     ("open-pr", cmd_open_pr)):
+        p = sub.add_parser(name)
+        p.add_argument("repo")
+        p.add_argument("issue")
+        if name == "branch":
+            p.add_argument("--type", default="feat", choices=lib.BRANCH_TYPES)
+            p.add_argument("--slug")
+        if name == "open-pr":
+            p.add_argument("--body-file")
+        p.set_defaults(fn=fn)
+    p = sub.add_parser("repo-init", help="set up a repo's merge settings, label, hooks and CLAUDE.md")
+    p.add_argument("path")
+    p.set_defaults(fn=cmd_repo_init)
+
+    idea = sub.add_parser("idea", help="add, drop or promote an idea").add_subparsers(
+        dest="action", required=True, metavar="add|drop|promote")
     p = idea.add_parser("add")
     p.add_argument("title")
     p.add_argument("--project")
@@ -473,6 +853,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("--reason", required=True)
     p.set_defaults(fn=cmd_idea_drop)
+    p = idea.add_parser("promote")
+    p.add_argument("file")
+    p.add_argument("--title")
+    p.add_argument("--repo")
+    p.set_defaults(fn=cmd_idea_promote)
 
     p = sub.add_parser("ideas", help="list ideas, or `ideas review` for old open ones")
     p.add_argument("action", nargs="?", choices=["review"])
@@ -504,7 +889,10 @@ def main() -> None:
         die(f"no usable vault: {lib.CONFIG} is missing, or its vault path has no .obsidian folder; "
             "run install.py --vault <path>")
     args = build_parser().parse_args()
-    args.fn(args)
+    try:
+        args.fn(args)
+    except github.CmdError as e:
+        die(str(e))
 
 
 if __name__ == "__main__":
