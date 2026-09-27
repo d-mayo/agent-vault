@@ -4,11 +4,8 @@ Usage: <CLI> <command>, where <CLI> is the exact command in the vault's
 CLAUDE.md (the installer's Python plus this file). Commands:
   new daily [--date YYYY-MM-DD]
   new project <id> --title "Title" [--goal "..."] [--repo URL-or-path]
-  new note "Title" [--project <id>]
   log "what happened" [--project <id>]
-  archive <project-id>
   handoff list
-  handoff pull "<phone-side path>" [--project <id>]
   validate
   status
   schema
@@ -79,18 +76,6 @@ def cmd_new(args) -> None:
         print("created " + lib.rel(path))
         return
 
-    if args.kind == "note":
-        require_project(index, args.project)
-        title = lib.safe_title(args.name)
-        path = AGENT / FOLDERS["note"] / f"{title}.md"
-        if path.exists():
-            die(f"{lib.rel(path)} already exists")
-        fm = {"type": "note", "created": d}
-        if args.project:
-            fm["project"] = f"[[{args.project}]]"
-        lib.write_text(path, lib.render_frontmatter(fm) + f"# {title}\n\n")
-        print("created " + lib.rel(path))
-
 
 # --- log ---------------------------------------------------------------------
 def cmd_log(args) -> None:
@@ -105,23 +90,12 @@ def cmd_log(args) -> None:
     print(f"logged to {lib.rel(path)}: {entry}")
 
 
-# --- archive -------------------------------------------------------------------
+# --- bookkeeping ---------------------------------------------------------------
 def set_fields(path: Path, **fields) -> None:
     fm, body, _ = lib.split_frontmatter(lib.read_text(path))
     fm = fm or {}
     fm.update(fields)
     lib.write_text(path, lib.render_frontmatter(fm) + body.lstrip("\n"))
-
-
-def cmd_archive(args) -> None:
-    src = AGENT / FOLDERS["project"] / f"{args.id}.md"
-    if not src.exists():
-        die(f"no active project file {lib.rel(src)}")
-    set_fields(src, status="done", updated=lib.today().isoformat())
-    dest = AGENT / lib.ARCHIVE / src.name
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    src.replace(dest)
-    print(f"archived to {lib.rel(dest)} (links by name still resolve)")
 
 
 # --- handoff ---------------------------------------------------------------------
@@ -143,70 +117,42 @@ def phone_notes() -> list[Path]:
     return sorted(out, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def cmd_handoff(args) -> None:
+def cmd_handoff(_args) -> None:
     done = load_handoffs()
-    if args.action == "list":
-        pending = [p for p in phone_notes() if lib.rel(p) not in done]
-        if not pending:
-            print("no phone-side notes waiting")
-        for p in pending[:25]:
-            when = dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")
-            print(f"{when}  {lib.rel(p)}")
-        if len(pending) > 25:
-            print(f"... and {len(pending) - 25} more")
-        return
-
-    src = Path(args.path)
-    if not src.is_absolute():
-        src = VAULT / src
-    if not src.exists() or src.suffix.lower() != ".md":
-        die(f"not a note: {args.path}")
-    parts = lib.vault_parts(src)
-    if parts is None or parts[0] == AGENT.name.lower():
-        die("handoff only pulls notes from the phone side (outside Agent/)")
-    index = lib.Index()
-    require_project(index, args.project)
-
-    d = lib.today().isoformat()
-    link = lib.rel(src)[:-3]
-    fm = {"type": "intake", "source": f"[[{link}]]", "status": "open", "created": d}
-    if args.project:
-        fm["project"] = f"[[{args.project}]]"
-    dest = AGENT / FOLDERS["intake"] / f"{d}-{lib.slugify(src.stem)}.md"
-    n = 2
-    while dest.exists():
-        dest = dest.with_name(f"{d}-{lib.slugify(src.stem)}-{n}.md")
-        n += 1
-    body = f"# {src.stem}\n\nFrom phone note [[{link}]].\n\n## What to do\n\n"
-    lib.write_text(dest, lib.render_frontmatter(fm) + body)
-    done[lib.rel(src)] = d
-    lib.write_text(lib.HANDOFF_LOG, json.dumps(done, indent=2, sort_keys=True) + "\n")
-    print("created " + lib.rel(dest))
+    pending = [p for p in phone_notes() if lib.rel(p) not in done]
+    if not pending:
+        print("no phone-side notes waiting")
+    for p in pending[:25]:
+        when = dt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d")
+        print(f"{when}  {lib.rel(p)}")
+    if len(pending) > 25:
+        print(f"... and {len(pending) - 25} more")
 
 
 # --- validate / status / schema ---------------------------------------------------------
 def cmd_validate(_args) -> None:
-    results = lib.validate_all()
-    if not results:
+    errors, warnings = lib.validate_all()
+    for kind, found in (("warning", warnings), ("error", errors)):
+        for path, probs in found.items():
+            for p in probs:
+                print(f"{path}: {kind}: {p}")
+    if errors:
+        sys.exit(1)
+    if not warnings:
         print("vault OK")
-        return
-    for path, probs in results.items():
-        for p in probs:
-            print(f"{path}: {p}")
-    sys.exit(1)
 
 
 def goal_line(path: Path) -> str:
     _, body, _ = lib.split_frontmatter(lib.read_text(path))
     lines = body.splitlines()
     for i, l in enumerate(lines):
-        if l.strip() == "## Goal":
+        if l.strip() in ("## Purpose", "## Goal"):
             for nxt in lines[i + 1:]:
                 if nxt.startswith("## "):
                     break
                 if nxt.strip():
                     return nxt.strip()[:100]
-    return "(no goal written)"
+    return "(no purpose written)"
 
 
 def status_text() -> str:
@@ -216,16 +162,10 @@ def status_text() -> str:
         fm, _, _ = lib.split_frontmatter(lib.read_text(path))
         st = (fm or {}).get("status")
         if st in groups:
-            groups[st].append(f"- [[{pid}]] — {goal_line(path)} (updated {fm.get('updated')})")
-    intake = []
-    for p in sorted((AGENT / FOLDERS["intake"]).glob("*.md")):
-        fm, _, _ = lib.split_frontmatter(lib.read_text(p))
-        if (fm or {}).get("status") == "open":
-            intake.append(f"- {lib.rel(p)}")
+            groups[st].append(f"- [[{pid}]] — {goal_line(path)} (updated {fm.get('updated') or fm.get('audited') or 'n/a'})")
     out = ["Active projects:"] + (groups["active"] or ["- (none)"])
     if groups["paused"]:
         out += ["Paused projects:"] + groups["paused"]
-    out += [f"Open intake items: {len(intake)}"] + intake
     return "\n".join(out)
 
 
@@ -234,18 +174,7 @@ def cmd_status(_args) -> None:
 
 
 def cmd_schema(_args) -> None:
-    print("Note types (folder -> required fields; optional fields):")
-    for t, folder in FOLDERS.items():
-        opt = lib.OPTIONAL[t] + lib.ALWAYS_ALLOWED
-        print(f"  {t:8} Agent/{folder}/  required: {', '.join(lib.REQUIRED[t])}; optional: {', '.join(opt)}")
-    print(f"  Archived projects move to Agent/{lib.ARCHIVE}/ (via `vault.py archive`).")
-    for t, st in lib.STATUSES.items():
-        print(f"Status values for {t}: {', '.join(st)}")
-    print("Dates are YYYY-MM-DD. Project ids are lowercase-kebab-case and equal the filename.")
-    print("Links to projects are quoted wikilinks: project: \"[[project-id]]\".")
-    print(f"Project notes must have sections: {', '.join('## ' + s for s in lib.PROJECT_SECTIONS)}.")
-    print(f"Daily notes: filename = date; entries under '{lib.LOG_HEADING}' as '- HH:MM — text [[project-id]]'.")
-    print("Every [[link]] in Agent/ must resolve to an existing file.")
+    print(lib.schema_text())
 
 
 def main() -> None:
@@ -258,7 +187,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("new")
-    p.add_argument("kind", choices=["daily", "project", "note"])
+    p.add_argument("kind", choices=["daily", "project"])
     p.add_argument("name", nargs="?")
     p.add_argument("--date")
     p.add_argument("--title")
@@ -272,14 +201,8 @@ def main() -> None:
     p.add_argument("--project")
     p.set_defaults(fn=cmd_log)
 
-    p = sub.add_parser("archive")
-    p.add_argument("id")
-    p.set_defaults(fn=cmd_archive)
-
     p = sub.add_parser("handoff")
-    p.add_argument("action", choices=["list", "pull"])
-    p.add_argument("path", nargs="?")
-    p.add_argument("--project")
+    p.add_argument("action", choices=["list"])
     p.set_defaults(fn=cmd_handoff)
 
     for name, fn in (("validate", cmd_validate), ("status", cmd_status), ("schema", cmd_schema)):
@@ -288,8 +211,6 @@ def main() -> None:
     args = ap.parse_args()
     if args.cmd == "new" and args.kind != "daily" and not args.name:
         die(f"'new {args.kind}' needs a name")
-    if args.cmd == "handoff" and args.action == "pull" and not args.path:
-        die("'handoff pull' needs a path")
     args.fn(args)
 
 

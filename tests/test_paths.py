@@ -40,28 +40,16 @@ class PathsTest(unittest.TestCase):
         self.assertIn("Vault check: OK", r.stdout)
         self.assertTrue(list((self.vault / "Agent" / "Daily").glob("*.md")))
 
-    def test_v1_validator_unchanged(self):  # T6 -> AC7
-        r = run_py(CLI, ["new", "project", "demo", "--title", "Demo", "--goal", "Test."], config=self.cfg)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        r = run_py(CLI, ["validate"], config=self.cfg)
-        self.assertEqual((r.returncode, r.stdout.strip()), (0, "vault OK"))
-        bad = self.vault / "Agent" / "Notes" / "x.md"
-        bad.parent.mkdir(parents=True)
-        bad.write_text("no frontmatter\n")
-        r = run_py(CLI, ["validate"], config=self.cfg)
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("missing frontmatter", r.stdout)
-
     def test_handoff_log_location(self):
-        phone = self.vault / "Ideas.md"
-        phone.write_text("an idea\n")
-        r = run_py(CLI, ["handoff", "pull", "Ideas.md"], config=self.cfg)
+        (self.vault / "Agent").mkdir()
+        (self.vault / "Agent" / ".handoff-log.json").write_text('{"Ideas.md": "2026-09-26"}\n')
+        (self.vault / "Ideas.md").write_text("an idea\n")
+        r = run_py(CLI, ["handoff", "list"], config=self.cfg)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((self.vault / "Agent" / ".handoff-log.json").exists())
+        self.assertIn("no phone-side notes waiting", r.stdout)
         r = run_py(HOOKS / "guard.py", config=self.cfg, stdin={
             "tool_name": "Edit", "cwd": str(self.vault), "tool_input": {"file_path": "Ideas.md"}})
         self.assertEqual(r.returncode, 2)
-        self.assertIn('vault.py" handoff pull', r.stderr)
 
 
 if __name__ == "__main__":

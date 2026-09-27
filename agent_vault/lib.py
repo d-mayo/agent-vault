@@ -38,43 +38,160 @@ def _load_vault():
 VAULT = _load_vault()                      # vault root (Notes), or None
 AGENT = VAULT / "Agent" if VAULT else None
 
-FOLDERS = {                                # note type -> folder
-    "daily": "Daily",
-    "project": "Projects",
-    "note": "Notes",
-    "intake": "Intake",
-}
-ARCHIVE = "Archive"
-TYPE_BY_FOLDER = {v.lower(): k for k, v in FOLDERS.items()}
 HANDOFF_LOG = AGENT / ".handoff-log.json" if AGENT else None
 
-# --- Schema ------------------------------------------------------------------
+# --- Schema (design-v1.md §6-7) ----------------------------------------------
+TYPES = ["project", "plan", "impl", "retro", "idea", "daily"]
+FOLDERS = {                                # folder key -> folder under Agent/
+    "project": "Projects",
+    "work": "Work",
+    "idea": "Ideas",
+    "daily": "Daily",
+}
+PATHS = {                                  # note type -> layout (for `schema`)
+    "project": "Projects/<id>.md",
+    "plan": "Work/<repo>/<repo>-<n>-plan.md",
+    "impl": "Work/<repo>/<repo>-<n>-impl.md",
+    "retro": "Work/<repo>/<repo>-<n>-retro.md",
+    "idea": "Ideas/<YYYY-MM-DD>-<slug>.md",
+    "daily": "Daily/<YYYY-MM-DD>.md",
+}
 REQUIRED = {
+    "project": ["type", "id", "status", "repos"],
+    "plan": ["type", "repo", "issue", "status"],
+    "impl": ["type", "repo", "issue", "branch", "status"],
+    "retro": ["type", "repo", "issue", "pr", "status"],
+    "idea": ["type", "status", "created", "source"],
     "daily": ["type", "date"],
-    "project": ["type", "id", "status", "created", "updated"],
-    "note": ["type", "created"],
-    "intake": ["type", "source", "status", "created"],
 }
 OPTIONAL = {
+    "project": ["audited"],
+    "plan": ["issue_updated", "base_sha"],
+    "impl": ["pr"],
+    "retro": [],
+    "idea": ["project", "promoted_to"],
     "daily": [],
-    "project": ["repo"],
-    "note": ["project"],
-    "intake": ["project"],
+}
+CONDITIONAL = {                            # shown by `schema`; enforced by FM-COND / PLAN-SEALED
+    "plan": "issue_updated and base_sha are required when status is sealed",
+    "idea": "promoted_to is required if and only if status is promoted",
 }
 ALWAYS_ALLOWED = ["tags", "aliases"]
 STATUSES = {
-    "project": ["active", "paused", "done"],
-    "intake": ["open", "done"],
+    "project": ["active", "paused", "archived"],
+    "plan": ["draft", "sealed"],
+    "impl": ["open", "sealed"],
+    "retro": ["open", "sealed"],
+    "idea": ["open", "promoted", "dropped"],
 }
-PROJECT_SECTIONS = ["Goal", "Current state", "Next actions", "Decisions"]
-DATE_FIELDS = ["date", "created", "updated"]
+DATE_FIELDS = {"project": ["audited"], "idea": ["created"], "daily": ["date"]}
+TIMESTAMP_FIELDS = {"plan": ["issue_updated"]}
+SECTIONS = {                               # required `##` sections, in order
+    "project": ["Purpose", "Current state", "Architecture", "Standing decisions"],
+    "plan": ["Goal", "Acceptance criteria", "Decisions", "Implementer's discretion",
+             "Context", "Steps", "Tests", "Stop and ask if", "Out of scope"],
+    "impl": ["Deviations", "Review findings", "Verification", "Discoveries"],
+    "retro": ["Summary", "CLAUDE.md audit", "Overview audit", "Follow-ups"],
+    "idea": [],
+    "daily": ["Log"],
+}
+SIZE_CAPS = {"project": 60, "impl": 80, "retro": 40, "idea": 8}   # body lines; errors
+PLAN_WARN_LINES = 400                                            # body lines; warning
+EVENTS = ["planned", "started", "pr-opened", "retro-done", "idea-added", "idea-promoted"]
 LOG_HEADING = "## Log"
+NONE_LINE = "None"
 
 ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-LOG_LINE_RE = re.compile(r"^- \d{2}:\d{2} — \S")
+TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+NUMBER_RE = re.compile(r"^[1-9]\d*$")
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+REPO_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+IDEA_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$")
+WORK_FILE_RE = re.compile(r"^(?P<repo>[A-Za-z0-9._-]+?)-(?P<n>[1-9]\d*)-(?P<kind>plan|impl|retro)$")
+IDEA_SOURCE_RE = re.compile(r"^(?:retro [A-Za-z0-9._-]+#[1-9]\d*|phone:\S.*|session)$")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
+STEP_HEADING_RE = re.compile(r"^### [1-9]\d*\. \S")
+AC_LINE_RE = re.compile(r"^- AC(\d+): \S")
+TEST_LINE_RE = re.compile(r"^- T\d+ → (AC\d+(?:, AC\d+)*): \S")
+_TIME = r"(?:[01]\d|2[0-3]):[0-5]\d"
 
+# Line formats: rule -> [(shape shown by `schema`, regex)]. A line under a section
+# bound to the rule (SECTION_LINES) must match one of them.
+LINE_FORMATS = {
+    "PLAN-AC": [("- AC<n>: <criterion>", AC_LINE_RE)],
+    "PLAN-D": [("- D<n>: <decision>, because <reason>", re.compile(r"^- D\d+: .+, because \S"))],
+    "PLAN-T": [("- T<n> → AC<m>[, AC<k>]: <test>", TEST_LINE_RE),
+               ("Full check: <command>", re.compile(r"^Full check: \S"))],
+    "IMPL-DEV": [("- Step <n>: <deviation>", re.compile(r"^- Step [1-9]\d*: \S"))],
+    "IMPL-REV": [("- R<n> (major|minor): <finding> → fixed in <sha>",
+                  re.compile(r"^- R\d+ \((?:major|minor)\): .+ → fixed in [0-9a-f]{7,40}$")),
+                 ("- R<n> (major|minor): <finding> → won't fix: <reason>",
+                  re.compile(r"^- R\d+ \((?:major|minor)\): .+ → won't fix: \S"))],
+    "RETRO-AUDIT": [("- <section heading>: confirmed|rewritten|removed — <reason>",
+                     re.compile(r"^- .+: (?:confirmed|rewritten|removed) — \S"))],
+    "RETRO-FOLLOW": [("- issue #<n> created", re.compile(r"^- issue #[1-9]\d* created$")),
+                     ("- issue #<n> amended", re.compile(r"^- issue #[1-9]\d* amended$")),
+                     ("- idea [[<idea>]]", re.compile(r"^- idea \[\[[^\]]+\]\]$")),
+                     ("- dropped: <why>", re.compile(r"^- dropped: \S"))],
+    "DAILY-LINE": [
+        ("- HH:MM <repo>#<n> <event>[ — <detail>]",
+         re.compile(rf"^- {_TIME} [A-Za-z0-9._-]+#[1-9]\d* (?:{'|'.join(EVENTS)})(?: — \S.*)?$")),
+        ("- HH:MM session — <summary>[ [[<project>]]]",
+         re.compile(rf"^- {_TIME} session — \S.*?(?: \[\[[^\]]+\]\])?$")),
+    ],
+}
+# note type -> section -> (rule, "None" is a valid line)
+SECTION_LINES = {
+    "plan": {"Acceptance criteria": ("PLAN-AC", False), "Decisions": ("PLAN-D", False),
+             "Tests": ("PLAN-T", False)},
+    "impl": {"Deviations": ("IMPL-DEV", True), "Review findings": ("IMPL-REV", True)},
+    "retro": {"CLAUDE.md audit": ("RETRO-AUDIT", False), "Overview audit": ("RETRO-AUDIT", False),
+              "Follow-ups": ("RETRO-FOLLOW", True)},
+    "daily": {"Log": ("DAILY-LINE", False)},
+}
+
+# Every validator rule: id -> (severity, what it checks). Problem messages carry
+# the id; `schema` prints this table; tests/test_schema.py needs a passing and a
+# failing fixture for each id.
+RULES = {
+    "PATH-STRAY": ("error", "Files in Agent/ must sit at a layout path (see Layout); anything else is stray"),
+    "PATH-NAME": ("error", "The file name must match the pattern for its folder"),
+    "FM-PARSE": ("error", "Frontmatter must be simple 'key: value' YAML; wikilinks must be quoted"),
+    "FM-MISSING": ("error", "Every note starts with a frontmatter block"),
+    "FM-TYPE": ("error", "'type' must be a known note type and match the note's path"),
+    "FM-REQUIRED": ("error", "Required frontmatter fields must be present and non-empty"),
+    "FM-UNKNOWN": ("error", "Unknown frontmatter fields are rejected"),
+    "FM-ENUM": ("error", "'status' must be one of the values allowed for the type"),
+    "FM-DATE": ("error", "Date fields are YYYY-MM-DD"),
+    "FM-TS": ("error", "Timestamps are ISO 8601 UTC, e.g. 2026-09-26T21:04:00Z"),
+    "FM-FORMAT": ("error", "Field values have the right shape (ids, repo names, numbers, sha, source)"),
+    "FM-MATCH": ("error", "id, date, repo and issue must agree with the file name"),
+    "FM-COND": ("error", "promoted_to is set if and only if an idea is promoted"),
+    "SEC-MISSING": ("error", "Every required '##' section must be present"),
+    "SEC-ORDER": ("error", "'##' sections must appear in the specified order"),
+    "SEC-EXTRA": ("error", "Other (or duplicate) '##' sections are rejected"),
+    "SIZE-CAP": ("error", "Body line caps: project 60, impl 80, retro 40, idea 8"),
+    "SIZE-WARN": ("warning", "A plan over 400 body lines should be split into several issues"),
+    "PLAN-AC": ("error", "Acceptance criteria are '- AC<n>: …' lines, at least one, numbers unique"),
+    "PLAN-D": ("error", "Decisions are '- D<n>: <decision>, because <reason>' lines"),
+    "PLAN-STEP": ("error", "Each '### <n>. <title>' step has 'Files:' and 'Done when:'; at least one step"),
+    "PLAN-T": ("error", "Tests are '- T<n> → AC<m>[, AC<k>]: …' lines, at least one"),
+    "PLAN-COVER": ("error", "Every acceptance criterion is referenced by at least one test"),
+    "PLAN-REF": ("error", "Every AC a test references must exist"),
+    "PLAN-FULL": ("error", "The Tests section has a 'Full check:' line"),
+    "PLAN-SEALED": ("error", "A sealed plan has issue_updated and base_sha"),
+    "IMPL-DEV": ("error", "Deviation lines are '- Step <n>: …' (or None)"),
+    "IMPL-REV": ("error", "Review findings end in '→ fixed in <sha>' or '→ won't fix: <reason>' (or None)"),
+    "RETRO-AUDIT": ("error", "Audit lines are '- <heading>: confirmed|rewritten|removed — <reason>'"),
+    "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link or dropped"),
+    "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]' or '- HH:MM session — …'"),
+    "X-REPO-DUP": ("error", "A repo name appears in the repos: of at most one project"),
+    "X-REPO-UNREG": ("error", "Work/<repo>/ belongs to a repo listed in some project's repos:"),
+    "X-PROJECT": ("error", "An idea's 'project:' names an existing project"),
+    "X-LINK": ("error", "Every [[link]] in Agent/ resolves (links in code are ignored)"),
+}
 
 def setup_io() -> None:
     """Force UTF-8 on Windows pipes so titles/em dashes never crash a hook."""
@@ -193,7 +310,7 @@ def safe_title(text: str) -> str:
 
 # --- Vault index ---------------------------------------------------------------
 class Index:
-    """Everything a link or project reference could resolve to."""
+    """Everything a link, project or repo reference could resolve to."""
 
     def __init__(self):
         self.md_stems, self.names = set(), set()
@@ -204,127 +321,347 @@ class Index:
             if p.suffix.lower() == ".md":
                 self.md_stems.add(p.stem.lower())
         self.projects = {}   # id -> Path
-        for folder in (FOLDERS["project"], ARCHIVE):
-            for p in (AGENT / folder).glob("*.md"):
-                fm, _, _ = split_frontmatter(read_text(p))
-                if fm and fm.get("type") == "project":
-                    self.projects[p.stem] = p
+        self.repos = {}      # repo name -> [project ids that list it in repos:]
+        for p in sorted((AGENT / FOLDERS["project"]).glob("*.md")):
+            fm, _, _ = split_frontmatter(read_text(p))
+            if fm and fm.get("type") == "project":
+                self.projects[p.stem] = p
+                repos = fm.get("repos")
+                for slug in repos if isinstance(repos, list) else []:
+                    self.repos.setdefault(slug.split("/")[-1], []).append(p.stem)
 
     def resolves(self, target: str) -> bool:
         name = target.strip().replace("\\", "/").split("/")[-1].lower()
         return name in self.md_stems or name in self.names
 
 
-def project_ref(value) -> str | None:
-    """'[[my-project]]' -> 'my-project'; anything else -> None."""
-    if isinstance(value, str):
-        m = re.fullmatch(r"\[\[([^\]|#]+)\]\]", value.strip())
-        if m:
-            return m.group(1).strip()
-    return None
-
-
 # --- Validation ----------------------------------------------------------------
-def expected_type(path: Path) -> str | None:
-    parts = path.relative_to(AGENT).parts
-    if len(parts) < 2:
-        return None
-    return TYPE_BY_FOLDER.get(parts[0].lower())
+class Result:
+    """Problems found in one note. Messages start with the rule id, e.g. '[SEC-ORDER] …'."""
+
+    def __init__(self):
+        self.errors, self.warnings = [], []
+
+    def add(self, rule: str, msg: str) -> None:
+        (self.errors if RULES[rule][0] == "error" else self.warnings).append(f"[{rule}] {msg}")
 
 
-def validate_file(path: Path, index: Index | None = None) -> list[str]:
-    index = index or Index()
-    parts = path.relative_to(AGENT).parts
-    top = parts[0].lower() if parts else ""
-    if top == "_system":
-        return []
-    if len(parts) < 2 or (top not in TYPE_BY_FOLDER and top != ARCHIVE.lower()):
-        return [f"stray file: notes belong in {', '.join(list(FOLDERS.values()) + [ARCHIVE])}"]
+def blank_code_blocks(text: str) -> list[str]:
+    """Lines of text with fenced code blocks emptied (line count is kept)."""
+    out, fence = [], None
+    for ln in text.splitlines():
+        s = ln.lstrip()
+        marker = s[:3] if s[:3] in ("```", "~~~") else None
+        if fence:
+            fence = None if marker == fence else fence
+            out.append("")
+        elif marker:
+            fence = marker
+            out.append("")
+        else:
+            out.append(ln)
+    return out
 
-    text = read_text(path)
-    fm, body, errors = split_frontmatter(text)
-    problems = list(errors)
-    if fm is None:
-        return problems + ["missing frontmatter"]
 
-    ntype = fm.get("type")
-    want = expected_type(path)
-    if ntype not in REQUIRED:
-        return problems + [f"type must be one of {sorted(REQUIRED)} (got {ntype!r})"]
-    if want and ntype != want:
-        problems.append(f"type is {ntype!r} but notes in {parts[0]}/ must be {want!r}")
+def split_sections(lines: list[str]) -> list[tuple[str, list[str]]]:
+    out = []
+    for ln in lines:
+        if ln.startswith("## "):
+            out.append((ln[3:].strip(), []))
+        elif out:
+            out[-1][1].append(ln)
+    return out
 
+
+def classify(parts: tuple[str, ...]):
+    """Where a file sits in the layout: (type | None, fields the name implies, problem | None)."""
+    name = parts[-1]
+    stem = name[:-3] if name.lower().endswith(".md") else None
+    top = parts[0]
+    depth = len(parts)
+    stray = ("PATH-STRAY", f"Agent/{'/'.join(parts)} is not in the layout; "
+             f"allowed: {', '.join(PATHS.values())}. Move or delete it")
+
+    def bad_name(rule_hint: str):
+        return None, {}, ("PATH-NAME", f"'{name}' must look like {rule_hint}")
+
+    if stem is None:
+        return None, {}, stray
+    if top == FOLDERS["project"] and depth == 2:
+        if not ID_RE.match(stem):
+            return bad_name(PATHS["project"])
+        return "project", {"id": stem}, None
+    if top == FOLDERS["daily"] and depth == 2:
+        if not DATE_RE.match(stem):
+            return bad_name(PATHS["daily"])
+        return "daily", {"date": stem}, None
+    if top == FOLDERS["idea"] and depth == 2:
+        if not IDEA_FILE_RE.match(stem):
+            return bad_name(PATHS["idea"])
+        return "idea", {}, None
+    if top == FOLDERS["work"] and depth == 3:
+        m = WORK_FILE_RE.match(stem)
+        if not m or m.group("repo") != parts[1]:
+            return bad_name(f"{parts[1]}-<n>-plan|impl|retro.md")
+        return m.group("kind"), {"repo": m.group("repo"), "issue": m.group("n")}, None
+    return None, {}, stray
+
+
+def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None:
     for key in REQUIRED[ntype]:
-        if not fm.get(key):
-            problems.append(f"missing required field '{key}'")
+        if fm.get(key) in (None, ""):
+            res.add("FM-REQUIRED", f"missing required field '{key}'")
     allowed = set(REQUIRED[ntype]) | set(OPTIONAL[ntype]) | set(ALWAYS_ALLOWED)
     for key in fm:
         if key not in allowed:
-            problems.append(f"unknown field '{key}' for type {ntype}")
-    for key in DATE_FIELDS:
-        if key in fm and not (isinstance(fm[key], str) and DATE_RE.match(fm[key])):
-            problems.append(f"'{key}' must be YYYY-MM-DD")
-    if ntype in STATUSES and fm.get("status") and fm["status"] not in STATUSES[ntype]:
-        problems.append(f"status must be one of {STATUSES[ntype]}")
+            res.add("FM-UNKNOWN", f"unknown field '{key}' for type {ntype}; remove it")
+    for key, val in fm.items():
+        if isinstance(val, list) and key not in ("repos", *ALWAYS_ALLOWED):
+            res.add("FM-FORMAT", f"'{key}' must be a single value, not a list")
 
-    if "project" in fm and ntype != "project":
-        pid = project_ref(fm["project"])
-        if pid is None:
-            problems.append("'project' must be a single link like \"[[project-id]]\"")
-        elif pid not in index.projects:
-            problems.append(f"project [[{pid}]] does not exist (see Agent/Projects)")
-
-    if ntype == "daily":
-        if fm.get("date") != path.stem:
-            problems.append("daily note filename must equal its date")
-        problems += _check_log(body)
-    elif ntype == "project":
-        if fm.get("id") != path.stem:
-            problems.append("project 'id' must equal its filename")
-        if fm.get("id") and not ID_RE.match(fm["id"]):
-            problems.append("project id must be lowercase-kebab-case")
-        headings = {h.strip() for h in re.findall(r"^## (.+)$", body, re.M)}
-        for sec in PROJECT_SECTIONS:
-            if sec not in headings:
-                problems.append(f"missing section '## {sec}'")
-    elif ntype == "intake":
-        src = project_ref(fm.get("source"))
-        if src is None or not index.resolves(src):
-            problems.append("'source' must link to an existing phone-side note")
-
-    for target in WIKILINK_RE.findall(body):
-        if not index.resolves(target):
-            problems.append(f"broken link [[{target}]]")
-    return problems
-
-
-def _check_log(body: str) -> list[str]:
-    lines = body.splitlines()
-    try:
-        start = next(i for i, l in enumerate(lines) if l.strip() == LOG_HEADING)
-    except StopIteration:
-        return [f"missing '{LOG_HEADING}' section"]
-    problems = []
-    for ln in lines[start + 1:]:
-        if ln.startswith("## "):
-            break
-        if not ln.strip() or ln.startswith(("  ", "\t")):
+    status = fm.get("status")
+    if ntype in STATUSES and status and status not in STATUSES[ntype]:
+        res.add("FM-ENUM", f"status must be one of {STATUSES[ntype]} (got {status!r})")
+    for key in DATE_FIELDS.get(ntype, []):
+        val = fm.get(key)
+        if val in (None, ""):
             continue
-        if not LOG_LINE_RE.match(ln):
-            problems.append(f"log line must look like '- HH:MM — text': {ln[:60]!r}")
-    return problems
+        try:
+            ok = isinstance(val, str) and DATE_RE.match(val) and dt.date.fromisoformat(val)
+        except ValueError:
+            ok = False
+        if not ok:
+            res.add("FM-DATE", f"'{key}' must be a real date, YYYY-MM-DD (got {val!r})")
+    for key in TIMESTAMP_FIELDS.get(ntype, []):
+        val = fm.get(key)
+        if val in (None, ""):
+            continue
+        try:
+            ok = isinstance(val, str) and TIMESTAMP_RE.match(val) and dt.datetime.strptime(val, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            ok = False
+        if not ok:
+            res.add("FM-TS", f"'{key}' must be a UTC timestamp like 2026-09-26T21:04:00Z (got {val!r})")
+
+    def scalar(key):
+        val = fm.get(key)
+        return val if isinstance(val, str) and val else None
+
+    if scalar("id") and not ID_RE.match(scalar("id")):
+        res.add("FM-FORMAT", "id must be lowercase-kebab-case")
+    if scalar("repo") and not REPO_NAME_RE.match(scalar("repo")):
+        res.add("FM-FORMAT", "repo is the plain repo name, e.g. agent-vault (not owner/name)")
+    for key in ("issue", "pr"):
+        if scalar(key) and not NUMBER_RE.match(scalar(key)):
+            res.add("FM-FORMAT", f"'{key}' must be a number like 12")
+    if scalar("base_sha") and not SHA_RE.match(scalar("base_sha")):
+        res.add("FM-FORMAT", "base_sha must be a 7-40 character lowercase hex sha")
+    repos = fm.get("repos")
+    if repos is not None and repos != "":
+        if not isinstance(repos, list):
+            res.add("FM-FORMAT", "repos must be a list like [owner/name] (use [] for none)")
+        else:
+            for slug in repos:
+                if not REPO_SLUG_RE.match(slug):
+                    res.add("FM-FORMAT", f"repos entry {slug!r} must be owner/name")
+    if ntype == "idea":
+        if scalar("source") and not IDEA_SOURCE_RE.match(scalar("source")):
+            res.add("FM-FORMAT", "source must be 'retro <repo>#<n>', 'phone:<path>' or 'session'")
+        elif scalar("source") and scalar("source").startswith("phone:")                 and not (VAULT / scalar("source")[6:]).is_file():
+            res.add("FM-FORMAT", f"source path {scalar('source')[6:]!r} doesn't exist on the phone side")
+        if scalar("project") and not ID_RE.match(scalar("project")):
+            res.add("FM-FORMAT", "project is a plain project id, not a link")
+        promoted = fm.get("promoted_to") not in (None, "")
+        if (status == "promoted") != promoted and status in STATUSES["idea"]:
+            res.add("FM-COND", "promoted_to must be set if and only if status is promoted")
+    if ntype == "plan" and status == "sealed":
+        for key in ("issue_updated", "base_sha"):
+            if fm.get(key) in (None, ""):
+                res.add("PLAN-SEALED", f"a sealed plan needs '{key}'")
+    for key, want in derived.items():
+        if isinstance(fm.get(key), str) and fm[key] != want:
+            res.add("FM-MATCH", f"'{key}' is {fm[key]!r} but the file name says {want!r}")
 
 
-def validate_all() -> dict[str, list[str]]:
+def _check_sections(res: Result, ntype: str, secs: list) -> None:
+    names = [n for n, _ in secs]
+    want = SECTIONS[ntype]
+    for sec in want:
+        if sec not in names:
+            res.add("SEC-MISSING", f"missing section '## {sec}'")
+    extra = [n for i, n in enumerate(names) if n not in want or n in names[:i]]
+    for n in extra:
+        res.add("SEC-EXTRA", f"unexpected or duplicate section '## {n}' (allowed: {', '.join(want) or 'none'})")
+    present = [n for i, n in enumerate(names) if n in want and n not in names[:i]]
+    if present != [s for s in want if s in present]:
+        res.add("SEC-ORDER", f"sections must appear in this order: {', '.join(want)}")
+
+
+def _check_line_formats(res: Result, ntype: str, secs: list) -> None:
+    by_name = {}
+    for name, body in secs:
+        by_name.setdefault(name, body)
+    for name, (rule, none_ok) in SECTION_LINES.get(ntype, {}).items():
+        for ln in by_name.get(name, []):
+            if not ln.strip() or ln[0] in " \t":
+                continue
+            if none_ok and ln.strip() == NONE_LINE:
+                continue
+            if not any(rx.match(ln) for _, rx in LINE_FORMATS[rule]):
+                shapes = " | ".join(s for s, _ in LINE_FORMATS[rule])
+                res.add(rule, f"'## {name}' line must look like {shapes}{' (or None)' if none_ok else ''}: {ln[:60]!r}")
+
+
+def _check_plan(res: Result, secs: list) -> None:
+    by_name = {}
+    for name, body in secs:
+        by_name.setdefault(name, body)
+    acs = [int(m.group(1)) for ln in by_name.get("Acceptance criteria", [])
+           if (m := AC_LINE_RE.match(ln))]
+    if not acs:
+        res.add("PLAN-AC", "'## Acceptance criteria' needs at least one '- AC<n>: …' line")
+    for n in sorted({a for a in acs if acs.count(a) > 1}):
+        res.add("PLAN-AC", f"AC{n} is defined more than once")
+
+    tests, full = [], False
+    for ln in by_name.get("Tests", []):
+        if m := TEST_LINE_RE.match(ln):
+            tests.append(m.group(1))
+        elif ln.startswith("Full check:") and LINE_FORMATS["PLAN-T"][1][1].match(ln):
+            full = True
+    if not tests:
+        res.add("PLAN-T", "'## Tests' needs at least one '- T<n> → AC<m>: …' line")
+    if not full:
+        res.add("PLAN-FULL", "'## Tests' needs a 'Full check: <command>' line")
+    referenced = {int(n) for t in tests for n in re.findall(r"AC(\d+)", t)}
+    for n in sorted(set(acs) - referenced):
+        res.add("PLAN-COVER", f"AC{n} is not referenced by any test")
+    for n in sorted(referenced - set(acs)):
+        res.add("PLAN-REF", f"a test references AC{n}, which doesn't exist")
+
+    steps, cur = [], None
+    for ln in by_name.get("Steps", []):
+        if ln.startswith("### "):
+            if not STEP_HEADING_RE.match(ln):
+                res.add("PLAN-STEP", f"step heading must look like '### <n>. <title>': {ln[:60]!r}")
+            cur = (ln, [])
+            steps.append(cur)
+        elif cur:
+            cur[1].append(ln)
+    if not steps:
+        res.add("PLAN-STEP", "'## Steps' needs at least one '### <n>. <title>' step")
+    for head, body in steps:
+        for label in ("Files:", "Done when:"):
+            if not any(re.match(rf"^{label} ?\S", b) for b in body):
+                res.add("PLAN-STEP", f"step {head[4:30]!r} has no '{label}' line")
+
+
+def validate_file(path: Path, index: Index | None = None) -> Result:
+    res = Result()
+    parts = path.relative_to(AGENT).parts
+    if any(p.startswith(".") for p in parts):
+        return res
+    etype, derived, problem = classify(parts)
+    if problem:
+        res.add(*problem)
+        return res
+
+    index = index or Index()
+    fm, body, errors = split_frontmatter(read_text(path))
+    for e in errors:
+        res.add("FM-PARSE", e)
+    if fm is None:
+        if not errors:
+            res.add("FM-MISSING", "add a frontmatter block; see `schema` for the fields of this type")
+        return res
+    if fm.get("type") != etype:
+        res.add("FM-TYPE", f"type is {fm.get('type')!r} but {'/'.join(parts)} must be {etype!r}")
+        return res
+
+    _check_frontmatter(res, etype, fm, derived)
+    lines = blank_code_blocks(body)
+    secs = split_sections(lines)
+    _check_sections(res, etype, secs)
+    _check_line_formats(res, etype, secs)
+    if etype == "plan":
+        _check_plan(res, secs)
+
+    n_lines = len(body.splitlines())
+    if etype in SIZE_CAPS and n_lines > SIZE_CAPS[etype]:
+        res.add("SIZE-CAP", f"{etype} body is {n_lines} lines; the cap is {SIZE_CAPS[etype]}")
+    if etype == "plan" and n_lines > PLAN_WARN_LINES:
+        res.add("SIZE-WARN", f"plan body is {n_lines} lines (over {PLAN_WARN_LINES}); consider splitting the issue")
+
+    # cross-note checks
+    if etype == "project" and isinstance(fm.get("repos"), list):
+        for slug in fm["repos"]:
+            owners = index.repos.get(slug.split("/")[-1], [])
+            if len(owners) > 1 or (len(owners) == 1 and owners[0] != path.stem):
+                res.add("X-REPO-DUP", f"repo '{slug.split('/')[-1]}' is listed by more than one project: "
+                        f"{', '.join(sorted(set(owners) | {path.stem}))}")
+    if etype in ("plan", "impl", "retro") and parts[1] not in index.repos:
+        res.add("X-REPO-UNREG", f"Work/{parts[1]}/ has no project listing repo '{parts[1]}' in repos:")
+    if etype == "idea" and fm.get("project") and ID_RE.match(fm["project"]) \
+            and fm["project"] not in index.projects:
+        res.add("X-PROJECT", f"project '{fm['project']}' does not exist (see Agent/Projects)")
+    seen = set()
+    for ln in lines:
+        for target in WIKILINK_RE.findall(re.sub(r"(`+).+?\1", "", ln)):
+            if target not in seen and not index.resolves(target):
+                seen.add(target)
+                res.add("X-LINK", f"broken link [[{target}]]")
+    return res
+
+
+def validate_all() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """(errors, warnings), each mapping vault-relative path -> messages."""
     index = Index()
-    results = {}
-    for p in sorted(AGENT.rglob("*.md")):
-        if is_hidden(p):
+    errors, warnings = {}, {}
+    for p in sorted(AGENT.rglob("*")):
+        if not p.is_file() or is_hidden(p):
             continue
-        probs = validate_file(p, index)
-        if probs:
-            results[rel(p)] = probs
-    return results
+        res = validate_file(p, index)
+        if res.errors:
+            errors[rel(p)] = res.errors
+        if res.warnings:
+            warnings[rel(p)] = res.warnings
+    return errors, warnings
+
+
+def schema_text() -> str:
+    """The full note rules, printed by `vault.py schema`, from the constants above."""
+    out = ["Layout (anything else in Agent/ is a stray file; dotfiles are ignored):"]
+    out += [f"  {t:8} Agent/{PATHS[t]}" for t in TYPES]
+    out.append("Note types: required fields; optional fields (tags and aliases are always allowed).")
+    for t in TYPES:
+        opt = OPTIONAL[t] + ALWAYS_ALLOWED
+        out.append(f"  {t}: required: {', '.join(REQUIRED[t])}; optional: {', '.join(opt)}")
+        if t in CONDITIONAL:
+            out.append(f"    {CONDITIONAL[t]}")
+        if t in STATUSES:
+            out.append(f"    status: {' | '.join(STATUSES[t])}")
+        out.append(f"    sections (in order): {', '.join('## ' + s for s in SECTIONS[t]) or '(none)'}")
+        if t in SIZE_CAPS:
+            out.append(f"    body cap: {SIZE_CAPS[t]} lines (error)")
+        if t == "plan":
+            out.append(f"    body above {PLAN_WARN_LINES} lines warns")
+    out.append("Formats: dates YYYY-MM-DD; timestamps like 2026-09-26T21:04:00Z; "
+               "repos entries owner/name; repo, issue, pr are plain values; ids are lowercase-kebab-case.")
+    out.append("Idea source: retro <repo>#<n> | phone:<path> | session. "
+               "Wikilinks in frontmatter must be quoted.")
+    out.append("Line formats (a line under these sections must match; 'None' where noted):")
+    for t, secs in SECTION_LINES.items():
+        for sec, (rule, none_ok) in secs.items():
+            out.append(f"  {t} '## {sec}' [{rule}]{' (None allowed)' if none_ok else ''}:")
+            out += [f"    {shape}" for shape, _ in LINE_FORMATS[rule]]
+    out.append(f"Daily events: {', '.join(EVENTS)}.")
+    out.append("Plan checks: every AC is referenced by a test and every referenced AC exists; "
+               "each step has Files: and Done when:; Tests ends with a Full check: line; "
+               "a sealed plan has issue_updated and base_sha.")
+    out.append("Rules (validate exits 1 on errors only):")
+    out += [f"  {rid:13} {sev:8} {desc}" for rid, (sev, desc) in RULES.items()]
+    return "\n".join(out)
+
 
 
 # --- Hook session state -----------------------------------------------------------

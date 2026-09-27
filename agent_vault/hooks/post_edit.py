@@ -27,7 +27,7 @@ def main() -> None:
         path = Path(data.get("cwd") or ".") / path
     if path.suffix.lower() != ".md" or not path.exists():
         return
-    problems = lib.validate_file(path.resolve())
+    problems = lib.validate_file(path.resolve()).errors   # warnings never block
     if problems:
         msg = "\n".join(f"- {p}" for p in problems)
         print(f"{lib.rel(path.resolve())} breaks the vault schema. Fix it now:\n{msg}\n"

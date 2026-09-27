@@ -35,7 +35,7 @@ def main() -> None:
         vault.status_text(),
         "",
     ]
-    problems = lib.validate_all()
+    problems, warnings = lib.validate_all()
     if problems:
         flat = [f"- {p}: {msg}" for p, msgs in problems.items() for msg in msgs]
         out.append(f"Vault check found {len(flat)} problem(s). Mention them to the user before other work:")
@@ -44,6 +44,9 @@ def main() -> None:
             out.append(f"- ... run `{lib.CLI} validate` for all {len(flat)}")
     else:
         out.append("Vault check: OK")
+    n_warn = sum(len(m) for m in warnings.values())
+    if n_warn:
+        out.append(f"({n_warn} vault warning(s); run `{lib.CLI} validate` to see them)")
     print("\n".join(out))
 
 
