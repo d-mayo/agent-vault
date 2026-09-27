@@ -92,7 +92,7 @@ SECTIONS = {                               # required `##` sections, in order
     "plan": ["Goal", "Acceptance criteria", "Decisions", "Implementer's discretion",
              "Context", "Steps", "Tests", "Stop and ask if", "Out of scope"],
     "impl": ["Deviations", "Review findings", "Verification", "Discoveries"],
-    "retro": ["Summary", "CLAUDE.md audit", "Overview audit", "Follow-ups"],
+    "retro": ["Summary", "CLAUDE.md audit", "README audit", "Overview audit", "Follow-ups"],
     "idea": [],
     "daily": ["Log"],
 }
@@ -157,8 +157,8 @@ SECTION_LINES = {
     "plan": {"Acceptance criteria": ("PLAN-AC", False), "Decisions": ("PLAN-D", False),
              "Tests": ("PLAN-T", False)},
     "impl": {"Deviations": ("IMPL-DEV", True), "Review findings": ("IMPL-REV", True)},
-    "retro": {"CLAUDE.md audit": ("RETRO-AUDIT", False), "Overview audit": ("RETRO-AUDIT", False),
-              "Follow-ups": ("RETRO-FOLLOW", True)},
+    "retro": {"CLAUDE.md audit": ("RETRO-AUDIT", False), "README audit": ("RETRO-AUDIT", True),
+              "Overview audit": ("RETRO-AUDIT", False), "Follow-ups": ("RETRO-FOLLOW", True)},
     "daily": {"Log": ("DAILY-LINE", False)},
 }
 

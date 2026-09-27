@@ -162,6 +162,8 @@ class NewRetroTest(CliCase):
         retro = self.text("Work/demo/demo-7-retro.md")
         self.assertRegex(retro, r"(?m)^pr: 21$")
         self.assertIn("status: open", retro)
+        heads = [ln[3:] for ln in retro.splitlines() if ln.startswith("## ")]
+        self.assertEqual(heads, lib.SECTIONS["retro"])
         self.validate()
 
     def test_refusals(self):                              # T5 -> AC4

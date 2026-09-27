@@ -305,6 +305,32 @@ class DraftPlanTest(VaultCase):
         self.assertEqual({r for r, _ in self.SOFT}, set(lib.DRAFT_SOFT))
 
 
+class RetroReadmeAuditTest(VaultCase):        # T1 -> AC6
+    def setUp(self):
+        super().setUp()
+        self.load_base()
+        self.retro = self.vault / "Agent/Work/demo/demo-1-retro.md"
+
+    def test_missing_readme_audit_section_fails(self):
+        text = self.retro.read_text(encoding="utf-8").replace("## README audit\nNone\n\n", "")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+        res = lib.validate_file(self.retro)
+        self.assertTrue(any(m.startswith("[SEC-MISSING]") for m in res.errors), res.errors)
+
+    def test_bad_readme_audit_line_fails(self):
+        text = self.retro.read_text(encoding="utf-8").replace(
+            "## README audit\nNone\n", "## README audit\nnot a valid line\n")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+        res = lib.validate_file(self.retro)
+        self.assertTrue(any(m.startswith("[RETRO-AUDIT]") for m in res.errors), res.errors)
+
+    def test_readme_audit_with_real_lines_passes(self):
+        text = self.retro.read_text(encoding="utf-8").replace(
+            "## README audit\nNone\n", "## README audit\n- Usage: confirmed — still right\n")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+        self.assertEqual(lib.validate_file(self.retro).errors, [])
+
+
 class CrossNoteTest(VaultCase):
     def test_repos_empty_and_code_links(self):    # T9 -> AC9
         self.load_base()

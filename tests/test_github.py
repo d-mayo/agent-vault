@@ -366,6 +366,8 @@ CLAUDE_MD = ("# widget\n\n## Purpose\nThe widget repo.\n\n"
 FULL_CLAUDE_AUDIT = "- Purpose: confirmed — still true\n- Commands: confirmed — still true\n"
 FULL_OVERVIEW_AUDIT = ("- Purpose: confirmed — still true\n- Current state: confirmed — still true\n"
                        "- Architecture: confirmed — still true\n- Standing decisions: confirmed — still true\n")
+README_MD = "# widget\n\n## Overview\nThe widget package.\n\n## Usage\nRun it.\n"
+FULL_README_AUDIT = "- Overview: confirmed — still true\n- Usage: confirmed — still true\n"
 
 
 class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
@@ -374,22 +376,36 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.ok(self.branch())
         self.name = "feat/7-add-widget-frobbing"
         (self.clone / "CLAUDE.md").write_text(CLAUDE_MD, encoding="utf-8", newline="\n")
-        git("add", "CLAUDE.md", cwd=self.clone)
-        git("commit", "-q", "-m", "docs: claude.md", cwd=self.clone)
+        (self.clone / "README.md").write_text(README_MD, encoding="utf-8", newline="\n")
+        git("add", "CLAUDE.md", "README.md", cwd=self.clone)
+        git("commit", "-q", "-m", "docs: claude.md and readme", cwd=self.clone)
         git("push", "-q", "origin", self.name, cwd=self.clone)
         self.ok(self.cli("open-pr", "widget", "7"))
         self.ok(self.cli("new", "retro", "widget", "7"))
         self.retro = self.note("retro")
 
-    def fill_retro(self, claude_lines, overview_lines):
+    def drop_readme(self):
+        (self.clone / "README.md").unlink()
+        git("add", "README.md", cwd=self.clone)
+        git("commit", "-q", "-m", "chore: drop readme", cwd=self.clone)
+        git("push", "-q", "origin", self.name, cwd=self.clone)
+
+    def flatten_readme(self):
+        (self.clone / "README.md").write_text("hi\n", encoding="utf-8", newline="\n")
+        git("add", "README.md", cwd=self.clone)
+        git("commit", "-q", "-m", "chore: flatten readme", cwd=self.clone)
+        git("push", "-q", "origin", self.name, cwd=self.clone)
+
+    def fill_retro(self, claude_lines, readme_lines, overview_lines):
         text = self.retro.read_text(encoding="utf-8")
         text = text.replace("## CLAUDE.md audit\n\n", "## CLAUDE.md audit\n" + claude_lines + "\n")
+        text = text.replace("## README audit\n\n", "## README audit\n" + readme_lines + "\n")
         text = text.replace("## Overview audit\n\n", "## Overview audit\n" + overview_lines + "\n")
         self.retro.write_text(text, encoding="utf-8", newline="\n")
 
     def test_seals_and_bumps_verified(self):
         self.prep()
-        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
         out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
         self.assertIn("Commands", out)
         claude_text = (self.clone / "CLAUDE.md").read_text(encoding="utf-8")
@@ -407,20 +423,66 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
 
     def test_refuses_missing_audit_lines(self):
         self.prep()
-        self.fill_retro("- Purpose: confirmed — still true\n", FULL_OVERVIEW_AUDIT)
+        self.fill_retro("- Purpose: confirmed — still true\n", FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
         self.refused(self.cli("seal", "retro", "widget", "7"), "missing an audit line", "Commands")
 
     def test_refuses_duplicate_audit_lines(self):
         self.prep()
         dup = FULL_CLAUDE_AUDIT + "- Commands: confirmed — again\n"
-        self.fill_retro(dup, FULL_OVERVIEW_AUDIT)
+        self.fill_retro(dup, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
         self.refused(self.cli("seal", "retro", "widget", "7"), "more than one audit line")
 
     def test_refuses_removed_section_still_present(self):
         self.prep()
         removed = "- Purpose: confirmed — still true\n- Commands: removed — dropped\n"
-        self.fill_retro(removed, FULL_OVERVIEW_AUDIT)
+        self.fill_retro(removed, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
         self.refused(self.cli("seal", "retro", "widget", "7"), "marked removed but still there")
+
+    def test_refuses_missing_readme_audit_lines(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, "- Overview: confirmed — still true\n", FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "missing an audit line", "Usage")
+
+    def test_refuses_duplicate_readme_audit_lines(self):
+        self.prep()
+        dup = FULL_README_AUDIT + "- Usage: confirmed — again\n"
+        self.fill_retro(FULL_CLAUDE_AUDIT, dup, FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "more than one audit line")
+
+    def test_refuses_readme_removed_section_still_present(self):
+        self.prep()
+        removed = "- Overview: confirmed — still true\n- Usage: removed — dropped\n"
+        self.fill_retro(FULL_CLAUDE_AUDIT, removed, FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "marked removed but still there")
+
+    def test_refuses_readme_audit_lines_when_no_readme(self):
+        self.prep()
+        self.drop_readme()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "README audit", "None")
+
+    def test_seals_with_none_readme_audit_when_no_readme(self):
+        self.prep()
+        self.drop_readme()
+        self.fill_retro(FULL_CLAUDE_AUDIT, "None", FULL_OVERVIEW_AUDIT)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+
+    def test_refuses_none_readme_audit_when_readme_has_headings(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, "None", FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "missing an audit line", "Overview", "Usage")
+
+    def test_refuses_readme_audit_lines_when_readme_has_no_headings(self):
+        self.prep()
+        self.flatten_readme()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "README audit", "None")
+
+    def test_seals_with_none_readme_audit_when_readme_has_no_headings(self):
+        self.prep()
+        self.flatten_readme()
+        self.fill_retro(FULL_CLAUDE_AUDIT, "None", FULL_OVERVIEW_AUDIT)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
 
     def test_refuses_missing_notes(self):
         self.sealed()
@@ -429,13 +491,13 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
 
     def test_refuses_already_sealed(self):
         self.prep()
-        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
         self.ok(self.cli("seal", "retro", "widget", "7"))
         self.refused(self.cli("seal", "retro", "widget", "7"), "already sealed")
 
     def test_refuses_invalid_as_sealed(self):
         self.prep()
-        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
         text = self.retro.read_text(encoding="utf-8").replace(
             "## Follow-ups\nNone\n", "## Follow-ups\nnot a valid line\n")
         self.retro.write_text(text, encoding="utf-8", newline="\n")
@@ -443,7 +505,7 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
 
     def test_refuses_wrong_branch_and_dirty_tree(self):
         self.prep()
-        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
         git("switch", "-q", "-c", "chore/9-other", cwd=self.clone)
         self.refused(self.cli("seal", "retro", "widget", "7"), "current branch", self.name)
         git("switch", "-q", self.name, cwd=self.clone)
