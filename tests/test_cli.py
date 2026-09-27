@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import os
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -383,6 +384,46 @@ class StatusTest(CliCase):
         self.assertIn("Open ideas: 1", r.stdout)
         self.assertIn("Vault check: OK", r.stdout)
         self.assertNotIn("failed", r.stdout)
+
+
+def git(*args, cwd, check=True):
+    return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True, text=True).stdout.strip()
+
+
+class ClaudemdLintCliTest(CliCase):        # T1 -> AC1
+    def make_repo(self) -> Path:
+        repo = self.root / "repo"
+        repo.mkdir()
+        git("init", "-q", "-b", "main", cwd=repo)
+        for k, v in (("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")):
+            git("config", k, v, cwd=repo)
+        return repo
+
+    def commit(self, repo: Path):
+        git("add", "-A", cwd=repo)
+        git("commit", "-q", "-m", "x", cwd=repo)
+
+    def test_default_path_uses_the_current_clone(self):
+        repo = self.make_repo()
+        (repo / "CLAUDE.md").write_text("# demo\n\n## Purpose\nx.\n", encoding="utf-8", newline="\n")
+        self.commit(repo)
+        r = run_py(CLI, ["claudemd-lint"], config=self.cfg, cwd=repo)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("claudemd-lint OK", r.stdout)
+
+    def test_explicit_path_and_failure_exit_code(self):
+        repo = self.make_repo()
+        (repo / "CLAUDE.md").write_text("# demo\n\n## Layout\n- `missing.py`: nope.\n",
+                                        encoding="utf-8", newline="\n")
+        self.commit(repo)
+        r = run_py(CLI, ["claudemd-lint", str(repo)], config=self.cfg)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("missing.py", r.stdout)
+
+    def test_refuses_outside_a_clone_without_a_path(self):
+        r = run_py(CLI, ["claudemd-lint"], config=self.cfg, cwd=self.root)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not inside a git clone", r.stderr)
 
 
 class V1RemovedTest(CliCase):

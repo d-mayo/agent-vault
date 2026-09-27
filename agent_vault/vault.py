@@ -6,6 +6,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   new plan <repo> <issue>
   new retro <repo> <issue>
   seal plan <repo> <issue>
+  seal retro <repo> <issue>
   preflight <repo> <issue>
   branch <repo> <issue> [--type feat] [--slug <slug>]
   open-pr <repo> <issue> [--body-file <file>]
@@ -19,6 +20,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   handoff pull "<phone path>" [--project <id>]
   log "what happened" [--project <id>]
   repo-init <path>
+  claudemd-lint [<repo path>]
   validate
   status
   schema
@@ -35,6 +37,7 @@ import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
+import claudemd  # noqa: E402
 import github  # noqa: E402
 import lib  # noqa: E402
 from lib import AGENT, FOLDERS, VAULT
@@ -298,6 +301,135 @@ def cmd_seal_plan(args) -> None:
     log_event(args.repo, args.issue, "planned")
     print(f"sealed {lib.rel(path)} (issue_updated {info['edited']}, base_sha {sha}); "
           f"added the '{name}' label")
+
+
+def load_retro(repo: str, issue: str) -> tuple[Path, dict, str]:
+    path = work_path(repo, issue, "retro")
+    if not path.is_file():
+        die(f"{lib.rel(path)} doesn't exist; `new retro {repo} {issue}` creates it")
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    return path, fm or {}, body
+
+
+AUDIT_LINE_RE = re.compile(r"^- (.+): (confirmed|rewritten|removed) — (.+)$")
+
+
+def parse_audit_lines(body_lines: list[str]) -> list[tuple[str, str]]:
+    """(heading, verb) for every '- <heading>: confirmed|rewritten|removed — <reason>' line."""
+    out = []
+    for ln in body_lines:
+        m = AUDIT_LINE_RE.match(ln)
+        if m:
+            out.append((m.group(1), m.group(2)))
+    return out
+
+
+def audit_gaps(current: list[str], audit: list[tuple[str, str]]) -> tuple[list, list, list]:
+    """(missing, duplicate, leftover) heading names, against the retro's audit lines (D6)."""
+    counts = {}
+    for h, _ in audit:
+        counts[h] = counts.get(h, 0) + 1
+    duplicate = sorted(h for h, n in counts.items() if n > 1)
+    missing = sorted(h for h in current if h not in counts)
+    removed = {h for h, v in audit if v == "removed"}
+    leftover = sorted(h for h in removed if h in current)
+    return missing, duplicate, leftover
+
+
+def trial_seal_errors(path: Path, fm: dict, body: str) -> list[str]:
+    trial = {**fm, "status": "sealed"}
+    return lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
+
+
+def cmd_seal_retro(args) -> None:
+    index = lib.Index()
+    require_number(args.issue)
+    require_repo(index, args.repo)
+    slug = index.slugs[args.repo]
+    impl_path, impl_fm = load_impl(args.repo, args.issue)
+    _, impl_body, _ = lib.split_frontmatter(lib.read_text(impl_path))
+    retro_path, retro_fm, retro_body = load_retro(args.repo, args.issue)
+    for path, fm in ((impl_path, impl_fm), (retro_path, retro_fm)):
+        if fm.get("status") == "sealed":
+            die(f"{lib.rel(path)} is already sealed")
+
+    top = require_clone(slug)
+    branch = impl_fm.get("branch")
+    if not branch:
+        die(f"{lib.rel(impl_path)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
+    current_branch = github.git("branch", "--show-current", cwd=top)
+    if current_branch != branch:
+        die(f"the current branch is {current_branch or '(detached)'}, but {lib.rel(impl_path)} "
+            f"says {branch}; check out {branch} first")
+    if github.git("status", "--porcelain", cwd=top):
+        die("the working tree isn't clean; commit or stash your changes first")
+
+    claude_path = top / "CLAUDE.md"
+    if not claude_path.is_file():
+        die(f"{claude_path} doesn't exist")
+    claude_text = lib.read_text(claude_path)
+    sections, _ = claudemd.parse(claude_text)
+    claude_headings = [s.name for s in sections]
+
+    project_id = index.repos[args.repo][0]
+    project_path = index.projects[project_id]
+    _, overview_body, _ = lib.split_frontmatter(lib.read_text(project_path))
+    overview_headings = [n for n, _ in lib.split_sections(lib.blank_code_blocks(overview_body))]
+
+    retro_secs = dict(lib.split_sections(lib.blank_code_blocks(retro_body)))
+    claude_audit = parse_audit_lines(retro_secs.get("CLAUDE.md audit", []))
+    overview_audit = parse_audit_lines(retro_secs.get("Overview audit", []))
+
+    problems = []
+    for label, current, audit in (("CLAUDE.md", claude_headings, claude_audit),
+                                  ("the project overview", overview_headings, overview_audit)):
+        missing, dup, leftover = audit_gaps(current, audit)
+        if missing:
+            problems.append(f"{label}: missing an audit line for: {', '.join(missing)}")
+        if dup:
+            problems.append(f"{label}: more than one audit line for: {', '.join(dup)}")
+        if leftover:
+            problems.append(f"{label}: marked removed but still there: {', '.join(leftover)}")
+    if problems:
+        die(f"{lib.rel(retro_path)} doesn't cover every heading yet:\n  " + "\n  ".join(problems))
+
+    for path, fm, body in ((impl_path, impl_fm, impl_body), (retro_path, retro_fm, retro_body)):
+        errors = trial_seal_errors(path, fm, body)
+        if errors:
+            die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
+
+    confirmed = {h for h, v in claude_audit if v == "confirmed"}
+    new_text, bumped = claudemd.bump_verified(claude_text, sections, confirmed, lib.today())
+    if bumped:
+        lib.write_text(claude_path, new_text)
+        github.git("add", "CLAUDE.md", cwd=top)
+        github.git("commit", "-q", "-m", f"docs(claude): verify audited sections (#{args.issue})", cwd=top)
+        github.git("push", cwd=top)
+
+    update_note(impl_path, status="sealed")
+    update_note(retro_path, status="sealed")
+    update_note(project_path, audited=lib.today().isoformat())
+    log_event(args.repo, args.issue, "retro-done")
+    print(f"sealed {lib.rel(impl_path)} and {lib.rel(retro_path)}; set audited: {lib.today().isoformat()} "
+          f"on {lib.rel(project_path)}" + (f"; bumped verified on: {', '.join(bumped)}" if bumped else ""))
+
+
+def cmd_claudemd_lint(args) -> None:
+    if args.path:
+        top = Path(args.path).resolve()
+    else:
+        found = github.git("rev-parse", "--show-toplevel", check=False)
+        if not found:
+            die("not inside a git clone; pass a repo path")
+        top = Path(found)
+    result = claudemd.lint(top)
+    for w in result.warnings:
+        print(f"warning: {w}")
+    for e in result.errors:
+        print(f"error: {e}")
+    if result.errors:
+        sys.exit(1)
+    print(f"claudemd-lint OK ({result.stale} stale section(s))" if result.stale else "claudemd-lint OK")
 
 
 def plan_files(body: str) -> list[str]:
@@ -824,12 +956,13 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("issue")
         p.set_defaults(fn=fn)
 
-    seal = sub.add_parser("seal", help="seal a plan").add_subparsers(
-        dest="kind", required=True, metavar="plan")
-    p = seal.add_parser("plan")
-    p.add_argument("repo")
-    p.add_argument("issue")
-    p.set_defaults(fn=cmd_seal_plan)
+    seal = sub.add_parser("seal", help="seal a plan or a retro").add_subparsers(
+        dest="kind", required=True, metavar="plan|retro")
+    for kind, fn in (("plan", cmd_seal_plan), ("retro", cmd_seal_retro)):
+        p = seal.add_parser(kind)
+        p.add_argument("repo")
+        p.add_argument("issue")
+        p.set_defaults(fn=fn)
     for name, fn in (("preflight", cmd_preflight), ("stage", cmd_stage), ("branch", cmd_branch),
                      ("open-pr", cmd_open_pr)):
         p = sub.add_parser(name)
@@ -844,6 +977,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("repo-init", help="set up a repo's merge settings, label, hooks and CLAUDE.md")
     p.add_argument("path")
     p.set_defaults(fn=cmd_repo_init)
+    p = sub.add_parser("claudemd-lint", help="check a repo's CLAUDE.md (default: the current clone)")
+    p.add_argument("path", nargs="?")
+    p.set_defaults(fn=cmd_claudemd_lint)
 
     idea = sub.add_parser("idea", help="add, drop or promote an idea").add_subparsers(
         dest="action", required=True, metavar="add|drop|promote")

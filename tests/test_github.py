@@ -361,6 +361,96 @@ class OpenPrTest(GhCase):  # T4 -> AC4, AC11
         self.assertEqual(self.daily().count("pr-opened"), 1)
 
 
+CLAUDE_MD = ("# widget\n\n## Purpose\nThe widget repo.\n\n"
+            "## Commands\n<!-- covers: README.md -->\n- Build: `python -m unittest`\n")
+FULL_CLAUDE_AUDIT = "- Purpose: confirmed — still true\n- Commands: confirmed — still true\n"
+FULL_OVERVIEW_AUDIT = ("- Purpose: confirmed — still true\n- Current state: confirmed — still true\n"
+                       "- Architecture: confirmed — still true\n- Standing decisions: confirmed — still true\n")
+
+
+class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
+    def prep(self):
+        self.sealed()
+        self.ok(self.branch())
+        self.name = "feat/7-add-widget-frobbing"
+        (self.clone / "CLAUDE.md").write_text(CLAUDE_MD, encoding="utf-8", newline="\n")
+        git("add", "CLAUDE.md", cwd=self.clone)
+        git("commit", "-q", "-m", "docs: claude.md", cwd=self.clone)
+        git("push", "-q", "origin", self.name, cwd=self.clone)
+        self.ok(self.cli("open-pr", "widget", "7"))
+        self.ok(self.cli("new", "retro", "widget", "7"))
+        self.retro = self.note("retro")
+
+    def fill_retro(self, claude_lines, overview_lines):
+        text = self.retro.read_text(encoding="utf-8")
+        text = text.replace("## CLAUDE.md audit\n\n", "## CLAUDE.md audit\n" + claude_lines + "\n")
+        text = text.replace("## Overview audit\n\n", "## Overview audit\n" + overview_lines + "\n")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+
+    def test_seals_and_bumps_verified(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
+        self.assertIn("Commands", out)
+        claude_text = (self.clone / "CLAUDE.md").read_text(encoding="utf-8")
+        today = dt.date.today().isoformat()
+        self.assertIn(f"<!-- covers: README.md; verified: {today} -->", claude_text)
+        self.assertIn("## Purpose\nThe widget repo.\n", claude_text)          # no covers: not bumped (D5)
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        proj = self.vault / "Agent" / "Projects" / "widgets.md"
+        self.assertIn(f"audited: {today}", proj.read_text(encoding="utf-8"))
+        self.assertRegex(self.daily(), r"widget#7 retro-done\n")
+        log = git("log", "-1", "--format=%s", "origin/" + self.name, cwd=self.clone)
+        self.assertIn("docs(claude): verify audited sections (#7)", log)
+        self.assert_valid()
+
+    def test_refuses_missing_audit_lines(self):
+        self.prep()
+        self.fill_retro("- Purpose: confirmed — still true\n", FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "missing an audit line", "Commands")
+
+    def test_refuses_duplicate_audit_lines(self):
+        self.prep()
+        dup = FULL_CLAUDE_AUDIT + "- Commands: confirmed — again\n"
+        self.fill_retro(dup, FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "more than one audit line")
+
+    def test_refuses_removed_section_still_present(self):
+        self.prep()
+        removed = "- Purpose: confirmed — still true\n- Commands: removed — dropped\n"
+        self.fill_retro(removed, FULL_OVERVIEW_AUDIT)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "marked removed but still there")
+
+    def test_refuses_missing_notes(self):
+        self.sealed()
+        self.ok(self.branch())
+        self.refused(self.cli("seal", "retro", "widget", "7"), "doesn't exist")
+
+    def test_refuses_already_sealed(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.refused(self.cli("seal", "retro", "widget", "7"), "already sealed")
+
+    def test_refuses_invalid_as_sealed(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        text = self.retro.read_text(encoding="utf-8").replace(
+            "## Follow-ups\nNone\n", "## Follow-ups\nnot a valid line\n")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "can't be sealed yet")
+
+    def test_refuses_wrong_branch_and_dirty_tree(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_OVERVIEW_AUDIT)
+        git("switch", "-q", "-c", "chore/9-other", cwd=self.clone)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "current branch", self.name)
+        git("switch", "-q", self.name, cwd=self.clone)
+        (self.clone / "dirty.txt").write_text("x", encoding="utf-8")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "isn't clean")
+
+
 class StageTest(GhCase):  # T5 -> AC5
     def stage(self):
         r = self.ok(self.cli("stage", "widget", "7"))

@@ -5,7 +5,8 @@ Whatever this prints is added to Claude's context. The session's kind comes from
          results (which also catch phone-side edits, that bypass every other hook);
          creates today's daily note.
   repo   inside a clone whose `origin` is a registered repo: the project overview, the
-         branch's issue and its stage, the project's last 5 daily lines, its open ideas.
+         branch's issue and its stage, the project's last 5 daily lines, its open ideas,
+         and the repo's `claudemd-lint` failures and stale-section count.
   else   nothing.
 
 Vault and repo sessions also record what Stop needs: when the session started, the
@@ -21,12 +22,14 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import claudemd  # noqa: E402
 import github  # noqa: E402
 import lib  # noqa: E402
 import vault  # noqa: E402
 
 MAX_PROBLEMS = 15
 GITHUB_SECONDS = 5
+CLAUDEMD_SECONDS = 3
 
 
 def git_state(root: str) -> dict:
@@ -66,6 +69,28 @@ def stage_line(info: dict, branch: str) -> list[str]:
     return out
 
 
+def claudemd_lines(root: str) -> list[str]:
+    """claudemd-lint failures and the stale count for this repo's CLAUDE.md,
+    time-boxed so a slow or crashing git call never blocks the session (AC8)."""
+    github.DEADLINE = time.monotonic() + CLAUDEMD_SECONDS
+    try:
+        result = claudemd.lint(Path(root))
+    except Exception as e:
+        return [f"claudemd-lint unavailable ({type(e).__name__}: {e})."]
+    finally:
+        github.DEADLINE = None
+    if not result.errors:
+        return [f"claudemd-lint: OK ({result.stale} stale section(s))" if result.stale
+               else "claudemd-lint: OK"]
+    out = [f"claudemd-lint found {len(result.errors)} problem(s):"]
+    out += [f"- {e}" for e in result.errors[:MAX_PROBLEMS]]
+    if len(result.errors) > MAX_PROBLEMS:
+        out.append(f"- ... run `{lib.CLI} claudemd-lint` for all {len(result.errors)}")
+    if result.stale:
+        out.append(f"({result.stale} stale section(s); run `{lib.CLI} claudemd-lint` to see them)")
+    return out
+
+
 def repo_context(info: dict, cwd: str) -> list[str]:
     index = lib.Index()
     pid = info["project"]
@@ -79,6 +104,8 @@ def repo_context(info: dict, cwd: str) -> list[str]:
            f"Last daily lines for {pid}:"]
     out += [f"- {ln}" for ln in project_lines(pid, repos, 5)] or ["- (none)"]
     out.append(f"Open ideas for {pid}: {ideas}")
+    out.append("")
+    out += claudemd_lines(info["root"])
     return out
 
 
