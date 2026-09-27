@@ -11,14 +11,14 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - CLI after install: `<installer's python> ~/.claude/agent-vault/vault.py <command>`; the exact string (which the vault's permission rule matches) is `lib.CLI`, printed by the installer and written into the vault's `CLAUDE.md`.
 
 ## Layout
-<!-- covers: agent_vault/**, install.py, templates/**, skills/**, .githooks/** -->
-- `agent_vault/`: everything copied to `~/.claude/agent-vault/`. `lib.py` holds the schema and shared helpers; `vault.py` is the CLI; `hooks/` holds the Claude Code hooks.
+<!-- covers: agent_vault/**, install.py, templates/**, skills/**, agent_vault/githooks/** -->
+- `agent_vault/`: everything copied to `~/.claude/agent-vault/`. `lib.py` holds the schema and shared helpers; `vault.py` is the CLI; `github.py` is the only place that runs `gh` and `git` (`AGENT_VAULT_GH` overrides where `gh` is found); `hooks/` holds the Claude Code hooks.
 - `agent_vault/hooks/push_guard.py`: user-level Bash guard (no pushes to main, no `--no-verify`).
 - `install.py`: idempotent installer; owns only settings entries whose command contains `/.claude/agent-vault/`.
 - `templates/vault-CLAUDE.md`: the vault's `CLAUDE.md`, with `{{CLI}}` filled in at install.
 - `skills/`: user-level skills; each subfolder is copied to `~/.claude/skills/`.
-- `.githooks/pre-push`: blocks pushes to `main` and bad branch names.
-- `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`.
+- `agent_vault/githooks/pre-push`: blocks pushes to `main` and bad branch names. The one copy: this repo's `core.hooksPath` points at it, and `repo-init` points other repos at the installed `~/.claude/agent-vault/githooks/`.
+- `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`. `tests/fake_gh.py` stands in for `gh` (`AGENT_VAULT_GH`); tests never touch GitHub.
 
 ## Conventions
 <!-- covers: agent_vault/** -->
@@ -30,6 +30,6 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 ## Gotchas
 <!-- covers: agent_vault/hooks/**, install.py -->
 - Hook commands are absolute forward-slash paths to the installer's Python (`sys.executable`) and the script, so they don't depend on PATH or how the Windows hook runner expands `$HOME`. `lib.CLI` builds the same string at runtime; the vault's `Bash(...)` permission must match it exactly.
-- `.gitattributes` pins LF endings: a CRLF `.githooks/pre-push` fails in bash and blocks every push.
+- `.gitattributes` pins LF endings: a CRLF `agent_vault/githooks/pre-push` fails in bash and blocks every push.
 - `push_guard.py` tokenizes quote-aware and treats heredoc bodies as data; add a test case for every new command shape it must handle.
 - Remote tools can't write `.claude/` folders; only `install.py`, run on the PC, can.

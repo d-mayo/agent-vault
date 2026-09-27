@@ -12,6 +12,12 @@ import install  # noqa: E402
 FOREIGN = {"type": "command", "command": "echo mine"}
 
 
+def lib_marker() -> str:
+    sys.path.insert(0, str(REPO / "agent_vault"))
+    import lib
+    return lib.HOOK_MARKER
+
+
 def snapshot(*roots: Path) -> dict:
     return {str(p): p.read_bytes() for r in roots for p in sorted(r.rglob("*")) if p.is_file()}
 
@@ -123,7 +129,16 @@ class InstallTest(unittest.TestCase):
         install.install(self.vault, self.home, repo=repo)
         out = subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath"],
                              capture_output=True, text=True).stdout.strip()
-        self.assertEqual(out, ".githooks")
+        self.assertEqual(out, install.HOOKS_DIR)
+
+    def test_shared_pre_push_hook(self):  # T9 -> AC9
+        self.run_install()
+        installed = self.home / ".claude" / "agent-vault" / "githooks" / "pre-push"
+        source = REPO / "agent_vault" / "githooks" / "pre-push"
+        self.assertEqual(installed.read_bytes(), source.read_bytes())
+        self.assertIn(lib_marker(), source.read_text(encoding="utf-8"))
+        self.assertNotIn(b"\r", source.read_bytes())
+        self.assertFalse((REPO / ".githooks").exists())           # one source, no second copy
 
     def test_skill_install_respects_user_skills(self):
         src = self.root / "skills-src"

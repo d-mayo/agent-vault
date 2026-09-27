@@ -26,8 +26,8 @@ def write_config(root: Path, vault: Path) -> Path:
 
 
 def run_py(script: Path, args=(), stdin: dict | str | None = None, config: Path | None = None,
-           cwd: Path | None = None) -> subprocess.CompletedProcess:
-    env = dict(os.environ)
+           cwd: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
+    env = {**os.environ, **(env or {})}
     if config is not None:
         env["AGENT_VAULT_CONFIG"] = str(config)
     data = json.dumps(stdin) if isinstance(stdin, dict) else (stdin or "")

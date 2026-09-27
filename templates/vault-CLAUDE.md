@@ -24,7 +24,9 @@ Hooks in `.claude/settings.json` enforce these. If a hook blocks you, do what it
 
 - `{{CLI}} new project <id> [--repo owner/name ...] [--purpose "..."]`
 - `{{CLI}} new plan <repo> <issue>`: a draft plan and an open impl note. `{{CLI}} new retro <repo> <issue>`: the retro, once the impl note has a `pr:`.
-- `{{CLI}} idea add "<title>" [--project <id>] [--source ...]` and `{{CLI}} idea drop <file> --reason "..."`
+- `{{CLI}} seal plan <repo> <issue>`: after I approve a plan; records the issue's edit time and the base commit, adds the `planned` label and logs it. `{{CLI}} preflight <repo> <issue>` gates implementation; `{{CLI}} branch <repo> <issue> [--type feat] [--slug ...]` creates and pushes the branch; `{{CLI}} open-pr <repo> <issue> [--body-file <file>]` opens the PR with `Closes #<issue>`; `{{CLI}} stage <repo> <issue>` says where the issue stands. `branch` and `open-pr` run inside a clone of the repo.
+- `{{CLI}} repo-init <path>`: one-time setup of a repo clone (squash-only merges, `planned` label, shared pre-push hook, `CLAUDE.md` skeleton).
+- `{{CLI}} idea add "<title>" [--project <id>] [--source ...]` and `{{CLI}} idea drop <file> --reason "..."`, `{{CLI}} idea promote <file> [--title "..."] [--repo <name>]` (creates the GitHub issue; only after I approve)
 - `{{CLI}} ideas [--project <id>] [--status open]` lists ideas; `{{CLI}} ideas review` lists open ideas older than 90 days.
 - `{{CLI}} handoff list` and `{{CLI}} handoff pull "<path>" [--project <id>]`
 - `{{CLI}} log "<text>" [--project <id>]`

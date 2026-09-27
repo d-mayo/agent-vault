@@ -389,7 +389,7 @@ class V1RemovedTest(CliCase):
     def test_help_has_no_v1_options(self):                        # T13 -> AC13
         texts = [self.cli("--help").stdout, self.cli("new", "project", "--help").stdout]
         for text in texts:
-            for word in ("--goal", "--title", "URL", "new daily", "daily"):
+            for word in ("--goal", "URL", "new daily", "daily"):
                 self.assertNotIn(word, text)
         self.refused_argparse("new", "daily")
         self.refused_argparse("new", "project", "x", "--goal", "g")

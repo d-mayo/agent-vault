@@ -9,7 +9,8 @@ What it does:
      Only entries it created are replaced; a .bak copy is written before any change.
   4. Writes <vault>/CLAUDE.md.
   5. Deletes v1 code from <vault>/Agent/_system/ (the handoff log is kept).
-  6. Points this repo's git hooks at .githooks/ (main-branch protection).
+  6. Points this repo's git hooks at agent_vault/githooks/ (main-branch protection); other repos
+     get the installed copy in ~/.claude/agent-vault/githooks/ through `repo-init`.
 Hooks run with the Python that runs this installer. Standard library only.
 """
 from __future__ import annotations
@@ -27,6 +28,7 @@ REPO = Path(__file__).resolve().parent
 MARK = "/.claude/agent-vault/"                  # identifies our hook commands
 LEGACY_HOOK_MARK = "Agent/_system/hooks/"       # v1 hook commands
 LEGACY_ALLOW = ["Bash(python Agent/_system/vault.py:*)"]
+HOOKS_DIR = "agent_vault/githooks"           # this repo's hooks: the same file that gets installed
 SKILL_MARKER = ".installed-by-agent-vault"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".gitkeep")
 
@@ -170,9 +172,9 @@ def set_git_hooks(repo: Path, report: list[str]) -> None:
     if not (repo / ".git").exists():
         return
     try:
-        subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", ".githooks"],
+        subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", HOOKS_DIR],
                        check=True, capture_output=True)
-        report.append("git hooks: core.hooksPath = .githooks")
+        report.append(f"git hooks: core.hooksPath = {HOOKS_DIR}")
     except Exception as e:
         report.append(f"warning: could not set core.hooksPath ({e})")
 

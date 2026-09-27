@@ -4,7 +4,7 @@ import unittest
 
 from tests.helpers import REPO
 
-HOOK = REPO / ".githooks" / "pre-push"
+HOOK = REPO / "agent_vault" / "githooks" / "pre-push"
 Z = "0" * 40
 
 

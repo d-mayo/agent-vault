@@ -240,7 +240,7 @@ class CliAndHooksTest(VaultCase):
     def test_help_has_no_v1_commands(self):      # T10 -> AC10
         r = run_py(CLI, ["--help"], config=self.cfg)
         self.assertEqual(r.returncode, 0)
-        for word in ("archive", "new note", "new daily", "--goal", "--title", "intake", "Intake"):
+        for word in ("archive", "new note", "new daily", "--goal", "intake", "Intake"):
             self.assertNotIn(word, r.stdout)
         src = (CODE / "vault.py").read_text(encoding="utf-8")
         for word in ("intake", "ARCHIVE", "FOLDERS[\"note\"]"):

@@ -101,6 +101,10 @@ EVENTS = ["planned", "started", "pr-opened", "retro-done"]          # '<repo>#<n
 IDEA_EVENTS = ["idea-added", "idea-promoted"]                       # '<event> — <title> [[<idea>]]' lines
 # Completeness rules that only warn while a plan is a draft (errors once sealed).
 DRAFT_SOFT = ["PLAN-AC", "PLAN-STEP", "PLAN-T", "PLAN-COVER", "PLAN-FULL"]
+BRANCH_TYPES = ["feat", "fix", "chore", "docs", "refactor", "test", "perf", "hotfix"]   # design §4
+BRANCH_RE = re.compile(rf"^(?:{'|'.join(BRANCH_TYPES)})/[0-9]+-[a-z0-9-]+$")
+PLANNED_LABEL = ("planned", "0e8a16", "A sealed plan exists (set by agent-vault)")   # name, color, description
+HOOK_MARKER = "agent-vault-hook: pre-push"        # in githooks/pre-push; repo-init recognises the hook by it
 LOG_HEADING = "## Log"
 NONE_LINE = "None"
 
@@ -327,6 +331,7 @@ class Index:
                 self.md_stems.add(p.stem.lower())
         self.projects = {}   # id -> Path
         self.repos = {}      # repo name -> [project ids that list it in repos:]
+        self.slugs = {}      # repo name -> owner/name, as written in repos:
         for p in sorted((AGENT / FOLDERS["project"]).glob("*.md")):
             fm, _, _ = split_frontmatter(read_text(p))
             if fm and fm.get("type") == "project":
@@ -334,6 +339,7 @@ class Index:
                 repos = fm.get("repos")
                 for slug in repos if isinstance(repos, list) else []:
                     self.repos.setdefault(slug.split("/")[-1], []).append(p.stem)
+                    self.slugs.setdefault(slug.split("/")[-1], slug)
 
     def resolves(self, target: str) -> bool:
         name = target.strip().replace("\\", "/").split("/")[-1].lower()
@@ -564,7 +570,8 @@ def _check_plan(res: Result, secs: list, draft: bool = False) -> None:
                 res.add("PLAN-STEP", f"step {head[4:30]!r} has no '{label}' line")
 
 
-def validate_file(path: Path, index: Index | None = None) -> Result:
+def validate_file(path: Path, index: Index | None = None, text: str | None = None) -> Result:
+    """Validate a note; `text` checks that content as if it were in the file (nothing is written)."""
     res = Result()
     parts = path.relative_to(AGENT).parts
     if any(p.startswith(".") for p in parts):
@@ -575,7 +582,7 @@ def validate_file(path: Path, index: Index | None = None) -> Result:
         return res
 
     index = index or Index()
-    fm, body, errors = split_frontmatter(read_text(path))
+    fm, body, errors = split_frontmatter(read_text(path) if text is None else text)
     for e in errors:
         res.add("FM-PARSE", e)
     if fm is None:
