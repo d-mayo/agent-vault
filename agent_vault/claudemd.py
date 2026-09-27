@@ -286,11 +286,13 @@ def render_covers(covers: list, verified) -> str:
 
 def bump_verified(text: str, sections: list, confirmed: set, today: dt.date) -> tuple:
     """Set `verified: today` on every section in `confirmed` that has a covers
-    comment (D5: nothing to bump without one). Returns (new text, headings bumped)."""
+    comment (D5: nothing to bump without one) and isn't already verified today
+    (sealing two issues' retros the same day must not produce a no-op commit).
+    Returns (new text, headings bumped)."""
     lines = text.splitlines()
     bumped = []
     for sec in sections:
-        if sec.name not in confirmed or not sec.covers or sec.malformed:
+        if sec.name not in confirmed or not sec.covers or sec.malformed or sec.verified == today:
             continue
         lines[sec.start] = render_covers(sec.covers, today)
         bumped.append(sec.name)
