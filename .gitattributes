@@ -1,0 +1,5 @@
+# Scripts must keep LF endings: a CRLF bash hook fails on Windows and blocks every push.
+.githooks/* text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
