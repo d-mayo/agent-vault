@@ -1,7 +1,7 @@
 """A fake `gh` for tests: answers from a JSON state file and records every call.
 
 Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
-  {"signed_out": false,
+  {"signed_out": false, "hang": false,
    "repos": {"owner/name": {"default_branch": "main", "head_sha": "<40 hex>", "labels": [...],
        "settings": {...}, "refuse_settings": false, "branches": ["feat/1-x"],
        "prs": [{"number": 1, "headRefName": "feat/1-x", "url": "..."}],
@@ -15,6 +15,7 @@ Unknown repos are created with defaults on first use. Tests read and edit the fi
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 STATE = Path(os.environ["FAKE_GH_STATE"])
@@ -58,6 +59,8 @@ def main():
     state = json.loads(STATE.read_text(encoding="utf-8"))
     state.setdefault("calls", []).append(args)
     STATE.write_text(json.dumps(state, indent=1), encoding="utf-8")   # recorded even when we fail below
+    if state.get("hang"):
+        time.sleep(60)
     if state.get("signed_out"):
         fail("To get started with GitHub CLI, please run:  gh auth login", 4)
     slug = opt(args, "--repo")

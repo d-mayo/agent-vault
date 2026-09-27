@@ -36,6 +36,13 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
                 self.assertEqual(self.check(cmd, "main", cwd=elsewhere), 2)
         self.assertEqual(self.check(f"cd {self.repo} && git push", "feat/1-x", cwd=elsewhere), 0)
 
+    def test_blocks_windows_paths(self):  # AC11
+        elsewhere = Path(self._t.name)
+        for cmd in [f"git -C {self.repo} push", f'git -C "{self.repo}" push origin',
+                    f"cd {self.repo} && git push", f"pushd {self.repo}; git push"]:
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self.check(cmd, "main", cwd=elsewhere), 2)
+
     def test_blocks(self):
         for cmd, branch in [
             ("git push origin main", "feat/1-x"),
@@ -112,6 +119,8 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
         self.assertEqual(pg.resolve_dir("/a", "$AV_TEST_DIR/z"), os.path.normpath("/x/y/z"))
         if os.name == "nt":
             self.assertEqual(pg.resolve_dir("C:/a", "/c/Users/me"), os.path.normpath("C:/Users/me"))
+            os.environ["AV_TEST_DIR"] = "/c/Users"
+            self.assertEqual(pg.resolve_dir("C:/a", "$AV_TEST_DIR/me"), os.path.normpath("C:/Users/me"))
 
     def test_ignores_other_tools(self):
         r = run_py(GUARD, stdin={"tool_name": "Write", "tool_input": {"file_path": "x"}})

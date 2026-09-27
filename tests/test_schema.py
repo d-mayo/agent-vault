@@ -248,7 +248,7 @@ class CliAndHooksTest(VaultCase):
 
     def test_hooks_run_against_v2_vault(self):   # T10 -> AC10
         self.load_base()
-        r = run_py(HOOKS / "session_start.py", stdin={"session_id": "t2"}, config=self.cfg)
+        r = run_py(HOOKS / "session_start.py", stdin={"session_id": "t2", "cwd": str(self.vault)}, config=self.cfg)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Active projects", r.stdout)
         self.assertNotIn("intake", r.stdout.lower())

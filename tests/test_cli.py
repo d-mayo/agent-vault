@@ -377,7 +377,7 @@ class StatusTest(CliCase):
     def test_session_start_runs_on_a_v2_vault(self):              # T12 -> AC12
         self.cli("new", "project", "demo", "--repo", "me/demo")
         self.cli("idea", "add", "One")
-        r = run_py(HOOKS / "session_start.py", stdin={"session_id": "cli-t12"}, config=self.cfg)
+        r = run_py(HOOKS / "session_start.py", stdin={"session_id": "cli-t12", "cwd": str(self.vault)}, config=self.cfg)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Active projects", r.stdout)
         self.assertIn("Open ideas: 1", r.stdout)

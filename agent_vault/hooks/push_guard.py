@@ -30,6 +30,7 @@ COMMIT_VALUE_FLAGS = set("mFCcSut")
 HEREDOC_RE = re.compile(r"<<-?[ \t]*\\?(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n.*?\n[ \t]*\2[ \t]*(?=\n|$)",
                         re.S)
 SEPARATORS = set("&|;()\n")
+WIN_SEP_RE = re.compile(r"(?<=[\w.:~})-])\\(?=[\w.~$])")
 
 
 def block(msg: str) -> None:
@@ -49,6 +50,9 @@ def current_branch(cwd: str | None) -> str | None:
 def tokenize(command: str) -> list[str] | None:
     command = HEREDOC_RE.sub(lambda m: "<<HEREDOC" + m.group(3), command)
     command = command.replace("\\\n", " ")
+    if os.name == "nt":
+        # keep Windows path separators (C:\Users\me) from being read as escapes
+        command = WIN_SEP_RE.sub(r"\\\\", command)
     lex = shlex.shlex(command, posix=True, punctuation_chars="&|;()<>\n")
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
@@ -85,11 +89,14 @@ def segments(tokens: list[str]):
 
 
 def resolve_dir(cwd: str | None, target: str) -> str:
-    target = os.path.expanduser(os.path.expandvars(target))
-    if os.name == "nt":
-        m = re.match(r"^/([a-zA-Z])(/|$)", target)   # Git Bash style: /c/Users -> C:/Users
-        if m:
-            target = f"{m.group(1).upper()}:/" + target[m.end():]
+    def drive(t: str, must_exist: bool) -> str:
+        m = re.match(r"^/([a-zA-Z])(/|$)", t) if os.name == "nt" else None   # Git Bash: /c/Users -> C:/Users
+        if m and not (must_exist and not os.path.isdir(f"{m.group(1)}:/")):
+            return f"{m.group(1).upper()}:/" + t[m.end():]
+        return t
+
+    target = drive(target, False)
+    target = drive(os.path.expanduser(os.path.expandvars(target)), True)   # a variable's value must name a real drive
     return os.path.normpath(os.path.join(cwd or os.getcwd(), target))
 
 

@@ -7,6 +7,7 @@ constants, so the rules can't drift apart. Standard library only.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -709,3 +710,89 @@ def read_hook_input() -> dict:
         return json.loads(raw) if raw.strip() else {}
     except Exception:
         return {}
+
+
+# --- Hook helpers ------------------------------------------------------------------
+def run_hook(main, name: str, stream=None) -> None:
+    """Run a hook's main(); anything but a deliberate exit is reported and swallowed,
+    so a bug here never blocks a session or a tool call."""
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"(agent-vault {name} hook failed: {type(e).__name__}: {e})", file=stream or sys.stderr)
+
+
+def session_kind(cwd) -> dict:
+    """What kind of session this is, from its cwd (design §9): {"kind": "vault"} inside the vault,
+    {"kind": "repo", repo, slug, project, root} inside a clone whose `origin` is a registered repo,
+    else {"kind": None}."""
+    none = {"kind": None}
+    if not cwd or VAULT is None:
+        return none
+    if vault_parts(cwd) is not None:
+        return {"kind": "vault"}
+    try:
+        import github
+        slug = github.origin_slug(cwd)
+        root = github.git("rev-parse", "--show-toplevel", cwd=cwd)
+    except Exception:
+        return none
+    name = slug.split("/")[-1]
+    index = Index()
+    owners = index.repos.get(name)
+    if not owners or index.slugs[name].lower() != slug.lower():
+        return none
+    return {"kind": "repo", "repo": name, "slug": slug, "project": owners[0], "root": root}
+
+
+def is_sealed_note(path: Path) -> bool:
+    """A plan, impl or retro note whose frontmatter says `status: sealed`."""
+    if not WORK_FILE_RE.match(path.stem) or not path.is_file():
+        return False
+    fm, _, _ = split_frontmatter(read_text(path))
+    return (fm or {}).get("status") == "sealed"
+
+
+def _hash(path: Path) -> str:
+    return hashlib.sha1(path.read_bytes()).hexdigest()
+
+
+def fingerprints() -> dict[str, str]:
+    """Content hashes of every sealed note and every daily note older than today, by vault path.
+    Stop compares against these to catch shell writes the guard can't see (design §9)."""
+    out = {}
+    for p in sorted((AGENT / FOLDERS["work"]).rglob("*.md")):
+        if is_sealed_note(p):
+            out[rel(p)] = _hash(p)
+    for p in sorted((AGENT / FOLDERS["daily"]).glob("*.md")):
+        if p.stem < today().isoformat():
+            out[rel(p)] = _hash(p)
+    return out
+
+
+def changed_fingerprints(before: dict) -> list[str]:
+    """Vault paths from `before` whose content changed or that no longer exist."""
+    changed = []
+    for name, digest in sorted(before.items()):
+        p = VAULT / name
+        try:
+            if _hash(p) != digest:
+                changed.append(name)
+        except OSError:
+            changed.append(name)
+    return changed
+
+
+def daily_log_lines(n: int, match=None) -> list[str]:
+    """The last `n` daily log lines (oldest first) as 'YYYY-MM-DD HH:MM …', optionally only those `match` accepts."""
+    out: list[str] = []
+    for p in sorted((AGENT / FOLDERS["daily"]).glob("*.md"), reverse=True):
+        _, body, _ = split_frontmatter(read_text(p))
+        lines = [f"{p.stem} {ln[2:]}" for ln in body.splitlines() if ln.startswith("- ")
+                 and (match is None or match(ln))]
+        out = lines[-(n - len(out)):] + out
+        if len(out) >= n:
+            break
+    return out

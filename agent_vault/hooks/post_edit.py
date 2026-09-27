@@ -1,5 +1,6 @@
-"""PostToolUse hook for Write/Edit/MultiEdit: validate the note that was just
-changed. Exit code 2 shows the problems to Claude so it fixes them right away."""
+"""PostToolUse hook for Write/Edit/MultiEdit: validate the note in Agent/ that was just
+changed, in every session. Exit code 2 shows its errors to Claude so it fixes them right
+away; warnings never block."""
 from __future__ import annotations
 
 import sys
@@ -36,4 +37,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    lib.run_hook(main, "PostToolUse")

@@ -5,8 +5,9 @@
 What it does:
   1. Copies agent_vault/ to ~/.claude/agent-vault/ and skills/*/ to ~/.claude/skills/.
   2. Writes ~/.claude/agent-vault.json (vault path and what the installer manages).
-  3. Merges its hook entries into ~/.claude/settings.json and <vault>/.claude/settings.json.
-     Only entries it created are replaced; a .bak copy is written before any change.
+  3. Merges its hook entries and the CLI permission into ~/.claude/settings.json, and removes
+     the ones older versions put in <vault>/.claude/settings.json. Only entries it created
+     are replaced or removed; a .bak copy is written before any change.
   4. Writes <vault>/CLAUDE.md.
   5. Deletes v1 code from <vault>/Agent/_system/ (the handoff log is kept).
   6. Points this repo's git hooks at agent_vault/githooks/ (main-branch protection); other repos
@@ -41,20 +42,17 @@ def hook_cmd(install_dir: Path, script: str) -> str:
     return f'{python_cmd()} "{(install_dir / "hooks" / script).as_posix()}"'
 
 
-def vault_hooks(install_dir: Path) -> dict:
+def user_hooks(install_dir: Path) -> dict:
+    """Every hook is user-level (design §9): they decide by session and target path, and
+    vault-level copies would run twice in vault sessions."""
     h = lambda s: [{"type": "command", "command": hook_cmd(install_dir, s)}]  # noqa: E731
     return {
         "SessionStart": [{"hooks": h("session_start.py")}],
-        "PreToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": h("guard.py")}],
+        "PreToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": h("guard.py")},
+                       {"matcher": "Bash", "hooks": h("push_guard.py")}],
         "PostToolUse": [{"matcher": "Write|Edit|MultiEdit", "hooks": h("post_edit.py")}],
         "Stop": [{"hooks": h("stop_check.py")}],
     }
-
-
-def user_hooks(install_dir: Path) -> dict:
-    return {"PreToolUse": [{"matcher": "Bash",
-                            "hooks": [{"type": "command",
-                                       "command": hook_cmd(install_dir, "push_guard.py")}]}]}
 
 
 def is_our_hook(command: str) -> bool:
@@ -199,10 +197,13 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
     report.append(f"installed code to {install_dir}")
     install_skills(claude, report)
 
+    vault_settings = vault / ".claude" / "settings.json"
     for path, hooks, perms in [
-        (claude / "settings.json", user_hooks(install_dir), []),
-        (vault / ".claude" / "settings.json", vault_hooks(install_dir), allow),
+        (claude / "settings.json", user_hooks(install_dir), allow),
+        (vault_settings, {}, []),        # older installs put our hooks and permission here
     ]:
+        if path == vault_settings and not path.exists():
+            continue
         merged, notes = merge_settings(read_json(path), hooks, perms, managed_before)
         report += [f"note: {path}: {n}" for n in notes]
         if write_if_changed(path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
