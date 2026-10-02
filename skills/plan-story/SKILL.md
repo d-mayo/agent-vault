@@ -106,8 +106,8 @@ the raw plan:
 ## Approval
 
 Run `vault.py seal plan <repo> <issue>` only after the user has answered
-its closing question and explicitly approved the summary, and only after any approved issue-hygiene edits to
-the planned issue (see below) are posted — sealing records the issue's
+the summary's closing question and explicitly approved it, and only after
+any approved issue-hygiene edits to the planned issue (see below) are posted — sealing records the issue's
 current edit time, so an edit made afterwards would make `preflight` reject
 the sealed plan later. For requested changes: edit the draft, running
 another plan review (see Plan review) if the change is substantial, re-run

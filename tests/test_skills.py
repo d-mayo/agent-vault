@@ -185,7 +185,8 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
         self.assertMentions("every major finding and at most three minor", text=self.reviewer)
 
     def test_pr_review_fixes_get_one_review(self):  # AC5
-        self.assertMentions("review once, covering all the fixes", "pr review:")
+        self.assertMentions("review once, covering all the fixes", "pr review:", "`pr review <k>:`",
+                             "starting again at 1")
 
     def test_deviations_and_stop_and_ask(self):  # AC5
         self.assertMentions("## deviations", "stop and ask")
@@ -273,7 +274,7 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
         last = section.split("- ")[-1].lower()
         self.assertIn("one pointed question", last)
         self.assertIn("riskiest judgment call", last)
-        self.assertMentions("answered its closing question", "explicitly approved")
+        self.assertMentions("answered the summary's closing question", "explicitly approved it")
 
     def test_approval_seals_only_after_explicit_approval(self):  # AC7
         self.assertMentions("## approval", "vault.py seal plan", "explicit approval",

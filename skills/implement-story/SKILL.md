@@ -80,7 +80,8 @@ name (e.g. `agent-vault`), never `owner/name`.
 2. A step is done when its commit exists. Continue from the first step that
    has neither a commit nor a recorded deviation covering it. If every step
    is committed, go to **Finish**; its review rounds are counted from the
-   impl note's `## Verification` `Review <k>:` lines.
+   impl note's `## Verification` `Review <k>:` lines (`PR review <k>:` lines
+   belong to **Address PR review**).
 
 ## Per step
 
@@ -160,7 +161,9 @@ Asked to act on review comments for an issue that already has an open PR
    then stop and ask. Record each finding under `## Review findings` as
    `- R<n> (major|minor): PR review: <finding> → fixed in <sha>`,
    `→ won't fix: <reason>` or (minor only) `→ left open`, and the review under
-   `## Verification` (`- Review <k>: R<n>-R<n2>` or `- Review <k>: no findings`).
+   `## Verification` (`- PR review <k>: R<n>-R<n2>` or `- PR review <k>: no
+   findings`); its rounds are counted separately from **Finish**'s, starting
+   again at 1.
 4. Push the branch.
 5. Leave the impl note open; don't reseal or reopen anything else.
 
