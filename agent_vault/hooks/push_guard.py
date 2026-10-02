@@ -1,12 +1,16 @@
-"""User-level PreToolUse hook for Bash: keep every Claude session off `main`.
+"""User-level PreToolUse hook for Bash and PowerShell: keep every Claude session off
+`main`, and issues on the one template.
 
 Blocks (exit 2, reason on stderr):
+  - `gh issue create|new` aimed at a registered repo (`--repo`/`-R`, else `GH_REPO=`,
+    else the clone it runs in): issues go through `vault.py issue create`;
   - `git push` whose destination is main: an explicit refspec, `--all`/`--mirror`,
     or no refspec while the repo it runs in is on main;
   - skipping git's own hooks: `--no-verify`, `git commit -n`, `-c core.hooksPath=…`.
 The command is tokenized quote-aware, heredoc bodies are treated as data,
-`cd`/`pushd` change the directory used for later segments, and `bash -c '…'`
-is checked recursively. Anything unparseable is allowed: the pre-push git
+`cd`/`pushd` (and PowerShell's `Set-Location`/`Push-Location`/`sl`) change the
+directory used for later segments, and `bash -c '…'` is checked recursively.
+PowerShell-only syntax is tokenized as Bash would be. Anything unparseable is allowed: the pre-push git
 hook is the second layer.
 """
 from __future__ import annotations
@@ -17,6 +21,9 @@ import re
 import shlex
 import subprocess
 import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
 
 MAIN = {"main", "refs/heads/main"}
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
@@ -29,6 +36,8 @@ SHELLS = {"bash", "sh", "zsh", "dash"}
 COMMIT_VALUE_FLAGS = set("mFCcSut")
 HEREDOC_RE = re.compile(r"<<-?[ \t]*\\?(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n.*?\n[ \t]*\2[ \t]*(?=\n|$)",
                         re.S)
+CD_CMDS = {"cd", "pushd", "set-location", "push-location", "sl"}
+PS_PATH_FLAGS = {"-path", "-literalpath"}
 SEPARATORS = set("&|;()\n")
 WIN_SEP_RE = re.compile(r"(?<=[\w.:~})-])\\(?=[\w.~$])")
 
@@ -176,6 +185,48 @@ def check_git(tokens: list[str], cwd: str | None) -> None:
         block("you're on main; direct pushes to main are not allowed. Create a branch first.")
 
 
+def repo_slug(value: str) -> str:
+    """owner/name from `owner/name`, `host/owner/name` or a URL, lower-cased."""
+    parts = [p for p in re.split(r"[/:]", value.strip().removesuffix(".git").rstrip("/")) if p]
+    return "/".join(parts[-2:]).lower()
+
+
+def gh_issue_create(seg: list[str]) -> tuple[bool, str | None]:
+    """(is `gh issue create|new`, the --repo/-R value if any); option values are dropped
+    wherever they sit, so `gh issue -R o/n create` is seen as `gh issue create`."""
+    words, repo, i = [], None, 1
+    while i < len(seg):
+        a = seg[i]
+        if a in ("-R", "--repo") and i + 1 < len(seg):
+            repo = seg[i + 1]
+            i += 1
+        elif a.startswith("--repo="):
+            repo = a[len("--repo="):]
+        elif a.startswith("-R") and not a.startswith("--") and len(a) > 2:
+            repo = a[2:].lstrip("=")
+        elif not a.startswith("-"):
+            words.append(a)
+        i += 1
+    return words[:1] == ["issue"] and words[1:2] in (["create"], ["new"]), repo
+
+
+def issue_target_registered(repo: str | None, env_repo: str | None, cwd: str | None) -> bool:
+    """Whether the issue would land in a registered repo. Imports lib only now, and any
+    failure means "not registered": the guard never blocks on its own bugs."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import lib
+        if lib.VAULT is None:
+            return False
+        target = repo or env_repo
+        if target:
+            slug = repo_slug(target)
+            return any(v.lower() == slug for v in lib.Index().slugs.values())
+        return lib.session_kind(cwd or os.getcwd())["kind"] == "repo"
+    except Exception:
+        return False
+
+
 def check_command(command: str, cwd: str | None, depth: int = 0) -> None:
     tokens = tokenize(command)
     if tokens is None or depth > 3:
@@ -188,18 +239,30 @@ def check_command(command: str, cwd: str | None, depth: int = 0) -> None:
         if seg == [")"]:
             cwd = saved.pop() if saved else cwd
             continue
+        lead = seg[:next((i for i, t in enumerate(seg) if os.path.basename(t).lower() in ("gh", "gh.exe")),
+                         len(seg))]                  # what sits in front of `gh`, e.g. GH_REPO=o/n
+        env_repo = next((t.split("=", 1)[1] for t in lead if t.startswith("GH_REPO=")), None)
         seg = strip_prefixes(seg)
         if not seg:
             continue
         name = os.path.basename(seg[0])
-        if name in ("cd", "pushd") and len(seg) > 1:
-            cwd = resolve_dir(cwd, seg[1])
+        if name.lower() in CD_CMDS and len(seg) > 1:
+            args = [a for a in seg[1:] if a.lower() not in PS_PATH_FLAGS]
+            if args:
+                cwd = resolve_dir(cwd, args[0])
         elif name in SHELLS:
             k = next((i for i, a in enumerate(seg[1:], 1) if re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", a)), None)
             if k is not None and k + 1 < len(seg):
                 check_command(seg[k + 1], cwd, depth + 1)
         elif name in ("git", "git.exe"):
             check_git(seg, cwd)
+        elif name.lower() in ("gh", "gh.exe"):
+            is_create, repo = gh_issue_create(seg)
+            if is_create and issue_target_registered(repo, env_repo, cwd):
+                import lib
+                block("create issues with the issue template, not `gh issue create`: "
+                      f"{lib.CLI} issue create <repo> --title \"...\" --body-file <file> "
+                      "(the `issue` skill drafts it).")
 
 
 def main() -> None:
@@ -207,10 +270,10 @@ def main() -> None:
         data = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
     except Exception:
         return
-    if data.get("tool_name") != "Bash":
+    if data.get("tool_name") not in ("Bash", "PowerShell"):
         return
     command = (data.get("tool_input") or {}).get("command") or ""
-    if "git" in command:
+    if "git" in command or "gh" in command:
         check_command(command, data.get("cwd"))
 
 

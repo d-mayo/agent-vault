@@ -49,7 +49,7 @@ def user_hooks(install_dir: Path) -> dict:
     return {
         "SessionStart": [{"hooks": h("session_start.py")}],
         "PreToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": h("guard.py")},
-                       {"matcher": "Bash", "hooks": h("push_guard.py")}],
+                       {"matcher": "Bash|PowerShell", "hooks": h("push_guard.py")}],
         "PostToolUse": [{"matcher": "Write|Edit|MultiEdit", "hooks": h("post_edit.py")}],
         "Stop": [{"hooks": h("stop_check.py")}],
     }
@@ -77,7 +77,8 @@ def merge_settings(settings: dict, hooks: dict, allow: list[str],
             del existing[event]
     for event, groups in hooks.items():
         for g in groups:
-            if any(o.get("matcher", "") == g.get("matcher", "") for o in existing.get(event, [])):
+            tools = set(g.get("matcher", "").split("|"))
+            if any(tools & set(o.get("matcher", "").split("|")) for o in existing.get(event, [])):
                 notes.append(f"{event} [{g.get('matcher') or '*'}] also has hooks not managed "
                              "by agent-vault; both will run.")
             existing.setdefault(event, []).append(g)
