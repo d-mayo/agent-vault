@@ -108,6 +108,14 @@ PLANNED_LABEL = ("planned", "0e8a16", "A sealed plan exists (set by agent-vault)
 HOOK_MARKER = "agent-vault-hook: pre-push"        # in githooks/pre-push; repo-init recognises the hook by it
 LOG_HEADING = "## Log"
 NONE_LINE = "None"
+ISSUE_SECTIONS = {                         # GitHub issue body: `##` sections, in order, with a hint each
+    "Problem": "What is wrong or missing today, and for whom.",
+    "Desired outcome": "What should be true once this is done, observable from outside.",
+    "Constraints": "Rules the solution must respect; write None if there are none.",
+    "Out of scope": "What this issue deliberately does not cover; write None if nothing.",
+    "Source": "Where this came from: an idea note, a retro <repo>#<n>, a session; write None if nothing.",
+}
+ISSUE_TEMPLATE_PATH = ".github/ISSUE_TEMPLATE/issue.md"      # in a repo; repo-init writes it
 
 ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -387,6 +395,51 @@ def split_sections(lines: list[str]) -> list[tuple[str, list[str]]]:
     return out
 
 
+def issue_body_problems(text: str) -> list[str]:
+    """What is wrong with a GitHub issue body against ISSUE_SECTIONS; [] when it matches.
+    Sections must appear once each, in order; each needs a non-blank line once HTML
+    comments are removed ('None' counts); only blank lines may precede the first."""
+    problems = []
+    orig = text.splitlines()
+    blanked = blank_code_blocks(text)
+    heads = [(i, ln[3:].strip()) for i, ln in enumerate(blanked) if ln.startswith("## ")]
+    first = heads[0][0] if heads else len(orig)
+    if any(ln.strip() for ln in orig[:first]):
+        problems.append("there is text before the first '## ' section")
+    names = [n for _, n in heads]
+    want = list(ISSUE_SECTIONS)
+    for n in want:
+        if n not in names:
+            problems.append(f"missing section '## {n}'")
+    for n in dict.fromkeys(names):
+        if n not in want:
+            problems.append(f"unknown section '## {n}'; allowed: {', '.join('## ' + w for w in want)}")
+        elif names.count(n) > 1:
+            problems.append(f"section '## {n}' appears {names.count(n)} times")
+    known = [n for n in dict.fromkeys(names) if n in want and names.count(n) == 1]
+    if known != [w for w in want if w in known]:
+        problems.append("sections are out of order; use " + ", ".join("## " + w for w in want))
+    for k, (i, n) in enumerate(heads):
+        end = heads[k + 1][0] if k + 1 < len(heads) else len(orig)
+        body = re.sub(r"<!--.*?(?:-->|\Z)", "", "\n".join(orig[i + 1:end]), flags=re.S)
+        if n in want and names.count(n) == 1 and not body.strip():
+            problems.append(f"section '## {n}' is empty (write {NONE_LINE} if there is nothing to say)")
+    return problems
+
+
+def issue_body_skeleton() -> str:
+    """The bare issue body: the five headings with blank lines between."""
+    return "\n\n".join(f"## {n}" for n in ISSUE_SECTIONS) + "\n"
+
+
+def issue_template_file() -> str:
+    """The GitHub Markdown issue template (ISSUE_TEMPLATE_PATH): a hint comment per section."""
+    head = ("---\nname: Issue\nabout: One body shape for every issue, so plans can rely on it\n"
+            'title: ""\nlabels: ""\n---\n')
+    body = "\n".join(f"## {n}\n<!-- {h} -->\n" for n, h in ISSUE_SECTIONS.items())
+    return head + body
+
+
 def classify(parts: tuple[str, ...]):
     """Where a file sits in the layout: (type | None, fields the name implies, problem | None)."""
     name = parts[-1]
@@ -661,6 +714,9 @@ def schema_text() -> str:
             out.append(f"    body cap: {SIZE_CAPS[t]} lines (error)")
         if t == "plan":
             out.append(f"    body above {PLAN_WARN_LINES} lines warns")
+    out.append("Issue body (issue create; sections in order): "
+               + ", ".join("## " + n for n in ISSUE_SECTIONS)
+               + f"; once each, none empty ({NONE_LINE} counts), nothing before the first.")
     out.append("Formats: dates YYYY-MM-DD; timestamps like 2026-09-26T21:04:00Z; "
                "repos entries owner/name; repo, issue, pr are plain values; ids are lowercase-kebab-case.")
     out.append("Idea source: retro <repo>#<n> | phone:<path> | session. "
