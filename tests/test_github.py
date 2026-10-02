@@ -59,6 +59,23 @@ Full check: make test
 """
 
 
+ISSUE_BODY = """## Problem
+Widgets don't frob.
+
+## Desired outcome
+Widgets frob.
+
+## Constraints
+None
+
+## Out of scope
+Gadgets.
+
+## Source
+session
+"""
+
+
 def git(*args, cwd, check=True):
     return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True, text=True).stdout.strip()
 
@@ -150,6 +167,18 @@ class GhCase(unittest.TestCase):
         r = self.cli("validate")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn(": error:", r.stdout)
+
+    def idea(self, *args):
+        r = self.ok(self.cli("idea", "add", "Frobnicate the gadget", *args))
+        return r.stdout.split()[-1].split("/")[-1]
+
+    def body_file(self, text=ISSUE_BODY, name="body.md", raw=None):
+        path = self.root / name
+        if raw is not None:
+            path.write_bytes(raw)
+        else:
+            path.write_text(text, encoding="utf-8", newline="\n")
+        return str(path)
 
     def new_plan(self, text=SEALED_PLAN):
         self.ok(self.cli("new", "plan", "widget", "7"))
@@ -631,50 +660,127 @@ class StageTest(GhCase):  # T5 -> AC5
         self.assertTrue(self.stage().startswith("done:"))
 
 
-class PromoteTest(GhCase):  # T6 -> AC6, AC11
-    def idea(self, *args):
-        r = self.ok(self.cli("idea", "add", "Frobnicate the gadget", *args))
-        return r.stdout.split()[-1].split("/")[-1]
+class PromoteTest(GhCase):  # T4 -> AC4 (T6 -> AC6, AC11 before #27)
+    def promote(self, name, *extra, body=None):
+        return self.cli("idea", "promote", name, "--body-file", body or self.body_file(), *extra)
 
     def test_promotes_into_the_projects_single_repo(self):
         name = self.idea("--project", "widgets")
-        self.ok(self.cli("idea", "promote", name))
+        self.ok(self.promote(name))
         made = self.load()["created_issues"][0]
         self.assertEqual(made["title"], "Frobnicate the gadget")
-        self.assertIn(name.removesuffix(".md"), made["body"])
+        self.assertEqual(made["body"], ISSUE_BODY)          # no "Promoted from" line
         fm = self.fm(self.vault / "Agent" / "Ideas" / name)
         self.assertEqual(fm["status"], "promoted")
         self.assertEqual(fm["promoted_to"].strip('"'), made["url"])
         self.assertRegex(self.daily(), r"idea-promoted — Frobnicate the gadget \[\[")
         self.assert_valid()
 
+    def test_body_file_is_required_and_checked(self):
+        name = self.idea("--project", "widgets")
+        r = self.cli("idea", "promote", name)
+        self.assertEqual(r.returncode, 2, r.stderr)                       # argparse refuses
+        untemplated = self.body_file("Just some text.\n", "plain.md")
+        self.refused(self.promote(name, body=untemplated), "template", "missing section")
+        self.assertEqual(self.load()["created_issues"], [])
+        self.assertEqual(self.fm(self.vault / "Agent" / "Ideas" / name)["status"], "open")
+
     def test_title_override(self):
         name = self.idea("--project", "widgets")
-        self.ok(self.cli("idea", "promote", name, "--title", "feat: frobnicate"))
+        self.ok(self.promote(name, "--title", "feat: frobnicate"))
         self.assertEqual(self.load()["created_issues"][0]["title"], "feat: frobnicate")
 
     def test_refuses_dropped_and_promoted_ideas(self):
         name = self.idea("--project", "widgets")
         self.ok(self.cli("idea", "drop", name, "--reason", "no"))
-        self.refused(self.cli("idea", "promote", name), "dropped")
+        self.refused(self.promote(name), "dropped")
         other = self.idea("--project", "widgets")
-        self.ok(self.cli("idea", "promote", other))
-        self.refused(self.cli("idea", "promote", other), "promoted")
+        self.ok(self.promote(other))
+        self.refused(self.promote(other), "promoted")
         self.assertEqual(len(self.load()["created_issues"]), 1)
 
     def test_repo_required_without_project_or_with_many_repos(self):
-        self.refused(self.cli("idea", "promote", self.idea()), "--repo")
+        self.refused(self.promote(self.idea()), "--repo")
         self.ok(self.cli("new", "project", "multi", "--repo", "acme/a", "--repo", "acme/b"))
         self.ok(self.cli("new", "project", "empty"))
         multi, empty = self.idea("--project", "multi"), self.idea("--project", "empty")
-        self.refused(self.cli("idea", "promote", multi), "--repo")
-        self.refused(self.cli("idea", "promote", empty), "0 repos")
-        self.ok(self.cli("idea", "promote", multi, "--repo", "b"))
+        self.refused(self.promote(multi), "--repo")
+        self.refused(self.promote(empty), "0 repos")
+        self.ok(self.promote(multi, "--repo", "b"))
         self.load()
         self.assertEqual(self.state["repos"]["acme/b"]["created_issues"][0]["title"], "Frobnicate the gadget")
-        self.refused(self.cli("idea", "promote", self.idea("--project", "multi"), "--repo", "widget"),
-                     "doesn't belong")
-        self.refused(self.cli("idea", "promote", self.idea(), "--repo", "nope"), "not listed")
+        self.refused(self.promote(self.idea("--project", "multi"), "--repo", "widget"), "doesn't belong")
+        self.refused(self.promote(self.idea(), "--repo", "nope"), "not listed")
+
+
+class IssueCreateTest(GhCase):  # T2, T3 -> AC2, AC3
+    def create(self, *extra, repo="widget", title="feat: frob", body=None):
+        return self.cli("issue", "create", repo, "--title", title, "--body-file", body or self.body_file(), *extra)
+
+    def test_creates_the_issue_with_the_files_text(self):
+        r = self.ok(self.create())
+        made = self.load()["created_issues"]
+        self.assertEqual(len(made), 1)
+        self.assertEqual((made[0]["title"], made[0]["body"]), ("feat: frob", ISSUE_BODY))
+        self.assertEqual(r.stdout.strip().splitlines()[-1], made[0]["url"])
+        self.assertEqual(self.daily(), "")                    # plain issue create logs nothing
+
+    def test_bom_and_crlf_are_normalised(self):
+        raw = b"\xef\xbb\xbf" + ISSUE_BODY.replace("\n", "\r\n").encode("utf-8")
+        self.ok(self.create(body=self.body_file(raw=raw)))
+        self.assertEqual(self.load()["created_issues"][0]["body"], ISSUE_BODY)
+
+    def test_each_mismatch_is_refused_without_calling_gh(self):
+        cases = {
+            "missing": (ISSUE_BODY.replace("## Constraints\nNone\n\n", ""), "missing section '## Constraints'"),
+            "reordered": (ISSUE_BODY.replace("## Problem", "## X").replace("## Source", "## Problem")
+                          .replace("## X", "## Source"), "out of order"),
+            "duplicated": (ISSUE_BODY + "\n## Source\nagain\n", "appears 2 times"),
+            "unknown": (ISSUE_BODY + "\n## Extra\nx\n", "unknown section"),
+            "empty": (ISSUE_BODY.replace("session\n", "<!-- hint -->\n"), "'## Source' is empty"),
+            "leading": ("Intro.\n\n" + ISSUE_BODY, "before the first"),
+        }
+        for label, (text, want) in cases.items():
+            with self.subTest(label):
+                self.refused(self.create(body=self.body_file(text)), want)
+        self.assertEqual(self.calls("issue", "create"), [])
+
+    def test_two_problems_are_both_named(self):
+        text = "Intro.\n\n" + ISSUE_BODY.replace("## Constraints\nNone\n\n", "")
+        self.refused(self.create(body=self.body_file(text)), "before the first", "missing section")
+
+    def test_other_refusals(self):
+        self.refused(self.create(body=self.body_file(raw=ISSUE_BODY.encode("utf-16"))), "UTF-8")
+        self.refused(self.create(body=str(self.root / "nope.md")), "can't read")
+        self.refused(self.create(title="  "), "title")
+        self.refused(self.create(repo="nope"), "not listed")
+        self.assertEqual(self.calls("issue", "create"), [])
+
+    def test_idea_is_promoted(self):
+        name = self.idea("--project", "widgets")
+        r = self.ok(self.create("--idea", name))
+        url = self.load()["created_issues"][0]["url"]
+        self.assertEqual(r.stdout.strip().splitlines()[-1], url)
+        fm = self.fm(self.vault / "Agent" / "Ideas" / name)
+        self.assertEqual((fm["status"], fm["promoted_to"].strip('"')), ("promoted", url))
+        self.assertRegex(self.daily(), r"idea-promoted — feat: frob \[\[")
+        self.assert_valid()
+
+    def test_idea_without_project_goes_to_the_named_repo(self):
+        self.ok(self.create("--idea", self.idea()))
+        self.assertEqual(len(self.load()["created_issues"]), 1)
+
+    def test_idea_that_cannot_be_promoted_is_refused(self):
+        dropped = self.idea("--project", "widgets")
+        self.ok(self.cli("idea", "drop", dropped, "--reason", "no"))
+        self.refused(self.create("--idea", dropped), "dropped")
+        done = self.idea("--project", "widgets")
+        self.ok(self.create("--idea", done))
+        self.refused(self.create("--idea", done), "promoted")
+        self.ok(self.cli("new", "project", "other", "--repo", "acme/other"))
+        elsewhere = self.idea("--project", "other")
+        self.refused(self.create("--idea", elsewhere), "doesn't belong")
+        self.assertEqual(len(self.load()["created_issues"]), 1)
 
 
 class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8

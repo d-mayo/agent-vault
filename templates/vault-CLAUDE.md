@@ -29,7 +29,8 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what 
 - To plan an issue, start a fresh session on Opus (by convention) inside the repo clone and say "plan #<issue>" (the `plan-story` skill); it researches first, interviews me only on what research can't settle, gets an independent Opus review of the draft, and seals only once I approve the summary.
 - To implement a sealed plan, start a fresh session inside the repo clone and say "implement #<issue>" (the `implement-story` skill); it stays on this session's model (Sonnet, by convention) and runs its own review on Opus.
 - `{{CLI}} repo-init <path>`: one-time setup of a repo clone (squash-only merges, `planned` label, shared pre-push hook, `CLAUDE.md` skeleton).
-- `{{CLI}} idea add "<title>" [--project <id>] [--source ...]` and `{{CLI}} idea drop <file> --reason "..."`, `{{CLI}} idea promote <file> [--title "..."] [--repo <name>]` (creates the GitHub issue; only after I approve)
+- `{{CLI}} idea add "<title>" [--project <id>] [--source ...]` and `{{CLI}} idea drop <file> --reason "..."`, `{{CLI}} idea promote <file> --body-file <file> [--title "..."] [--repo <name>]` (creates the GitHub issue from a body in the issue template; only after I approve)
+- `{{CLI}} issue create <repo> --title "..." --body-file <file> [--idea <file>]`: the one way to create a GitHub issue; refuses a body that isn't the issue template (`{{CLI}} schema` lists its sections), and only after I approve the exact title and body
 - `{{CLI}} ideas [--project <id>] [--status open]` lists ideas; `{{CLI}} ideas review` lists open ideas older than 90 days.
 - `{{CLI}} handoff list` and `{{CLI}} handoff pull "<path>" [--project <id>]`
 - `{{CLI}} log "<text>" [--project <id>]`
