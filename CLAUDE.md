@@ -11,17 +11,19 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - CLI after install: `<installer's python> ~/.claude/agent-vault/vault.py <command>`; the exact string (which the vault's permission rule matches) is lib.CLI, printed by the installer and written into the vault's CLAUDE.md.
 
 ## Layout
-<!-- covers: agent_vault/**, install.py, templates/**, skills/**, agent_vault/githooks/**; verified: 2026-09-27 -->
+<!-- covers: agent_vault/**, install.py, templates/**, skills/**, agent_vault/githooks/**, .github/**; verified: 2026-09-27 -->
 - `agent_vault/`: everything copied to `~/.claude/agent-vault/`. `agent_vault/lib.py` holds the schema and shared helpers; `agent_vault/vault.py` is the CLI; `agent_vault/github.py` is the only place that runs `gh` and `git` (`AGENT_VAULT_GH` overrides where `gh` is found); `agent_vault/claudemd.py` lints `CLAUDE.md` (paths, commands, covers globs, size cap and staleness; `vault.py claudemd-lint` runs it); `agent_vault/hooks/` holds the Claude Code hooks.
-- `agent_vault/hooks/push_guard.py`: user-level Bash guard (no pushes to main, no `--no-verify`).
+- `agent_vault/hooks/push_guard.py`: user-level guard for the Bash and PowerShell tools (no pushes to main, no `--no-verify`, no `gh issue create` or `gh issue new` aimed at a registered repo: issues go through `vault.py issue create`).
 - `install.py`: idempotent installer; owns only settings entries whose command contains `/.claude/agent-vault/`.
 - `templates/vault-CLAUDE.md`: the vault's `CLAUDE.md`, with `{{CLI}}` filled in at install.
 - `agent_vault/templates/repo-CLAUDE.md`: the skeleton `repo-init` writes for a newly registered repo's own `CLAUDE.md`.
 - `skills/`: user-level skills; each subfolder is copied to `~/.claude/skills/`.
 - `skills/implement-story/`: takes a sealed plan from branch to open PR, step by step, with a review after every step; `skills/implement-story/reviewer.md` holds the reviewer's own prompt and findings format.
 - `skills/plan-story/`: turns an issue into a sealed plan, researching first, interviewing only where research leaves something ambiguous, and reviewing the draft with an independent reviewer before the user approves it; `skills/plan-story/plan-reviewer.md` holds the reviewer's own prompt and findings format.
+- `skills/issue/`: the one way to create a GitHub issue: drafts the title and body in the issue template (`lib.ISSUE_SECTIONS`), asks about what's unclear, and calls `vault.py issue create` only after the user approves the exact wording; the retro and plan-story skills call that command too.
 - `skills/retro/`: closes out an issue before merge — audits the repo `CLAUDE.md`, its `README.md` and the project overview one heading at a time, sorts follow-ups into an issue, an idea or dropped, and seals; also runs as a backfill for an issue that already merged without one.
 - `agent_vault/githooks/pre-push`: blocks pushes to `main` and bad branch names. The one copy: this repo's `core.hooksPath` points at it, and `repo-init` points other repos at the installed `~/.claude/agent-vault/githooks/`.
+- `.github/ISSUE_TEMPLATE/issue.md`: the GitHub issue template for this repo, identical to what `repo-init` writes (generated from `lib.ISSUE_SECTIONS`; a test keeps them equal).
 - `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`. `tests/fake_gh.py` stands in for `gh` (`AGENT_VAULT_GH`); tests never touch GitHub.
 
 ## Conventions

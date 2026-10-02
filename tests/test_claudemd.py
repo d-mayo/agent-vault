@@ -319,5 +319,14 @@ class BumpVerifiedTest(ClaudemdCase):        # used by `seal retro` (AC6)
         self.assertEqual(new_text, text)
 
 
+class ThisRepoTest(unittest.TestCase):          # T11 -> AC11 (#27)
+    def test_repo_claude_md_names_the_issue_files_and_lints_clean(self):
+        repo = CODE.parent
+        text = (repo / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("skills/issue/", text)
+        self.assertIn(".github/ISSUE_TEMPLATE/issue.md", text)
+        self.assertEqual(claudemd.lint(repo).errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()
