@@ -167,25 +167,39 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
         self.assertMentions("vault.py preflight", "git config --get remote.origin.url",
                              "vault.py branch")
 
-    def test_per_step_commits_and_reviews(self):  # AC3
-        self.assertMentions("(#<issue>)", "one commit per step", "review findings",
-                             "(major|minor)", "fixed in", "won't fix")
+    def test_per_step_commits_without_review(self):  # AC1
+        self.assertMentions("(#<issue>)", "one commit per step", "run the tests relevant to this step",
+                             "a step is done when its commit exists")
+        for text in (self.skill, self.reviewer):
+            self.assertNotIn("step <s> reviewed", text.lower())
+            self.assertNotIn("after every step", text.lower())
 
-    def test_reviewer_runs_on_opus_with_own_prompt_and_fixed_format(self):  # AC4
-        self.assertMentions('model: "opus"', "acceptance criteria", "claude.md",
-                             "git diff <from>..<to>", text=self.reviewer)
-        self.assertMentions("no findings.", "(major)", "(minor)", text=self.reviewer)
+    def test_single_end_review_with_three_round_limit(self):  # AC2, AC3
+        self.assertMentions("`full check:`", "whole diff", "every acceptance criterion",
+                             "re-run `full check:`", "review the whole diff again",
+                             "third review still has a major finding, stop and ask",
+                             "never start a fourth review")
+
+    def test_minors_left_open_and_listed_in_the_pr(self):  # AC4
+        self.assertMentions("→ left open", "\"left open\" list", "(major|minor)", "fixed in", "won't fix")
+        self.assertMentions("every major finding and at most three minor", text=self.reviewer)
+
+    def test_pr_review_fixes_get_one_review(self):  # AC5
+        self.assertMentions("review once, covering all the fixes", "pr review:", "`pr review <k>:`",
+                             "starting again at 1")
 
     def test_deviations_and_stop_and_ask(self):  # AC5
         self.assertMentions("## deviations", "stop and ask")
 
     def test_finish_runs_full_check_final_review_and_opens_pr(self):  # AC6
-        self.assertMentions("full check", "whole pr diff", "## verification",
+        self.assertMentions("full check", "whole diff", "## verification",
                              "## discoveries", "vault.py open-pr")
 
     def test_address_pr_review(self):  # AC7
         self.assertMentions("address pr review", "pr review:", "gh pr view", "--paginate",
                              "leave the impl note open")
+        self.assertMentions("no way to choose a subagent's model", "never the implementer's own model",
+                             text=self.reviewer)
 
     def test_resume_from_commits_and_impl_note(self):  # AC8
         self.assertMentions("## resume", "git log --oneline <base>..head", "impl note")
@@ -197,17 +211,23 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
 
 class ImplNoteFormatTest(unittest.TestCase):  # T3 -> AC3, AC4, AC7 (schema fidelity) (#8)
     def test_finding_line_convention_matches_the_fixed_schema(self):
-        """The three tags the skill uses (Step/Final review/PR review) still produce a
+        """The tags the skill uses (Review <k>/PR review, and the old Step/Final review) still produce a
         line lib.py's own IMPL-REV format actually accepts — not just something that
         looks plausible in prose."""
         samples = [
             "- R1 (major): Step 1: example finding → fixed in 1234567",
             "- R2 (minor): Final review: example finding → won't fix: not worth it",
             "- R3 (minor): PR review: example finding → fixed in abcdef1",
+            "- R4 (minor): Review 1: example finding → left open",
         ]
         for line in samples:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["IMPL-REV"]),
                              f"{line!r} should match lib.py's IMPL-REV format")
+
+    def test_left_open_is_minor_only_and_in_the_rule_text(self):  # T6 -> AC6
+        self.assertIn("left open", lib.RULES["IMPL-REV"][1])
+        major = "- R5 (major): Review 1: example finding → left open"
+        self.assertFalse(any(rx.match(major) for _, rx in lib.LINE_FORMATS["IMPL-REV"]))
 
 
 class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> AC2-AC10 (#7)
@@ -222,10 +242,13 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
                              "read the repo's `claude.md`", "project overview note",
                              "the code the issue will touch")
 
-    def test_interview_batched_with_trade_offs(self):  # AC3
-        self.assertMentions("## interview", "states the fact that raised it",
-                             "recommended one first", "trade-offs", "at most 4",
+    def test_interview_open_ended_with_reasoned_recommendations(self):  # AC8
+        self.assertMentions("## interview", "plain prose", "state the fact that raised it",
+                             "no list of options", "only when you're confident",
+                             "always with the reason", "at most 4",
                              "would change the plan is still ambiguous")
+        for gone in ("recommended one first", "trade-offs"):
+            self.assertNotIn(gone, re.sub(r"\s+", " ", self.skill.lower()))
 
     def test_draft_validated_with_user_decisions(self):  # AC4
         self.assertMentions("vault.py new plan", "vault.py validate",
@@ -245,6 +268,13 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
                              "the skill's own judgment calls, flagged for the user to check",
                              "what's out of scope,",
                              "when the implementer must stop and ask")
+
+    def test_summary_ends_with_a_pointed_question(self):  # AC9
+        section = re.sub(r"\s+", " ", self.skill.split("## Summary")[1].split("\n## ")[0])
+        last = section.split("- ")[-1].lower()
+        self.assertIn("one pointed question", last)
+        self.assertIn("riskiest judgment call", last)
+        self.assertMentions("answered the summary's closing question", "explicitly approved it")
 
     def test_approval_seals_only_after_explicit_approval(self):  # AC7
         self.assertMentions("## approval", "vault.py seal plan", "explicit approval",

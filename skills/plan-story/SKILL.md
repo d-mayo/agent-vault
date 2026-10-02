@@ -54,10 +54,11 @@ Before asking the user anything:
 
 ## Interview
 
-Ask only what research couldn't settle. Each question states the fact that
-raised it, and offers options with the recommended one first and its
-trade-offs. Batch questions, at most 4 at a time. Repeat until nothing that
-would change the plan is still ambiguous.
+Ask only what research couldn't settle. Write each question in plain prose,
+open-ended, with no list of options, and state the fact that raised it (what
+you found, and where). Give a recommendation only when you're confident, and
+always with the reason for it. Batch questions, at most 4 at a time. Repeat
+until nothing that would change the plan is still ambiguous.
 
 ## Draft
 
@@ -98,13 +99,15 @@ the raw plan:
 - the user's decisions from the interview,
 - the skill's own judgment calls, flagged for the user to check,
 - what's out of scope,
-- when the implementer must stop and ask.
+- when the implementer must stop and ask,
+- one pointed question about the plan's riskiest judgment call, which the
+  user answers before approving.
 
 ## Approval
 
-Run `vault.py seal plan <repo> <issue>` only after the user's explicit
-approval of the summary, and only after any approved issue-hygiene edits to
-the planned issue (see below) are posted — sealing records the issue's
+Run `vault.py seal plan <repo> <issue>` only after the user has answered
+the summary's closing question and explicitly approved it, and only after
+any approved issue-hygiene edits to the planned issue (see below) are posted — sealing records the issue's
 current edit time, so an edit made afterwards would make `preflight` reject
 the sealed plan later. For requested changes: edit the draft, running
 another plan review (see Plan review) if the change is substantial, re-run

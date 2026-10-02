@@ -1,6 +1,6 @@
 ---
 name: implement-story
-description: 'Take a GitHub issue with a sealed agent-vault plan from its branch to an open pull request, or address PR review comments already requested on one. Implements step by step with an independent review after every step, runs the relevant tests, keeps the impl note current, and resumes cleanly in a new session. Use for requests like "implement #9", "implement issue 9", "continue implementing agent-vault#9", or "address the review on #9".'
+description: 'Take a GitHub issue with a sealed agent-vault plan from its branch to an open pull request, or address PR review comments already requested on one. Implements step by step with one commit and the relevant tests per step, then one independent review of the whole diff at the end, keeps the impl note current, and resumes cleanly in a new session. Use for requests like "implement #9", "implement issue 9", "continue implementing agent-vault#9", or "address the review on #9".'
 ---
 
 # implement-story
@@ -77,12 +77,11 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 1. `git log --oneline <base>..HEAD` to see which steps already have a
    `<type>(<scope>): <step title> (#<issue>)` commit.
-2. Cross-check against the impl note's `## Verification`: a step needs its
-   review run (or re-run) unless a `Step <s> reviewed: …` line already
-   covers it (see **Per step**) — a commit alone doesn't mean the review
-   happened.
-3. Continue from the first step that has neither a commit nor a recorded
-   deviation covering it.
+2. A step is done when its commit exists. Continue from the first step that
+   has neither a commit nor a recorded deviation covering it. If every step
+   is committed, go to **Finish**; its review rounds are counted from the
+   impl note's `## Verification` `Review <k>:` lines (`PR review <k>:` lines
+   belong to **Address PR review**).
 
 ## Per step
 
@@ -103,53 +102,41 @@ Work through the plan's `## Steps` in order. For each step (numbered `<s>`):
    `feat fix chore docs refactor test perf hotfix`, `<scope>` is the area the
    step touches, and `<step title>` is the step's own title. One commit per
    step: never squash two steps together, never split one step across
-   commits.
-5. Review the step: follow `reviewer.md`'s "Prompt" section exactly — it
-   lists everything to send the reviewer and the format it must answer in.
-   Diff to send: `git diff <prev-step-commit>..HEAD` (`<base>`, for step 1).
-6. Fix every `major` finding before moving to the next step, and a `minor`
-   one now if it's quick (leave it otherwise). Amend the step's commit for
-   each fix, so the diff a later review sees is still exactly this step's
-   change. Once you're done fixing for this step, record the outcome in the
-   impl note — write the resolution against the commit's *final* sha, not an
-   intermediate one an earlier amend already replaced:
-   - Under `## Verification`, note that the step was reviewed, e.g.
-     `- Step <s> reviewed: no findings` or `- Step <s> reviewed: R<r>-R<r2>`
-     — **Resume** relies on this line existing to know the review ran, since
-     a clean review adds nothing to `## Review findings`.
-   - For every finding, add a line under `## Review findings`, numbered on
-     from the highest existing `R<n>`:
-     `- R<n> (major|minor): Step <s>: <finding> → fixed in <sha>` or
-     `→ won't fix: <reason>`.
+   commits. There is no review per step; the review comes in **Finish**.
 
 ## Finish
 
-Once every step is committed and reviewed:
+Once every step is committed:
 
 1. Run the plan's `Full check:` command, from its `## Tests` section. If it
-   fails, fix it before opening the PR, and record what broke under
-   `## Discoveries` (or as a deviation, if the fix touched files beyond the
-   step that broke it).
-2. Review the whole PR diff the same way as a step (`git diff <base>..HEAD`,
-   following `reviewer.md`'s "Prompt" section), against every acceptance
-   criterion and the repo `CLAUDE.md`, not only the last step. There's no
-   step to amend here: fix findings with their own commit(s). Record them
-   tagged `Final review:` instead of a step number (e.g. `- R<n>
-   (major|minor): Final review: <finding> → …`), and note the review itself
-   under `## Verification` (`- Final review: no findings` or
-   `- Final review: R<n>-R<n2>`). If you fixed anything, re-run the plan's
-   `Full check:` again before opening the PR.
-3. Fill in the impl note's `## Verification` (each command you ran and what
-   it showed, alongside the per-step review lines already there) and
-   `## Discoveries` (anything worth the retro that isn't already a deviation
-   or a finding). Keep both terse — impl notes cap at 80 body lines.
-4. Write a short summary of the impl note (goal, what changed, notable
+   fails, fix it first, and record what broke under `## Discoveries` (or as
+   a deviation, if the fix touched files beyond the step that broke it).
+2. Review the whole diff, following `reviewer.md`'s "Prompt" section
+   (`git diff <base>..HEAD`, every acceptance criterion, the repo
+   `CLAUDE.md`). Record it under `## Verification` as `- Review <k>: R<n>-R<n2>`
+   or `- Review <k>: no findings`, and each finding under `## Review findings`,
+   numbered on from the highest existing `R<n>`:
+   `- R<n> (major|minor): Review <k>: <finding> → fixed in <sha>`,
+   `→ won't fix: <reason>`, or, for a minor one you're leaving, `→ left open`.
+3. Fix every `major` finding, each fix its own commit (no amending: the
+   whole diff is reviewed anyway), then re-run `Full check:` and review the
+   whole diff again (`Review <k+1>`). Repeat until a review has no major
+   finding. If the third review still has a major finding, stop and ask the
+   user; never start a fourth review.
+4. Minor findings are not fixed here unless a major fix already touches
+   them; record them as `→ left open`. The reviewer reports at most three.
+5. Fill in `## Verification` (each command you ran and what it showed,
+   alongside the `Review <k>:` lines) and `## Discoveries` (anything worth
+   the retro that isn't already a deviation or a finding). Keep both terse —
+   impl notes cap at 80 body lines.
+6. Write a short summary of the impl note (goal, what changed, notable
    findings — not the raw note) to a temp file *outside* the clone (e.g. your
    scratchpad directory); an untracked file inside the clone would make the
-   next command's clean-tree check fail. Open the PR:
+   next command's clean-tree check fail. End it with a "Left open" list of
+   the minor findings still open, for the user to decide. Open the PR:
    `vault.py open-pr <repo> <issue> --body-file <file>`. `Closes #<issue>` is
    added automatically.
-5. Leave the impl note `status: open`; it's sealed later, by the retro.
+7. Leave the impl note `status: open`; it's sealed later, by the retro.
 
 ## Address PR review
 
@@ -164,15 +151,21 @@ Asked to act on review comments for an issue that already has an open PR
 2. For each requested change: if it conflicts with the plan or you're unsure
    how to resolve it, stop and ask the user first (see "Stop and ask if")
    rather than recording a resolution before you have one. Otherwise fix it
-   with the same discipline as a step (its own commit, its own review
-   following `reviewer.md`) or decline it with a reason, then add a line
-   under the impl note's `## Review findings`:
-   `- R<n> (major|minor): PR review: <what was asked> → fixed in <sha>` or
-   `→ won't fix: <reason>` — major if it blocks the change, minor otherwise.
-   Note the review under `## Verification` too (`- PR review reviewed: no
-   findings` or `- PR review: R<n>-R<n2>`).
-3. Push the branch.
-4. Leave the impl note open; don't reseal or reopen anything else.
+   in its own commit, or decline it with a reason. If one comment's fix
+   touches several files or changes behaviour, tell the reviewer which
+   commit to look at first; it gets no extra review.
+3. Review once, covering all the fixes: `git diff <tip>..HEAD`, where `<tip>`
+   is the branch tip before the first fix, with the request texts supplied
+   (see `reviewer.md`). Same rules as **Finish** step 3: fix every major
+   finding, re-run `Full check:` and review again, at most three reviews,
+   then stop and ask. Record each finding under `## Review findings` as
+   `- R<n> (major|minor): PR review: <finding> → fixed in <sha>`,
+   `→ won't fix: <reason>` or (minor only) `→ left open`, and the review under
+   `## Verification` (`- PR review <k>: R<n>-R<n2>` or `- PR review <k>: no
+   findings`); its rounds are counted separately from **Finish**'s, starting
+   again at 1.
+4. Push the branch.
+5. Leave the impl note open; don't reseal or reopen anything else.
 
 ## Stop and ask if
 
@@ -184,4 +177,5 @@ Asked to act on review comments for an issue that already has an open PR
   silently fall back to reviewing on the implementer's own model.
 - A step's `Files:`/`Do:` doesn't match what the repo actually needs, beyond
   a small, worth-recording deviation.
+- The third review still has a major finding.
 - A PR-review request conflicts with the plan or the acceptance criteria.

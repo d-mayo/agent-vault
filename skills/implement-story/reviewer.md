@@ -1,11 +1,11 @@
 # implement-story reviewer
 
-The prompt `implement-story` sends to an independent reviewer subagent after
-every step and once more over the whole PR diff before opening it, and again
-for each fix made while addressing PR review. The reviewer runs on a
-stronger model than the implementer (Opus), because judgment is where the
-stronger model pays off; the implementer's own session model is never
-switched.
+The prompt `implement-story` sends to an independent reviewer subagent over
+the whole diff once all steps are committed (again after each round of fixes,
+up to three reviews), and once over all the fixes made while addressing PR
+review. The reviewer runs on a stronger model than the implementer (Opus),
+because judgment is where the stronger model pays off; the implementer's own
+session model is never switched.
 
 ## Requesting it
 
@@ -18,19 +18,17 @@ implementer's own model (`implement-story`'s own "Stop and ask if").
 
 Give the reviewer, verbatim and in full:
 
-1. What's under review:
-   - a step: its `Files:`, `Do:` and `Done when:` lines;
-   - the final review: "the whole PR diff, against every acceptance
-     criterion below, not just the last step";
-   - a PR-review fix: the request that was made (the comment or review text)
-     and what it's being checked against, since there's no `Files:`/`Do:`
-     for it.
+1. What's under review: the whole diff, against every acceptance criterion
+   below, not just the last commit. For PR-review fixes, also the request
+   texts (the comments or review) the fixes answer, and which commit to look
+   at first if one fix is large.
 2. The plan's `## Acceptance criteria`.
 3. The repo's `CLAUDE.md`, in full.
-4. The diff: `git diff <from>..<to>` — exactly this step's (or fix's) commit
-   for a per-step or PR-review review, `<base>..HEAD` for the final review.
+4. The diff: `git diff <base>..HEAD` for the end review, `git diff
+   <tip>..HEAD` (the branch tip before the first fix) for PR-review fixes.
 5. The exact instructions under "Findings format" below — the severity
-   definitions and the requirement to answer with nothing but those lines.
+   definitions, the reporting limit and the requirement to answer with
+   nothing but those lines.
 
 Ask it to check the diff against all of the above: does it do what was
 asked, does it hold every acceptance criterion it touches, does it follow
@@ -49,25 +47,27 @@ The reviewer answers with one line per finding, most important first:
 
 or `No findings.` if there's nothing to report. Nothing else in the reply.
 
+It reports every major finding and at most three minor ones, most important
+first; it drops the rest.
+
 `major`: the diff doesn't do what it claims, breaks an acceptance criterion
 it touches, or contradicts the repo `CLAUDE.md`. `minor`: everything else
 worth recording — a missed edge case, a simplification, a small
 inconsistency.
 
-The reviewer doesn't number or resolve its own findings, doesn't tag them
-with a step, and doesn't know the eventual fix's commit sha —
-`implement-story` adds all of that once it has acted on each one, continuing
-the numbering already in the impl note's `## Review findings`:
+The reviewer doesn't number or resolve its own findings, doesn't tag them,
+and doesn't know the eventual fix's commit sha — `implement-story` adds all
+of that, continuing the numbering already in the impl note's
+`## Review findings`:
 
 ```
-- R<n> (major|minor): Step <s>: <finding> → fixed in <sha>
-- R<n> (major|minor): Final review: <finding> → won't fix: <reason>
+- R<n> (major|minor): Review <k>: <finding> → fixed in <sha>
+- R<n> (major|minor): Review <k>: <finding> → won't fix: <reason>
+- R<n> (minor): Review <k>: <finding> → left open
 - R<n> (major|minor): PR review: <finding> → fixed in <sha>
 ```
 
-A review that comes back `No findings.` still needs recording — not as a
-`## Review findings` line (there's no finding to put there), but as a
-`## Verification` line (`- Step <s> reviewed: no findings`,
-`- Final review: no findings`, or `- PR review reviewed: no findings`), so a
-later session can tell a step that was reviewed clean from one that was
-never reviewed at all.
+A review that comes back `No findings.` is recorded as a `## Verification`
+line (`- Review <k>: no findings`), not under `## Review findings`; the
+`Review <k>:` lines are also how a later session counts the rounds already
+used.

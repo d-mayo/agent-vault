@@ -18,7 +18,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - `templates/vault-CLAUDE.md`: the vault's `CLAUDE.md`, with `{{CLI}}` filled in at install.
 - `agent_vault/templates/repo-CLAUDE.md`: the skeleton `repo-init` writes for a newly registered repo's own `CLAUDE.md`.
 - `skills/`: user-level skills; each subfolder is copied to `~/.claude/skills/`.
-- `skills/implement-story/`: takes a sealed plan from branch to open PR, step by step, with a review after every step; `skills/implement-story/reviewer.md` holds the reviewer's own prompt and findings format.
+- `skills/implement-story/`: takes a sealed plan from branch to open PR, step by step, with one review at the end; `skills/implement-story/reviewer.md` holds the reviewer's own prompt and findings format.
 - `skills/plan-story/`: turns an issue into a sealed plan, researching first, interviewing only where research leaves something ambiguous, and reviewing the draft with an independent reviewer before the user approves it; `skills/plan-story/plan-reviewer.md` holds the reviewer's own prompt and findings format.
 - `skills/issue/`: the one way to create a GitHub issue: drafts the title and body in the issue template (`lib.ISSUE_SECTIONS`), asks about what's unclear, and calls `vault.py issue create` only after the user approves the exact wording; the retro and plan-story skills call that command too.
 - `skills/retro/`: closes out an issue before merge — audits the repo `CLAUDE.md`, its `README.md` and the project overview one heading at a time, sorts follow-ups into an issue, an idea or dropped, and seals; also runs as a backfill for an issue that already merged without one.
@@ -34,7 +34,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - All note rules live as constants in `agent_vault/lib.py`; `vault.py schema` prints them from there.
 
 ## Gotchas
-<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-09-27 -->
+<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-10-01 -->
 - Hook commands are absolute forward-slash paths to the installer's Python (`sys.executable`) and the script, so they don't depend on PATH or how the Windows hook runner expands `$HOME`. `lib.CLI` builds the same string at runtime; the vault's `Bash(...)` permission must match it exactly.
 - `.gitattributes` pins LF endings: a CRLF `agent_vault/githooks/pre-push` fails in bash and blocks every push.
 - `agent_vault/hooks/push_guard.py` tokenizes quote-aware and treats heredoc bodies as data; add a test case for every new command shape it must handle. Its `gh issue create` rule reads the vault config, so those tests must pass a temp config (`AGENT_VAULT_CONFIG`) or they read the real machine's.
