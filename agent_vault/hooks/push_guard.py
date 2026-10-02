@@ -27,6 +27,8 @@ sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
 
 MAIN = {"main", "refs/heads/main"}
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+GH_VALUE_OPTS = {"-t", "--title", "-b", "--body", "-F", "--body-file", "-l", "--label", "-a", "--assignee",
+                 "-m", "--milestone", "-p", "--project", "-T", "--template", "-e", "--editor"}
 PUSH_VALUE_OPTS = {"--repo", "--receive-pack", "--exec", "-o", "--push-option"}
 PREFIX_CMDS = {"env", "command", "time", "nohup", "exec", "sudo", "xargs",
                "then", "do", "else", "elif", "!", "{"}
@@ -204,6 +206,8 @@ def gh_issue_create(seg: list[str]) -> tuple[bool, str | None]:
             repo = a[len("--repo="):]
         elif a.startswith("-R") and not a.startswith("--") and len(a) > 2:
             repo = a[2:].lstrip("=")
+        elif a in GH_VALUE_OPTS:
+            i += 1                           # its value may look like -R… or a word
         elif not a.startswith("-"):
             words.append(a)
         i += 1

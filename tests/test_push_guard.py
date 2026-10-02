@@ -202,6 +202,10 @@ class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.code(cmd, cwd), 0)
 
+    def test_option_values_are_not_read_as_repo(self):
+        r = self.run_guard('gh issue create --title "-Rx" --body y', self.clone)
+        self.assertEqual(r.returncode, 2, r.stderr)
+
     def test_gh_repo_must_precede_gh(self):
         r = self.run_guard("gh issue create --title x --body GH_REPO=other/repo", self.clone)
         self.assertEqual(r.returncode, 2, r.stderr)
