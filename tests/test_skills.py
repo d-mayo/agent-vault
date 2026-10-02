@@ -197,17 +197,23 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
 
 class ImplNoteFormatTest(unittest.TestCase):  # T3 -> AC3, AC4, AC7 (schema fidelity) (#8)
     def test_finding_line_convention_matches_the_fixed_schema(self):
-        """The three tags the skill uses (Step/Final review/PR review) still produce a
+        """The tags the skill uses (Review <k>/PR review, and the old Step/Final review) still produce a
         line lib.py's own IMPL-REV format actually accepts — not just something that
         looks plausible in prose."""
         samples = [
             "- R1 (major): Step 1: example finding → fixed in 1234567",
             "- R2 (minor): Final review: example finding → won't fix: not worth it",
             "- R3 (minor): PR review: example finding → fixed in abcdef1",
+            "- R4 (minor): Review 1: example finding → left open",
         ]
         for line in samples:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["IMPL-REV"]),
                              f"{line!r} should match lib.py's IMPL-REV format")
+
+    def test_left_open_is_minor_only_and_in_the_rule_text(self):  # T6 -> AC6
+        self.assertIn("left open", lib.RULES["IMPL-REV"][1])
+        major = "- R5 (major): Review 1: example finding → left open"
+        self.assertFalse(any(rx.match(major) for _, rx in lib.LINE_FORMATS["IMPL-REV"]))
 
 
 class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> AC2-AC10 (#7)
