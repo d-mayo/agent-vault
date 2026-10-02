@@ -27,6 +27,7 @@ SKILLS = {
     "implement-story": (r"implement (#\d|issue \d)", "reviewer.md"),
     "plan-story": (r"plan (#\d|issue \d)", "plan-reviewer.md"),
     "retro": (r"retro (#\d|issue \d)", None),
+    "issue": (r"file an issue for", None),
 }
 
 
@@ -302,6 +303,31 @@ class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-A
 
     def test_stop_and_ask(self):
         self.assertMentions("## stop and ask if")
+
+
+class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> AC5, AC6 (#27)
+    def setUp(self):
+        self.skill = read("issue", "SKILL.md")
+
+    def test_description_names_both_triggers(self):  # AC5
+        desc = frontmatter(self.skill)["description"].lower()
+        self.assertIn("file an issue for", desc)
+        self.assertIn("turn this idea into an issue", desc)
+
+    def test_drafts_asks_shows_and_creates_only_after_approval(self):  # AC5
+        self.assertMentions("vault.py schema", "open-ended questions in prose", "never multiple choice",
+                            "the exact title and the exact body", "explicit approval",
+                             "vault.py issue create", "--idea", "## stop and ask if")
+
+    def test_never_runs_gh_issue_create_or_edits_an_issue(self):  # AC5
+        self.assertMentions("## never", "never run `gh issue create`", "never edit an existing issue")
+
+    def test_retro_and_plan_story_create_issues_only_through_the_command(self):  # AC6
+        for name in ("retro", "plan-story"):
+            text = read(name, "SKILL.md")
+            with self.subTest(skill=name):
+                self.assertNotIn("gh issue create", text)
+                self.assertMentions("vault.py issue create", "exact title and body", text=text)
 
 
 class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (#9)

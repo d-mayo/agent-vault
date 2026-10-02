@@ -90,6 +90,13 @@ class InstallTest(unittest.TestCase):
         ours = [h for g in us["hooks"]["PreToolUse"] for h in g["hooks"] if "push_guard" in h["command"]]
         self.assertEqual(len(ours), 1)
 
+    def test_guard_is_registered_for_bash_and_powershell(self):  # T6 -> AC8
+        self.run_install()
+        us = json.loads((self.home / ".claude" / "settings.json").read_text())
+        groups = [g for g in us["hooks"]["PreToolUse"] if any("push_guard" in h["command"] for h in g["hooks"])]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(set(groups[0]["matcher"].split("|")), {"Bash", "PowerShell"})
+
     def test_preserves_foreign_entries(self):  # T3 -> AC3
         report = self.run_install()
         us = json.loads((self.home / ".claude" / "settings.json").read_text())

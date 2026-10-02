@@ -117,6 +117,10 @@ against a draft the user hasn't approved.
   criteria that turned out impossible; needed edits to the issue being
   planned: propose the exact wording to the user before doing anything.
 - Post GitHub edits only after the user approves that wording.
+- A new issue is created only through `vault.py issue create`, after the
+  user approves its exact title and body, written in the template that
+  `vault.py schema` prints; the `issue` skill does this. Edits to existing
+  issues stay as above.
 - Edits to the issue being planned happen before sealing, so the sealed
   plan matches the issue it was sealed against.
 

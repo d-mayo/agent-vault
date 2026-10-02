@@ -113,8 +113,13 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 1. Sort every impl-note discovery and every open point the audit raised
    into exactly one of:
-   - `- issue #<n> created`: propose the exact title and body to the user;
-     post it (`gh issue create`) only after they approve it.
+   - `- issue #<n> created`: draft the issue in the template `vault.py
+     schema` prints (its "Issue body" line), with `retro <repo>#<issue>`
+     under `Source`; show the user the exact title and body, and only after
+     they approve that wording write the body to a temporary file outside
+     the clone and the vault and run `vault.py issue create <repo> --title "<title>"
+     --body-file <file>`. If it refuses the body, fix what it names and get
+     approval of the changed wording again.
    - `- issue #<n> amended`: an existing issue with no sealed plan for
      it — check `Agent/Work/<repo>/<repo>-<n>-plan.md`'s `status:` in the
      vault (missing file, or `status: draft`, both count); an issue with a

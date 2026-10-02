@@ -13,7 +13,8 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   stage <repo> <issue>
   idea add "<title>" [--project <id>] [--source <source>]
   idea drop <file> --reason "..."
-  idea promote <file> [--title "..."] [--repo <name>]
+  idea promote <file> --body-file <file> [--title "..."] [--repo <name>]
+  issue create <repo> --title "..." --body-file <file> [--idea <file>]
   ideas [--project <id>] [--status open|promoted|dropped]
   ideas review
   handoff list
@@ -633,6 +634,63 @@ def cmd_stage(args) -> None:
     print("{}: {}".format(*stage_of(slug, args.repo, args.issue)))
 
 
+def read_issue_body(name: str) -> str:
+    """The body file's text: UTF-8 only, a leading BOM and CRLF endings normalised."""
+    try:
+        raw = Path(name).read_bytes()
+    except OSError as e:
+        die(f"can't read the body file {name}: {e.strerror or e}")
+    try:
+        return raw.decode("utf-8-sig").replace("\r\n", "\n")
+    except UnicodeDecodeError:
+        die(f"the body file {name} isn't UTF-8")
+
+
+def idea_for_issue(index: lib.Index, idea_file: str, repo: str) -> Path:
+    """The open idea an issue is filed from; its project, if any, must list the repo."""
+    path = find_idea(idea_file)
+    fm, _, _ = lib.split_frontmatter(lib.read_text(path))
+    if not fm or fm.get("status") != "open":
+        die(f"{lib.rel(path)} is {(fm or {}).get('status', 'not a valid idea')}; only open ideas can be promoted")
+    project = fm.get("project")
+    if project and project not in index.repos[repo]:
+        die(f"repo '{repo}' doesn't belong to the idea's project '{project}'")
+    return path
+
+
+def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Path | None = None) -> None:
+    """Create an issue from a body file that matches the template; with an idea, promote it.
+    Everything is checked before `gh` runs. The body is posted exactly as the file has it."""
+    require_repo(index, repo)
+    title = one_line(title)
+    if not title:
+        die("the title is empty")
+    body = read_issue_body(body_file)
+    problems = lib.issue_body_problems(body)
+    if problems:
+        print(f"error: {body_file} doesn't match the issue template:", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        sys.exit(1)
+    url = create_with_body(["issue", "create", "--repo", index.slugs[repo], "--title", title], body)
+    if idea is not None:
+        try:
+            update_note(idea, status="promoted", promoted_to=url)
+        except SystemExit:
+            print(f"the issue was created: {url}", file=sys.stderr)
+            raise
+        log_idea_event("idea-promoted", title, idea)
+        print(f"promoted {lib.rel(idea)} to {url}")
+    print(url)
+
+
+def cmd_issue_create(args) -> None:
+    index = lib.Index()
+    require_repo(index, args.repo)
+    idea = idea_for_issue(index, args.idea, args.repo) if args.idea else None
+    file_issue(index, args.repo, args.title, args.body_file, idea)
+
+
 def cmd_idea_promote(args) -> None:
     index = lib.Index()
     path = find_idea(args.file)
@@ -642,8 +700,6 @@ def cmd_idea_promote(args) -> None:
     project = fm.get("project")
     if args.repo:
         require_repo(index, args.repo)
-        if project and project not in index.repos[args.repo]:
-            die(f"repo '{args.repo}' doesn't belong to the idea's project '{project}'")
         name = args.repo
     else:
         if not project:
@@ -653,21 +709,11 @@ def cmd_idea_promote(args) -> None:
             die(f"project '{project}' has {len(names)} repos ({', '.join(names) or 'none'}); "
                 "pass --repo <name>")
         name = names[0]
-    lines = body.splitlines()
-    heading = next((ln[2:].strip() for ln in lines if ln.startswith("# ")), "")
-    title = one_line(args.title or heading)
-    if not title:
+    heading = next((ln[2:].strip() for ln in body.splitlines() if ln.startswith("# ")), "")
+    title = args.title or heading
+    if not one_line(title):
         die("the idea has no title; pass --title")
-    context = "\n".join(ln for ln in lines if not ln.startswith("# ")).strip()
-    issue_body = (context + "\n\n" if context else "") + f"Promoted from the vault idea `{path.stem}`.\n"
-    url = create_with_body(["issue", "create", "--repo", index.slugs[name], "--title", title], issue_body)
-    try:
-        update_note(path, status="promoted", promoted_to=url)
-    except SystemExit:
-        print(f"the issue was created: {url}", file=sys.stderr)
-        raise
-    log_idea_event("idea-promoted", title, path)
-    print(f"promoted {lib.rel(path)} to {url}")
+    file_issue(index, name, title, args.body_file, idea_for_issue(index, args.file, name))
 
 
 def hooks_path_state(top: Path, target: Path) -> tuple[str, str]:
@@ -738,6 +784,12 @@ def cmd_repo_init(args) -> None:
         tpl = (lib.INSTALL_DIR / "templates" / "repo-CLAUDE.md").read_text(encoding="utf-8")
         lib.write_text(claude, tpl.replace("{{PROJECT}}", index.repos[name][0]).replace("{{REPO}}", name))
         report.append("CLAUDE.md: wrote a skeleton (not committed; fill it in)")
+    issue_tpl = top / lib.ISSUE_TEMPLATE_PATH
+    if issue_tpl.exists():
+        report.append(f"{lib.ISSUE_TEMPLATE_PATH}: already exists, left alone")
+    else:
+        lib.write_text(issue_tpl, lib.issue_template_file())
+        report.append(f"{lib.ISSUE_TEMPLATE_PATH}: wrote the issue template (not committed)")
     print(f"repo-init {slug}:")
     print("\n".join("  " + r for r in report))
 
@@ -1007,7 +1059,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "open-pr":
             p.add_argument("--body-file")
         p.set_defaults(fn=fn)
-    p = sub.add_parser("repo-init", help="set up a repo's merge settings, label, hooks and CLAUDE.md")
+    p = sub.add_parser("repo-init", help="set up a repo's merge settings, label, hooks, CLAUDE.md and issue template")
     p.add_argument("path")
     p.set_defaults(fn=cmd_repo_init)
     p = sub.add_parser("claudemd-lint", help="check a repo's CLAUDE.md (default: the current clone)")
@@ -1029,7 +1081,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("--title")
     p.add_argument("--repo")
+    p.add_argument("--body-file", required=True, help="the issue body, in the issue template's sections")
     p.set_defaults(fn=cmd_idea_promote)
+
+    issue = sub.add_parser("issue", help="create an issue from a templated body").add_subparsers(
+        dest="action", required=True, metavar="create")
+    p = issue.add_parser("create", help="refuses a body that doesn't match the issue template")
+    p.add_argument("repo")
+    p.add_argument("--title", required=True)
+    p.add_argument("--body-file", required=True)
+    p.add_argument("--idea", help="an open idea to mark promoted")
+    p.set_defaults(fn=cmd_issue_create)
 
     p = sub.add_parser("ideas", help="list ideas, or `ideas review` for old open ones")
     p.add_argument("action", nargs="?", choices=["review"])

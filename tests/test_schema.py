@@ -142,6 +142,57 @@ class SchemaOutputTest(VaultCase):
         self.assertIn("NEW-RULE", text)
         self.assertNotIn("zzz-event", self.out())
 
+    def test_issue_body_line(self):          # T1 -> AC1
+        line = next(ln for ln in self.out().splitlines() if ln.startswith("Issue body"))
+        pos = [line.index(f"## {n}") for n in lib.ISSUE_SECTIONS]
+        self.assertEqual(pos, sorted(pos))
+        with mock.patch.object(lib, "ISSUE_SECTIONS", {"Zzz": "h"}):
+            self.assertIn("## Zzz", self.out())
+        self.assertNotIn("## Zzz", self.out())
+
+
+class IssueBodyTest(unittest.TestCase):
+    def body(self, **over):
+        parts = {n: over.get(n, "text") for n in lib.ISSUE_SECTIONS}
+        return "\n".join(f"## {n}\n{t}\n" for n, t in parts.items() if t is not None)
+
+    def test_valid_body(self):                  # T1 -> AC1
+        self.assertEqual(lib.issue_body_problems(self.body()), [])
+        self.assertEqual(lib.issue_body_problems(self.body(Constraints="None")), [])
+        self.assertEqual(lib.issue_body_problems("\n\n" + self.body()), [])
+
+    def test_each_mismatch_is_reported(self):   # T1 -> AC1
+        cases = {
+            "missing": (self.body(Constraints=None), "missing section '## Constraints'"),
+            "unknown": (self.body() + "## Extra\nx\n", "unknown section '## Extra'"),
+            "duplicate": (self.body() + "## Problem\nagain\n", "'## Problem' appears 2 times"),
+            "empty": (self.body(Source=""), "'## Source' is empty"),
+            "comment-only": (self.body(Source="<!-- hint\nmore -->"), "'## Source' is empty"),
+            "unclosed-comment": (self.body(Source="<!-- never closed"), "'## Source' is empty"),
+            "leading": ("intro\n" + self.body(), "text before the first"),
+        }
+        for label, (text, want) in cases.items():
+            with self.subTest(label):
+                found = lib.issue_body_problems(text)
+                self.assertTrue(any(want in p for p in found), found)
+        swapped = (self.body().replace("## Problem", "## X").replace("## Source", "## Problem")
+                   .replace("## X", "## Source"))
+        self.assertTrue(any("out of order" in p for p in lib.issue_body_problems(swapped)))
+
+    def test_two_problems_both_named(self):     # T1 -> AC1
+        self.assertEqual(len(lib.issue_body_problems("lead\n" + self.body(Source=None))), 2)
+
+    def test_heading_in_code_fence_ignored(self):   # T1 -> AC1
+        text = self.body(Problem="```\n## Fake\n```")
+        self.assertEqual(lib.issue_body_problems(text), [])
+
+    def test_skeleton_and_template_use_the_constant(self):   # T1 -> AC1
+        for n in lib.ISSUE_SECTIONS:
+            self.assertIn(f"## {n}\n", lib.issue_template_file())
+        self.assertEqual([ln[3:] for ln in lib.issue_body_skeleton().splitlines() if ln],
+                         list(lib.ISSUE_SECTIONS))
+        self.assertTrue(lib.issue_template_file().startswith("---\nname:"))
+
 
 class LayoutAndFrontmatterTest(VaultCase):
     def setUp(self):

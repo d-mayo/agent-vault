@@ -16,6 +16,7 @@ from tests.helpers import CODE, make_vault, run_py, tmpdir, write_config
 
 sys.path.insert(0, str(CODE))
 import lib  # noqa: E402
+import vault  # noqa: E402
 
 CLI = CODE / "vault.py"
 HOOKS = CODE / "hooks"
@@ -450,6 +451,19 @@ class V1RemovedTest(CliCase):
                      "{{CLI}} new plan"):
             self.assertIn(word, text)
         self.assertFalse(re.search(r"new daily|--goal", text))
+
+
+class IssueDocsTest(CliCase):                                     # T11 -> AC11 (#27)
+    def test_usage_and_guide_name_the_issue_commands(self):
+        usage = vault.__doc__
+        guide = TEMPLATE.read_text(encoding="utf-8")
+        for text in (usage, guide):
+            self.assertIn("issue create", text)
+            self.assertIn("idea promote <file> --body-file", text)
+        self.assertIn("issue create", self.cli("--help").stdout + self.cli("issue", "--help").stdout)
+        self.assertIn("`issue` skill", guide)
+        repo_init = next(ln for ln in guide.splitlines() if "repo-init <path>" in ln)
+        self.assertIn(".github/ISSUE_TEMPLATE/issue.md", repo_init)
 
 
 if __name__ == "__main__":
