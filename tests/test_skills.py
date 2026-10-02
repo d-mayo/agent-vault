@@ -241,10 +241,13 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
                              "read the repo's `claude.md`", "project overview note",
                              "the code the issue will touch")
 
-    def test_interview_batched_with_trade_offs(self):  # AC3
-        self.assertMentions("## interview", "states the fact that raised it",
-                             "recommended one first", "trade-offs", "at most 4",
+    def test_interview_open_ended_with_reasoned_recommendations(self):  # AC8
+        self.assertMentions("## interview", "plain prose", "state the fact that raised it",
+                             "no list of options", "only when you're confident",
+                             "always with the reason", "at most 4",
                              "would change the plan is still ambiguous")
+        for gone in ("recommended one first", "trade-offs"):
+            self.assertNotIn(gone, re.sub(r"\s+", " ", self.skill.lower()))
 
     def test_draft_validated_with_user_decisions(self):  # AC4
         self.assertMentions("vault.py new plan", "vault.py validate",
@@ -264,6 +267,13 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
                              "the skill's own judgment calls, flagged for the user to check",
                              "what's out of scope,",
                              "when the implementer must stop and ask")
+
+    def test_summary_ends_with_a_pointed_question(self):  # AC9
+        section = re.sub(r"\s+", " ", self.skill.split("## Summary")[1].split("\n## ")[0])
+        last = section.split("- ")[-1].lower()
+        self.assertIn("one pointed question", last)
+        self.assertIn("riskiest judgment call", last)
+        self.assertMentions("answered its closing question", "explicitly approved")
 
     def test_approval_seals_only_after_explicit_approval(self):  # AC7
         self.assertMentions("## approval", "vault.py seal plan", "explicit approval",
