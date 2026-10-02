@@ -784,6 +784,12 @@ def cmd_repo_init(args) -> None:
         tpl = (lib.INSTALL_DIR / "templates" / "repo-CLAUDE.md").read_text(encoding="utf-8")
         lib.write_text(claude, tpl.replace("{{PROJECT}}", index.repos[name][0]).replace("{{REPO}}", name))
         report.append("CLAUDE.md: wrote a skeleton (not committed; fill it in)")
+    issue_tpl = top / lib.ISSUE_TEMPLATE_PATH
+    if issue_tpl.exists():
+        report.append(f"{lib.ISSUE_TEMPLATE_PATH}: already exists, left alone")
+    else:
+        lib.write_text(issue_tpl, lib.issue_template_file())
+        report.append(f"{lib.ISSUE_TEMPLATE_PATH}: wrote the issue template (not committed)")
     print(f"repo-init {slug}:")
     print("\n".join("  " + r for r in report))
 
@@ -1053,7 +1059,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "open-pr":
             p.add_argument("--body-file")
         p.set_defaults(fn=fn)
-    p = sub.add_parser("repo-init", help="set up a repo's merge settings, label, hooks and CLAUDE.md")
+    p = sub.add_parser("repo-init", help="set up a repo's merge settings, label, hooks, CLAUDE.md and issue template")
     p.add_argument("path")
     p.set_defaults(fn=cmd_repo_init)
     p = sub.add_parser("claudemd-lint", help="check a repo's CLAUDE.md (default: the current clone)")

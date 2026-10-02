@@ -13,6 +13,7 @@ from tests.helpers import CODE, REPO, make_vault, run_py, tmpdir, write_config
 
 sys.path.insert(0, str(CODE))
 import github  # noqa: E402
+import lib  # noqa: E402
 
 VAULT_PY = CODE / "vault.py"
 FAKE_GH = REPO / "tests" / "fake_gh.py"
@@ -799,15 +800,33 @@ class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
         for section in ("Purpose", "Commands", "Layout", "Conventions", "Gotchas"):
             self.assertIn(f"## {section}", text)
         self.assertIn("widgets", text)
-        self.assertEqual(git("status", "--porcelain", cwd=self.clone), "?? CLAUDE.md")   # not committed
+        status = git("status", "--porcelain", "-uall", cwd=self.clone).splitlines()      # not committed
+        self.assertEqual(sorted(status), ["?? .github/ISSUE_TEMPLATE/issue.md", "?? CLAUDE.md"])
+        issue = (self.clone / ".github" / "ISSUE_TEMPLATE" / "issue.md").read_text(encoding="utf-8")
+        for section in ("Problem", "Desired outcome", "Constraints", "Out of scope", "Source"):
+            self.assertIn(f"## {section}\n", issue)
+        self.assertEqual(issue.encode("utf-8"), (REPO / lib.ISSUE_TEMPLATE_PATH).read_bytes())
+
+    def test_existing_issue_template_is_left_alone(self):
+        path = self.clone / ".github" / "ISSUE_TEMPLATE" / "issue.md"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"mine\n")
+        r = self.ok(self.init())
+        self.assertEqual(path.read_bytes(), b"mine\n")
+        self.assertIn("issue.md: already exists, left alone", r.stdout)
+
+    def test_checked_in_issue_template_matches_repo_init(self):     # T8 -> AC10
+        checked_in = (REPO / lib.ISSUE_TEMPLATE_PATH).read_bytes()
+        self.assertEqual(checked_in, lib.issue_template_file().encode("utf-8"))
 
     def test_rerun_changes_nothing(self):
         self.ok(self.init())
-        before = (self.clone / "CLAUDE.md").read_bytes(), self.load(), git("config", "--local", "-l", cwd=self.clone)
+        tpl = self.clone / ".github" / "ISSUE_TEMPLATE" / "issue.md"
+        before = (self.clone / "CLAUDE.md").read_bytes(), self.load(), git("config", "--local", "-l", cwd=self.clone), tpl.read_bytes()
         n_calls = len(self.state["calls"])
         self.ok(self.init())
         self.assertEqual(before, ((self.clone / "CLAUDE.md").read_bytes(), self.load(),
-                                  git("config", "--local", "-l", cwd=self.clone)))
+                                  git("config", "--local", "-l", cwd=self.clone), tpl.read_bytes()))
         writes = [c for c in self.state["calls"][n_calls:] if "PATCH" in c or c[:2] == ["label", "create"]]
         self.assertEqual(writes, [])
 
