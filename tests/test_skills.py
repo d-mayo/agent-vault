@@ -167,25 +167,38 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
         self.assertMentions("vault.py preflight", "git config --get remote.origin.url",
                              "vault.py branch")
 
-    def test_per_step_commits_and_reviews(self):  # AC3
-        self.assertMentions("(#<issue>)", "one commit per step", "review findings",
-                             "(major|minor)", "fixed in", "won't fix")
+    def test_per_step_commits_without_review(self):  # AC1
+        self.assertMentions("(#<issue>)", "one commit per step", "run the tests relevant to this step",
+                             "a step is done when its commit exists")
+        for text in (self.skill, self.reviewer):
+            self.assertNotIn("step <s> reviewed", text.lower())
+            self.assertNotIn("after every step", text.lower())
 
-    def test_reviewer_runs_on_opus_with_own_prompt_and_fixed_format(self):  # AC4
-        self.assertMentions('model: "opus"', "acceptance criteria", "claude.md",
-                             "git diff <from>..<to>", text=self.reviewer)
-        self.assertMentions("no findings.", "(major)", "(minor)", text=self.reviewer)
+    def test_single_end_review_with_three_round_limit(self):  # AC2, AC3
+        self.assertMentions("`full check:`", "whole diff", "every acceptance criterion",
+                             "re-run `full check:`", "review the whole diff again",
+                             "third review still has a major finding, stop and ask",
+                             "never start a fourth review")
+
+    def test_minors_left_open_and_listed_in_the_pr(self):  # AC4
+        self.assertMentions("→ left open", "\"left open\" list", "(major|minor)", "fixed in", "won't fix")
+        self.assertMentions("every major finding and at most three minor", text=self.reviewer)
+
+    def test_pr_review_fixes_get_one_review(self):  # AC5
+        self.assertMentions("review once, covering all the fixes", "pr review:")
 
     def test_deviations_and_stop_and_ask(self):  # AC5
         self.assertMentions("## deviations", "stop and ask")
 
     def test_finish_runs_full_check_final_review_and_opens_pr(self):  # AC6
-        self.assertMentions("full check", "whole pr diff", "## verification",
+        self.assertMentions("full check", "whole diff", "## verification",
                              "## discoveries", "vault.py open-pr")
 
     def test_address_pr_review(self):  # AC7
         self.assertMentions("address pr review", "pr review:", "gh pr view", "--paginate",
                              "leave the impl note open")
+        self.assertMentions("no way to choose a subagent's model", "never the implementer's own model",
+                             text=self.reviewer)
 
     def test_resume_from_commits_and_impl_note(self):  # AC8
         self.assertMentions("## resume", "git log --oneline <base>..head", "impl note")
