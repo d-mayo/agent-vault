@@ -30,7 +30,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 ## Conventions
 <!-- covers: agent_vault/**; verified: 2026-10-01 -->
 - Standard library only; Python 3.9+; must run on Windows.
-- Scripts find the vault through `~/.claude/agent-vault.json` (`lib.VAULT`); `AGENT_VAULT_CONFIG` overrides it. With no config, the CLI exits with an error and hooks exit 0 silently.
+- Scripts find the vault through `~/.claude/agent-vault.json` (`lib.VAULT`); `AGENT_VAULT_CONFIG` overrides it. With no config, the CLI exits with an error (except `lint`, which reads nothing from the vault) and Claude hooks exit 0 silently.
 - Hooks never write `__pycache__` (`sys.dont_write_bytecode`), never block a session from starting, and report blocks with exit code 2 and a message on stderr.
 - All note rules live as constants in `agent_vault/lib.py`; `vault.py schema` prints them from there.
 

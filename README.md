@@ -39,7 +39,7 @@ into Claude's context.)
   `feat/12-note-schema`, and open a PR. Only the owner merges, with **Squash and merge**.
 - Commit messages follow `<type>(<scope>): <subject>`.
 - Two local guards enforce this without depending on GitHub settings: the
-  `pre-push` hook (`agent_vault/githooks/`), and a Claude Code hook that blocks pushes to `main`
+  `pre-push` hook (`agent_vault/githooks/`, which also runs the lint), and a Claude Code hook that blocks pushes to `main`
   and `--no-verify` in every session. The same hook blocks `gh issue create` in registered
   repos: issues go through `vault.py issue create` (the `issue` skill), which checks the body
   against one template.
