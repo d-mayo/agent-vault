@@ -50,7 +50,11 @@ Before asking the user anything:
 4. Read the repo's `CLAUDE.md`.
 5. Read the project overview note in the vault (`Agent/Projects/<id>.md`) —
    the project whose `repos:` lists this repo's `owner/name`.
-6. Read the code the issue will touch.
+6. Read the project's active decision records: `vault.py decisions
+   --project <id>` lists them (`<id>` as in step 5), then read the ones
+   that bear on this issue in `Agent/Decisions/<id>/`. A plan must not
+   contradict one unless a decision in it replaces that record.
+7. Read the code the issue will touch.
 
 ## Interview
 
@@ -69,7 +73,13 @@ until nothing that would change the plan is still ambiguous.
    from the user's answer in the interview ends the line with
    " (user decision)" after the reason, e.g. `- D1: <decision>, because
    <reason> (user decision)` — `lib.py`'s format only allows text after
-   "because", never between the number and the colon) · `Implementer's
+   "because", never between the number and the colon). A decision that
+   later work must keep following, beyond this issue, is lasting: end its
+   line with " (lasting)", after " (user decision)" when both apply. One
+   that reverses an active decision record says `replaces [[<record>]]`
+   in its line and is lasting; citing a record without reversing it never
+   uses that phrase. Decisions only about this issue aren't lasting ·
+   `Implementer's
    discretion` · `Context` (pointers to code, not copies) · `Steps`
    (`### <n>. <title>`, each with `Files:`, `Do:`, `Done when:`) · `Tests`
    (`- T<n> → AC<m>: …`, then a `Full check:` line) · `Stop and ask if` ·
@@ -98,6 +108,8 @@ the raw plan:
 - what gets built,
 - the user's decisions from the interview,
 - the skill's own judgment calls, flagged for the user to check,
+- the lasting decisions, each marked as new or as replacing a named
+  record, so the user confirms what becomes permanent,
 - what's out of scope,
 - when the implementer must stop and ask,
 - one pointed question about the plan's riskiest judgment call, which the

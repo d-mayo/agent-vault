@@ -402,7 +402,61 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 185)
+        self.assertLessEqual(len(text.splitlines()), 215)
+
+
+class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC9, AC10 (#36)
+    def setUp(self):
+        self.plan_story = read("plan-story", "SKILL.md")
+        self.reviewer = read("plan-story", "plan-reviewer.md")
+        self.retro = read("retro", "SKILL.md")
+        self.guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+
+    def section(self, text, heading):
+        return re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.S | re.M).group(1)
+
+    def test_plan_story_reads_active_records_in_research(self):          # AC9
+        self.assertMentions("`vault.py decisions --project <id>`", "active decision records",
+                            "must not contradict one unless a decision in it replaces that record",
+                            text=self.section(self.plan_story, "Research"))
+
+    def test_plan_story_marks_lasting_and_replacing_decisions(self):     # AC9
+        self.assertMentions('" (lasting)"', "`replaces [[<record>]]`", "citing a record without reversing it",
+                            text=self.section(self.plan_story, "Draft"))
+        self.assertIn(lib.LASTING_SUFFIX, " (lasting)")
+        self.assertTrue(any(rx.match("- D1: x, because y (user decision) (lasting)")
+                            for _, rx in lib.LINE_FORMATS["PLAN-D"]))
+
+    def test_plan_story_summary_lists_lasting_decisions_before_the_closing_question(self):     # AC9
+        summary = re.sub(r"\s+", " ", self.section(self.plan_story, "Summary").lower())
+        self.assertIn("the lasting decisions", summary)
+        self.assertLess(summary.index("the lasting decisions"), summary.index("one pointed question"))
+
+    def test_plan_reviewer_gets_records_and_counts_an_unnamed_contradiction_as_major(self):     # AC9
+        self.assertMentions("active decision records", "`vault.py decisions --project <id>`",
+                            "`replaces [[<record>]]`", text=self.reviewer)
+        major = re.sub(r"\s+", " ", self.reviewer.split("`major`:")[1].split("`minor`:")[0].lower())
+        self.assertIn("active decision record that the draft doesn't name as replaced", major)
+
+    def test_retro_records_decisions_before_sealing(self):               # AC10
+        self.assertMentions("vault.py decision add", "--replaces", "`- decision [[<record>]]`",
+                            "ending in \" (lasting)\"", "`seal retro` refuses until every lasting plan decision",
+                            "--source \"plan <repo>#<issue> D<k>\"", "--source \"retro <repo>#<issue>\"",
+                            text=self.retro)
+        self.assertLess(self.retro.index("## Decisions"), self.retro.index("## Seal"))
+
+    def test_retro_audits_standing_decisions_as_generated(self):         # AC10
+        audit = re.sub(r"\s+", " ", self.section(self.retro, "Audit").lower())
+        self.assertIn("`## standing decisions` is generated", audit)
+        self.assertIn("audit it as `confirmed`", audit)
+
+    def test_decision_follow_up_form_matches_the_format(self):           # AC8, AC10
+        for line in ("- decision [[demo-d1-keep-it-small]]", "- decision [[demo-d1-keep-it-small]] (R2)"):
+            self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]), line)
+
+    def test_vault_guide_lists_the_folder_and_both_commands(self):       # AC10
+        self.assertMentions("`Decisions/<project>/<project>-d<n>-<slug>.md`", "decision add", "{{CLI}} decisions",
+                            "--replaces", text=self.guide)
 
 
 if __name__ == "__main__":
