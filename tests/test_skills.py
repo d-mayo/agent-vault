@@ -383,6 +383,14 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                              f"{line!r} should match lib.py's RETRO-FOLLOW format")
 
+    def test_stop_and_ask_covers_a_pr_that_no_longer_closes_the_issue(self):  # T5 -> AC5 (#35)
+        text = read("retro", "SKILL.md")
+        section = re.search(r"^## Stop and ask if\n(.*)", text, re.S | re.M).group(1)
+        low = " ".join(section.lower().split())
+        self.assertIn("`seal retro` refuses because the pr will no longer close the issue", low)
+        self.assertIn("put the fix to the user", low)
+        self.assertIn("closing the issue by hand", low)
+
     def test_left_open_findings_sorted_with_reference(self):  # T5 -> AC5 (#32)
         text = read("retro", "SKILL.md")
         section = re.search(r"^## Follow-ups\n(.*?)^## ", text, re.S | re.M).group(1)
@@ -394,7 +402,7 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 181)
+        self.assertLessEqual(len(text.splitlines()), 185)
 
 
 if __name__ == "__main__":
