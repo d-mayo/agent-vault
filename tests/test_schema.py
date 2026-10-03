@@ -382,6 +382,35 @@ class RetroReadmeAuditTest(VaultCase):        # T1 -> AC6
         self.assertEqual(lib.validate_file(self.retro).errors, [])
 
 
+class RetroFollowRefTest(VaultCase):      # T1 -> AC1
+    def matches(self, line: str) -> bool:
+        return any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"])
+
+    def test_forms_with_and_without_reference(self):
+        for base in ("- issue #4 created", "- issue #4 amended", "- idea [[some idea]]",
+                     "- dropped: not worth it"):
+            for suffix in ("", " (R2)", " (R2, R5)"):
+                self.assertTrue(self.matches(base + suffix), base + suffix)
+
+    def test_malformed_suffix_rejected(self):
+        for base in ("- issue #4 created", "- issue #4 amended", "- idea [[some idea]]"):
+            for suffix in (" (2)", " (R)", " (R2,R5)", " (R2) "):
+                self.assertFalse(self.matches(base + suffix), base + suffix)
+
+    def test_dropped_needs_reason_besides_reference(self):
+        self.assertFalse(self.matches("- dropped: (R2)"))
+        self.assertFalse(self.matches("- dropped: (R2, R5)"))
+        self.assertTrue(self.matches("- dropped: (R2 was a typo) (R2)"))
+
+    def test_schema_shows_reference(self):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            vault.cmd_schema(None)
+        text = buf.getvalue()
+        self.assertIn("- issue #<n> created[ (R<n>[, R<m>…])]", text)
+        self.assertIn("(R<n>[, R<m>…])", text)
+
+
 class CrossNoteTest(VaultCase):
     def test_repos_empty_and_code_links(self):    # T9 -> AC9
         self.load_base()
