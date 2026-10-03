@@ -211,7 +211,8 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
                             backup=True):
             report.append(f"updated {path}")
     write_if_changed(config_path, json.dumps(
-        {"vault": vault.as_posix(), "managed_allow": allow}, indent=2, ensure_ascii=False) + "\n")
+        {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
+         "managed_allow": allow}, indent=2, ensure_ascii=False) + "\n")
 
     template = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
     if write_if_changed(vault / "CLAUDE.md", template.replace("{{CLI}}", cli)):

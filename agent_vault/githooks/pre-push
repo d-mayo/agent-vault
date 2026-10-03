@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # agent-vault-hook: pre-push  (marker: `repo-init` recognises this file by this line)
-# agent-vault pre-push guard: no direct pushes to main; branch names must be <type>/<issue>-<slug>.
+# agent-vault pre-push guard: no direct pushes to main; branch names must be <type>/<issue>-<slug>;
+# a push that creates or updates a branch must pass `vault.py lint`.
 re='^(feat|fix|chore|docs|refactor|test|perf|hotfix)/[0-9]+-[a-z0-9-]+$'
+pushes_branch=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   [[ "$local_sha" =~ ^0+$ ]] && continue            # deletion (SHA-1 or SHA-256)
   [[ "$remote_ref" == refs/heads/* ]] || continue   # tags, notes and other refs
@@ -12,5 +14,24 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   if ! [[ "$branch" =~ $re ]]; then
     echo "pre-push: branch '$branch' must match <type>/<issue>-<slug>, e.g. feat/12-note-schema" >&2; exit 1
   fi
+  pushes_branch=1
 done
+[ "$pushes_branch" = 1 ] || exit 0
+
+# Lint once per push, on the working tree. Python comes from the config the installer writes
+# (never PATH); vault.py is the one next to this hook's folder. Git runs us in the clone's top level.
+config="${AGENT_VAULT_CONFIG:-$HOME/.claude/agent-vault.json}"
+py=""
+if [ -f "$config" ]; then
+  py=$(sed -n 's/^[[:space:]]*"python":[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' "$config" | head -n 1)
+fi
+vault_py="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/vault.py"
+if [ -z "$py" ] || ! [ -f "$py" ] || ! [ -f "$vault_py" ]; then
+  echo "pre-push: cannot find agent-vault's Python or vault.py (config: $config); rerun install.py" >&2
+  exit 1
+fi
+if ! "$py" "$vault_py" lint >&2; then
+  echo "pre-push: lint failed, so the push is refused. Fix it, or run: \"$py\" \"$vault_py\" lint" >&2
+  exit 1
+fi
 exit 0
