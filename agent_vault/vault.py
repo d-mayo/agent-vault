@@ -430,6 +430,15 @@ def cmd_seal_retro(args) -> None:
                 f"says {branch}; check out {branch} first")
     if github.git("status", "--porcelain", cwd=top):
         die("the working tree isn't clean; commit or stash your changes first")
+    if not closed:
+        pr = retro_fm["pr"]
+        pr_info = github.pr_closing(slug, pr)
+        if (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
+            if pr_info["state"] == "OPEN":
+                die(f"PR #{pr} will not close issue #{args.issue} when it merges; restore a "
+                    f"`Closes #{args.issue}` line in its description, then run this again")
+            die(f"PR #{pr} is {pr_info['state']} and did not close issue #{args.issue}; "
+                "close the issue by hand, then run this again")
 
     claude_path = top / "CLAUDE.md"
     if not claude_path.is_file():
