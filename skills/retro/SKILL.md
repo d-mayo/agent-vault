@@ -111,8 +111,9 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Follow-ups
 
-1. Sort every impl-note discovery and every open point the audit raised
-   into exactly one of:
+1. Sort every impl-note discovery, every review finding the impl note
+   records as `→ left open`, and every open point the audit raised into
+   exactly one of:
    - `- issue #<n> created`: draft the issue in the template `vault.py
      schema` prints (its "Issue body" line), with `retro <repo>#<issue>`
      under `Source`; show the user the exact title and body, and only after
@@ -130,6 +131,10 @@ name (e.g. `agent-vault`), never `owner/name`.
      --source "retro <repo>#<issue>"`, `<id>` the project whose `repos:`
      lists this repo.
    - `- dropped: <why>`.
+
+   A line settling a left-open finding ends in its number, e.g.
+   `- dropped: cosmetic only (R2)` or `- idea [[<idea>]] (R2, R3)`; one
+   finding, one line. `seal retro` refuses while one is unsorted.
 2. Check the project's open ideas (`vault.py ideas --project <id>`, same
    `<id>`) and propose dropping, with `vault.py idea drop <file> --reason
    "..."`, the ones this issue resolved.
