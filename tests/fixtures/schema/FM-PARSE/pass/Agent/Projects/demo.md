@@ -18,4 +18,4 @@ A demo project.
 One repo.
 
 ## Standing decisions
-- Keep it small, because it is a demo.
+None

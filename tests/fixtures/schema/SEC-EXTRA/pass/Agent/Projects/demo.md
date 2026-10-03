@@ -16,8 +16,8 @@ A demo project.
 ## Architecture
 One repo.
 
-## Standing decisions
-- Keep it small, because it is a demo.
-
 ### A subsection is fine
 x
+
+## Standing decisions
+None

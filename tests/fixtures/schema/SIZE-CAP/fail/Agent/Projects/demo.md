@@ -59,10 +59,11 @@ A demo project.
 - filler
 - filler
 - filler
+- filler
 - Working.
 
 ## Architecture
 One repo.
 
 ## Standing decisions
-- Keep it small, because it is a demo.
+None
