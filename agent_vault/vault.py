@@ -352,6 +352,48 @@ def audit_problems(label: str, current: list[str], audit: list[tuple[str, str]])
     return out
 
 
+FINDING_NUM_RE = re.compile(r"^- R(\d+) \((?:major|minor)\): ")
+
+
+def finding_numbers(impl_body: str) -> tuple[set[int], set[int]]:
+    """(all R numbers, R numbers whose finding is '→ left open') in an impl note's findings."""
+    allnums, left_open = set(), set()
+    for ln in dict(lib.split_sections(lib.blank_code_blocks(impl_body))).get("Review findings", []):
+        m = FINDING_NUM_RE.match(ln)
+        if m:
+            allnums.add(int(m.group(1)))
+            if ln.endswith("→ left open"):
+                left_open.add(int(m.group(1)))
+    return allnums, left_open
+
+
+def followup_problems(impl_body: str, follow_lines: list[str]) -> list[str]:
+    """Left-open findings with no follow-up line, findings settled twice, references to missing ones (D4, D5)."""
+    allnums, left_open = finding_numbers(impl_body)
+    counts: dict[int, int] = {}
+    for ln in follow_lines:
+        m = lib.FINDING_REFS_RE.search(ln)
+        if m:
+            for n in re.findall(r"R(\d+)", m.group(1)):
+                counts[int(n)] = counts.get(int(n), 0) + 1
+
+    def fmt(nums) -> str:
+        return ", ".join(f"R{n}" for n in sorted(nums))
+
+    out = []
+    unsorted = left_open - set(counts)
+    if unsorted:
+        out.append(f"Follow-ups: no follow-up line for the left-open review finding(s) {fmt(unsorted)}; "
+                   "end one with ' (R<n>)' (issue, idea or dropped)")
+    twice = {n for n, c in counts.items() if c > 1}
+    if twice:
+        out.append(f"Follow-ups: more than one follow-up line for {fmt(twice)}")
+    unknown = set(counts) - allnums
+    if unknown:
+        out.append(f"Follow-ups: the impl note has no review finding {fmt(unknown)}")
+    return out
+
+
 def trial_seal_errors(path: Path, fm: dict, body: str) -> list[str]:
     trial = {**fm, "status": "sealed"}
     return lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
@@ -423,6 +465,9 @@ def cmd_seal_retro(args) -> None:
                         "the README audit must be 'None'")
     if problems:
         die(f"{lib.rel(retro_path)} doesn't cover every heading yet:\n  " + "\n  ".join(problems))
+    follow_problems = followup_problems(impl_body, retro_secs.get("Follow-ups", []))
+    if follow_problems:
+        die(f"{lib.rel(retro_path)} has unsorted review findings:\n  " + "\n  ".join(follow_problems))
 
     for path, fm, body in ((impl_path, impl_fm, impl_body), (retro_path, retro_fm, retro_body)):
         errors = trial_seal_errors(path, fm, body)

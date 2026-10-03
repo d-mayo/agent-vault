@@ -383,6 +383,19 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                              f"{line!r} should match lib.py's RETRO-FOLLOW format")
 
+    def test_left_open_findings_sorted_with_reference(self):  # T5 -> AC5 (#32)
+        text = read("retro", "SKILL.md")
+        section = re.search(r"^## Follow-ups\n(.*?)^## ", text, re.S | re.M).group(1)
+        low = " ".join(section.lower().split())
+        self.assertIn("left open", low)
+        self.assertIn("`seal retro` refuses", low)
+        refs = re.findall(r"`(- [^`]*\(R\d+(?:, R\d+)*\))`", section)
+        self.assertTrue(refs, "the Follow-ups section should show a (R<n>) reference example")
+        for line in refs:
+            self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
+                            f"{line!r} should match lib.py's RETRO-FOLLOW format")
+        self.assertLessEqual(len(text.splitlines()), 181)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -514,6 +514,65 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.fill_retro(FULL_CLAUDE_AUDIT, "None", FULL_OVERVIEW_AUDIT)
         self.ok(self.cli("seal", "retro", "widget", "7"))
 
+    def add_findings(self, *lines):
+        p = self.note("impl")
+        text = p.read_text(encoding="utf-8").replace(
+            "## Review findings\nNone\n", "## Review findings\n" + "\n".join(lines) + "\n")
+        p.write_text(text, encoding="utf-8", newline="\n")
+
+    def set_follow_ups(self, *lines):
+        text = self.retro.read_text(encoding="utf-8").replace(
+            "## Follow-ups\nNone\n", "## Follow-ups\n" + "\n".join(lines) + "\n")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+
+    def unsorted_prep(self, *follow_ups):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.add_findings("- R1 (minor): Review 1: odd name → left open",
+                          "- R2 (major): Review 1: bug → fixed in abc1234")
+        if follow_ups:
+            self.set_follow_ups(*follow_ups)
+
+    def assert_nothing_sealed(self, head):
+        self.assertEqual(self.fm(self.note("impl"))["status"], "open")
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.clone), head)
+
+    def test_refuses_unsorted_left_open_finding(self):    # T2 -> AC2
+        self.unsorted_prep()
+        head = git("rev-parse", "HEAD", cwd=self.clone)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "unsorted", "R1")
+        self.assert_nothing_sealed(head)
+
+    def test_refuses_unsorted_left_open_finding_on_closed_issue(self):    # T2 -> AC2
+        self.unsorted_prep()
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        head = git("rev-parse", "HEAD", cwd=self.clone)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "unsorted", "R1")
+        self.assert_nothing_sealed(head)
+
+    def test_seals_when_left_open_finding_is_sorted(self):    # T3 -> AC4
+        self.unsorted_prep("- dropped: cosmetic only (R1)")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_seals_closed_issue_when_left_open_finding_is_sorted(self):    # T3 -> AC4
+        self.unsorted_prep("- dropped: cosmetic only (R1, R2)")
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+
+    def test_refuses_finding_settled_twice(self):    # T4 -> AC3
+        self.unsorted_prep("- dropped: cosmetic only (R1)", "- dropped: also cosmetic (R1)")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "more than one", "R1")
+
+    def test_refuses_reference_to_missing_finding(self):    # T4 -> AC3
+        self.unsorted_prep("- dropped: cosmetic only (R1, R9)")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "no review finding", "R9")
+
     def test_refuses_missing_notes(self):
         self.sealed()
         self.ok(self.branch())

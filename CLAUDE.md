@@ -5,7 +5,7 @@ Scripts, hooks and skills for the Claude + Obsidian workflow; installed to `~/.c
 Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is the source of truth).
 
 ## Commands
-<!-- covers: install.py, tests/**; verified: 2026-10-01 -->
+<!-- covers: install.py, tests/**; verified: 2026-10-03 -->
 - Run tests: `python -m unittest discover -s tests -t .` (stdlib only, but the tests need `ruff` on your PATH; pytest also works)
 - Lint: `ruff check .`
 - Install locally: `python install.py --vault <path to Notes>`
@@ -22,20 +22,20 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - `skills/implement-story/`: takes a sealed plan from branch to open PR, step by step, with one review at the end; `skills/implement-story/reviewer.md` holds the reviewer's own prompt and findings format.
 - `skills/plan-story/`: turns an issue into a sealed plan, researching first, interviewing only where research leaves something ambiguous, and reviewing the draft with an independent reviewer before the user approves it; `skills/plan-story/plan-reviewer.md` holds the reviewer's own prompt and findings format.
 - `skills/issue/`: the one way to create a GitHub issue: drafts the title and body in the issue template (`lib.ISSUE_SECTIONS`), asks about what's unclear, and calls `vault.py issue create` only after the user approves the exact wording; the retro and plan-story skills call that command too.
-- `skills/retro/`: closes out an issue before merge — audits the repo `CLAUDE.md`, its `README.md` and the project overview one heading at a time, sorts follow-ups into an issue, an idea or dropped, and seals; also runs as a backfill for an issue that already merged without one.
+- `skills/retro/`: closes out an issue before merge — audits the repo `CLAUDE.md`, its `README.md` and the project overview one heading at a time, sorts follow-ups, including every `→ left open` review finding (named by a trailing `(R<n>)`; `seal retro` refuses an unsorted one), into an issue, an idea or dropped, and seals; also runs as a backfill for an issue that already merged without one.
 - `agent_vault/githooks/pre-push`: blocks pushes to `main` and bad branch names, and runs `vault.py lint` on any push that creates or updates a branch. The one copy: this repo's `core.hooksPath` points at it, and `repo-init` points other repos at the installed `~/.claude/agent-vault/githooks/`.
 - `.github/ISSUE_TEMPLATE/issue.md`: the GitHub issue template for this repo, identical to what `repo-init` writes (generated from `lib.ISSUE_SECTIONS`; a test keeps them equal).
 - `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`. `tests/fake_gh.py` stands in for `gh` (`AGENT_VAULT_GH`); tests never touch GitHub.
 
 ## Conventions
-<!-- covers: agent_vault/**; verified: 2026-10-01 -->
+<!-- covers: agent_vault/**; verified: 2026-10-03 -->
 - Standard library only; Python 3.9+; must run on Windows.
 - Scripts find the vault through `~/.claude/agent-vault.json` (`lib.VAULT`); `AGENT_VAULT_CONFIG` overrides it. With no config, the CLI exits with an error (except `lint`, which reads nothing from the vault) and Claude hooks exit 0 silently.
 - Hooks never write `__pycache__` (`sys.dont_write_bytecode`), never block a session from starting, and report blocks with exit code 2 and a message on stderr.
 - All note rules live as constants in `agent_vault/lib.py`; `vault.py schema` prints them from there.
 
 ## Gotchas
-<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-10-01 -->
+<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-10-03 -->
 - Hook commands are absolute forward-slash paths to the installer's Python (`sys.executable`) and the script, so they don't depend on PATH or how the Windows hook runner expands `$HOME`. `lib.CLI` builds the same string at runtime; the vault's `Bash(...)` permission must match it exactly.
 - `.gitattributes` pins LF endings: a CRLF `agent_vault/githooks/pre-push` fails in bash and blocks every push.
 - `agent_vault/hooks/push_guard.py` tokenizes quote-aware and treats heredoc bodies as data; add a test case for every new command shape it must handle. Its `gh issue create` rule reads the vault config, so those tests must pass a temp config (`AGENT_VAULT_CONFIG`) or they read the real machine's.

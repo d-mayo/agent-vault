@@ -133,6 +133,10 @@ AC_LINE_RE = re.compile(r"^- AC(\d+): \S")
 TEST_LINE_RE = re.compile(r"^- T\d+ → (AC\d+(?:, AC\d+)*): \S")
 _TIME = r"(?:[01]\d|2[0-3]):[0-5]\d"
 
+# Optional trailing review-finding reference on a retro follow-up line: " (R2)" or " (R2, R5)".
+FINDING_REFS = r"(?: \(R\d+(?:, R\d+)*\))?"
+FINDING_REFS_RE = re.compile(r" \((R\d+(?:, R\d+)*)\)$")
+
 # Line formats: rule -> [(shape shown by `schema`, regex)]. A line under a section
 # bound to the rule (SECTION_LINES) must match one of them.
 LINE_FORMATS = {
@@ -149,10 +153,14 @@ LINE_FORMATS = {
                   re.compile(r"^- R\d+ \(minor\): .+ → left open$"))],
     "RETRO-AUDIT": [("- <section heading>: confirmed|rewritten|removed — <reason>",
                      re.compile(r"^- .+: (?:confirmed|rewritten|removed) — \S"))],
-    "RETRO-FOLLOW": [("- issue #<n> created", re.compile(r"^- issue #[1-9]\d* created$")),
-                     ("- issue #<n> amended", re.compile(r"^- issue #[1-9]\d* amended$")),
-                     ("- idea [[<idea>]]", re.compile(r"^- idea \[\[[^\]]+\]\]$")),
-                     ("- dropped: <why>", re.compile(r"^- dropped: \S"))],
+    "RETRO-FOLLOW": [("- issue #<n> created[ (R<n>[, R<m>…])]",
+                      re.compile(rf"^- issue #[1-9]\d* created{FINDING_REFS}$")),
+                     ("- issue #<n> amended[ (R<n>[, R<m>…])]",
+                      re.compile(rf"^- issue #[1-9]\d* amended{FINDING_REFS}$")),
+                     ("- idea [[<idea>]][ (R<n>[, R<m>…])]",
+                      re.compile(rf"^- idea \[\[[^\]]+\]\]{FINDING_REFS}$")),
+                     ("- dropped: <why>[ (R<n>[, R<m>…])]",
+                      re.compile(r"^- dropped: (?!\(R\d+(?:, R\d+)*\)$)\S"))],
     "DAILY-LINE": [
         ("- HH:MM <repo>#<n> <event>[ — <detail>]",
          re.compile(rf"^- {_TIME} [A-Za-z0-9._-]+#[1-9]\d* (?:{'|'.join(EVENTS)})(?: — \S.*)?$")),
@@ -205,7 +213,7 @@ RULES = {
     "IMPL-DEV": ("error", "Deviation lines are '- Step <n>: …' (or None)"),
     "IMPL-REV": ("error", "Review findings end in '→ fixed in <sha>', '→ won't fix: <reason>' or, for minor only, '→ left open' (or None)"),
     "RETRO-AUDIT": ("error", "Audit lines are '- <heading>: confirmed|rewritten|removed — <reason>'"),
-    "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link or dropped"),
+    "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link or dropped, each optionally ending in ' (R<n>[, R<m>…])' for the left-open findings they settle"),
     "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]', '- HH:MM session — …' or an idea event line"),
     "X-REPO-DUP": ("error", "A repo name appears in the repos: of at most one project"),
     "X-REPO-UNREG": ("error", "Work/<repo>/ belongs to a repo listed in some project's repos:"),
