@@ -11,7 +11,7 @@ from pathlib import Path
 
 import sys
 
-from tests.helpers import CODE, make_vault, run_py, tmpdir, write_config
+from tests.helpers import CODE, REPO, make_vault, run_py, tmpdir, write_config
 
 sys.path.insert(0, str(CODE))
 import lib  # noqa: E402
@@ -537,6 +537,11 @@ class LintCliTest(CliCase):                                        # T3-T5, T8 -
         r = run_py(CLI, ["status"], config=cfg)
         self.assertEqual(r.returncode, 1)
         self.assertIn("no usable vault", r.stderr)
+
+    def test_readme_names_ruff_path_and_the_command(self):         # T10 -> AC10
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        for needle in ("ruff", "PATH", "ruff check ."):
+            self.assertIn(needle, readme)
 
     def test_usage_and_guide_name_lint(self):                      # T10 -> AC10
         self.assertIn("\n  lint\n", vault.__doc__)
