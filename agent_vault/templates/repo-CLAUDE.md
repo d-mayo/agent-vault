@@ -7,6 +7,7 @@ Project: {{PROJECT}}
 ## Commands
 <!-- covers: package.json, Makefile -->
 - Run tests: `<command>`
+- Lint: `<command>`
 
 ## Layout
 <!-- covers: src/** -->

@@ -36,4 +36,4 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what 
 - `{{CLI}} handoff list` and `{{CLI}} handoff pull "<path>" [--project <id>]`
 - `{{CLI}} log "<text>" [--project <id>]`
 
-`{{CLI}} schema` prints the full note rules. `{{CLI}} status` lists projects and the open idea count. `{{CLI}} validate` checks everything.
+`{{CLI}} lint` (run inside a clone) runs `claudemd-lint` and then the repo's declared `Lint:` command; it fails rather than skip a missing tool. `{{CLI}} schema` prints the full note rules. `{{CLI}} status` lists projects and the open idea count. `{{CLI}} validate` checks everything.

@@ -259,7 +259,7 @@ class SessionStartTest(HookCase):
         self.assertIn("Build widgets.", out)
 
     def test_claudemd_lint_failures_shown(self):  # T2 -> AC8
-        self.put(self.repo / "CLAUDE.md", "# widget\n\n## Layout\n- `missing.py`: nope.\n")
+        self.put(self.repo / "CLAUDE.md", "# widget\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n- `missing.py`: nope.\n")
         git("add", "CLAUDE.md", cwd=self.repo)
         git("commit", "-q", "-m", "docs", cwd=self.repo)
         out = self.start(self.repo)
@@ -267,7 +267,7 @@ class SessionStartTest(HookCase):
         self.assertIn("missing.py", out)
 
     def test_claudemd_lint_ok_and_stale_count(self):  # T2 -> AC8
-        self.put(self.repo / "CLAUDE.md", "# widget\n\n## Purpose\nx.\n")
+        self.put(self.repo / "CLAUDE.md", "# widget\n\n## Purpose\nx.\n\n## Commands\n- Lint: `git --version`\n")
         git("add", "CLAUDE.md", cwd=self.repo)
         git("commit", "-q", "-m", "docs", cwd=self.repo)
         out = self.start(self.repo)

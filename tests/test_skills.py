@@ -195,6 +195,15 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
         self.assertMentions("full check", "whole diff", "## verification",
                              "## discoveries", "vault.py open-pr")
 
+    def test_lint_runs_with_full_check_before_every_review(self):  # T6 -> AC6 (#33)
+        text = re.sub(r"\s+", " ", self.skill)
+        finish = text[text.index("## Finish"):text.index("## Address PR review")]
+        pr_review = text[text.index("## Address PR review"):text.rindex("## Stop and ask if")]
+        self.assertEqual(finish.count("`vault.py lint`"), 2)           # first review and each re-review
+        self.assertLess(finish.index("`vault.py lint`"), finish.index("Review the whole diff"))
+        self.assertIn("Request no review while either fails", finish)
+        self.assertLess(pr_review.index("`vault.py lint`"), pr_review.index("review once"))
+
     def test_address_pr_review(self):  # AC7
         self.assertMentions("address pr review", "pr review:", "gh pr view", "--paginate",
                              "leave the impl note open")

@@ -17,7 +17,7 @@ python install.py --vault "C:/Users/<you>/iCloudDrive/iCloud~md~obsidian/Notes"
 The installer is safe to rerun after every `git pull`. It:
 
 - copies the code to `~/.claude/agent-vault/` and any skills to `~/.claude/skills/`;
-- writes `~/.claude/agent-vault.json` with the vault path;
+- writes `~/.claude/agent-vault.json` with the vault path and the installer's Python (the pre-push hook runs the lint with it);
 - merges every hook and the permission to run the CLI into `~/.claude/settings.json`,
   only ever replacing entries it created, backing the file up to `.bak` first, and removes
   the entries older versions put in `<vault>/.claude/settings.json`;
@@ -39,13 +39,25 @@ into Claude's context.)
   `feat/12-note-schema`, and open a PR. Only the owner merges, with **Squash and merge**.
 - Commit messages follow `<type>(<scope>): <subject>`.
 - Two local guards enforce this without depending on GitHub settings: the
-  `pre-push` hook (`agent_vault/githooks/`), and a Claude Code hook that blocks pushes to `main`
+  `pre-push` hook (`agent_vault/githooks/`, which also runs the lint), and a Claude Code hook that blocks pushes to `main`
   and `--no-verify` in every session. The same hook blocks `gh issue create` in registered
   repos: issues go through `vault.py issue create` (the `issue` skill), which checks the body
   against one template.
 
-## Tests
+## Lint and tests
+
+Development needs [ruff](https://docs.astral.sh/ruff/) on `PATH`: `python -m pip install ruff`. On
+Windows pip's `Scripts` folder (for the Microsoft Store Python,
+`...\LocalCache\local-packages\Python312\Scripts`) often isn't on `PATH`; add it, then check
+`ruff --version` in a new shell. Each repo declares its lint command on a `Lint:` line under
+`## Commands` in its `CLAUDE.md` (here `ruff check .`, rules pinned in `ruff.toml`).
 
 ```bash
-python -m unittest discover -s tests -t .
+ruff check .                                  # the lint alone
+python ~/.claude/agent-vault/vault.py lint    # claudemd-lint, then the repo's Lint: command
+python -m unittest discover -s tests -t .     # the tests; they need ruff on PATH too
 ```
+
+The pre-push hook runs `vault.py lint` before any push that creates or updates a branch, and
+implement-story runs it before every review. After pulling this change, rerun `install.py`: the
+hook needs the `python` field it now writes to the config.

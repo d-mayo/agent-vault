@@ -1,5 +1,5 @@
-"""Shared test helpers. Tests use unittest (stdlib) so no install is needed;
-pytest runs them too."""
+"""Shared test helpers. Tests use unittest (stdlib) and pytest runs them too; only `ruff` has to be
+on PATH, because a test runs `ruff check .` over the repo."""
 from __future__ import annotations
 
 import json

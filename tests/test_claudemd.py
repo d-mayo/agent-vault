@@ -23,6 +23,7 @@ A demo repo.
 ## Commands
 <!-- covers: install.py -->
 - Run tests: `python -m unittest discover`
+- Lint: `git --version`
 
 ## Layout
 <!-- covers: src/** -->
@@ -105,13 +106,13 @@ class PathCheckTest(ClaudemdCase):          # T1, T2 -> AC1, AC2
 
     def test_existing_path_passes(self):
         self.write("src/a.py", "x\n")
-        self.claude("# demo\n\n## Layout\n- `src/a.py`: the code.\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n- `src/a.py`: the code.\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
 
     def test_ac2_exclusions_are_not_checked_as_paths(self):     # T2 -> AC2
         self.claude(
-            "# demo\n\n## Layout\n"
+            "# demo\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n"
             "- `~/.claude/agent-vault/`: nope, not local.\n"
             "- `C:/nowhere/here.py`: nope, absolute.\n"
             "- `/etc/nowhere.conf`: nope, root.\n"
@@ -133,7 +134,7 @@ class CommandCheckTest(ClaudemdCase):        # T1 -> AC1
         bin_dir = Path(self._t.name) / "bin"
         bin_dir.mkdir()
         (bin_dir / "mytool.exe").write_text("", encoding="utf-8")
-        self.claude("# demo\n\n## Commands\n- Run: `mytool --flag`\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n- Run: `mytool --flag`\n")
         self.commit("init")
         with mock.patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}):
             self.assertEqual(self.lint().errors, [])
@@ -146,7 +147,7 @@ class CommandCheckTest(ClaudemdCase):        # T1 -> AC1
 
     def test_relative_script_path_resolves_if_it_exists(self):
         self.write("scripts/run.sh", "#!/bin/sh\n")
-        self.claude("# demo\n\n## Commands\n- Run: `scripts/run.sh --flag`\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n- Run: `scripts/run.sh --flag`\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
         self.claude("# demo\n\n## Commands\n- Run: `scripts/gone.sh --flag`\n")
@@ -154,7 +155,7 @@ class CommandCheckTest(ClaudemdCase):        # T1 -> AC1
 
     def test_npm_script(self):
         self.write("package.json", '{"scripts": {"build": "x"}}')
-        self.claude("# demo\n\n## Commands\n- Build: `npm run build`\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n- Build: `npm run build`\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
         self.claude("# demo\n\n## Commands\n- Build: `npm run missing`\n")
@@ -162,7 +163,7 @@ class CommandCheckTest(ClaudemdCase):        # T1 -> AC1
 
     def test_make_target(self):
         self.write("Makefile", "lint:\n\techo lint\n")
-        self.claude("# demo\n\n## Commands\n- Lint: `make lint`\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n- Build: `make lint`\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
         self.claude("# demo\n\n## Commands\n- Lint: `make missing`\n")
@@ -170,14 +171,14 @@ class CommandCheckTest(ClaudemdCase):        # T1 -> AC1
 
     def test_just_target(self):
         self.write("justfile", "build:\n\techo build\n")
-        self.claude("# demo\n\n## Commands\n- Build: `just build`\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n- Build: `just build`\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
         self.claude("# demo\n\n## Commands\n- Build: `just missing`\n")
         self.assertTrue(self.lint().errors)
 
     def test_placeholder_first_word_is_skipped(self):
-        self.claude("# demo\n\n## Commands\n- Run: `<your tool> --flag`\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n- Run: `<your tool> --flag`\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
 
@@ -190,13 +191,13 @@ class GlobCheckTest(ClaudemdCase):           # T1 -> AC1
 
     def test_glob_matching_something_passes(self):
         self.write("src/a.py", "x\n")
-        self.claude("# demo\n\n## Layout\n<!-- covers: src/** -->\n- `src/a.py`: the code.\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n<!-- covers: src/** -->\n- `src/a.py`: the code.\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
 
     def test_literal_glob_passes(self):
         self.write("install.py", "x\n")
-        self.claude("# demo\n\n## Commands\n<!-- covers: install.py -->\n- Run: `python install.py`\n")
+        self.claude("# demo\n\n## Commands\n<!-- covers: install.py -->\n- Lint: `git --version`\n- Run: `python install.py`\n")
         self.commit("init")
         self.assertEqual(self.lint().errors, [])
 
@@ -239,8 +240,8 @@ class LineCapTest(ClaudemdCase):             # T1 -> AC1
 
 
 class StalenessTest(ClaudemdCase):           # T3 -> AC3
-    SEC = "# demo\n\n## Layout\n<!-- covers: src/** -->\n- `src/a.py`: the code.\n"
-    SEC_EDITED = "# demo\n\n## Layout\n<!-- covers: src/** -->\n- `src/a.py`: the code (edited).\n"
+    SEC = "# demo\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n<!-- covers: src/** -->\n- `src/a.py`: the code.\n"
+    SEC_EDITED = "# demo\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n<!-- covers: src/** -->\n- `src/a.py`: the code (edited).\n"
 
     def test_no_change_after_section_is_not_stale(self):
         self.write("src/a.py", "x\n")
@@ -287,7 +288,7 @@ class StalenessTest(ClaudemdCase):           # T3 -> AC3
 
     def test_section_without_covers_is_never_stale(self):       # D5
         self.write("src/a.py", "x\n")
-        self.claude("# demo\n\n## Layout\n- `src/a.py`: the code.\n")
+        self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n- `src/a.py`: the code.\n")
         self.commit("init", date="2026-01-01")
         self.write("src/a.py", "y\n")
         self.commit("touch a.py", date="2026-01-05")
@@ -319,6 +320,43 @@ class BumpVerifiedTest(ClaudemdCase):        # used by `seal retro` (AC6)
         self.assertEqual(new_text, text)
 
 
+class LintLineTest(ClaudemdCase):            # T1 -> AC1 (#33)
+    def errors(self, text):
+        self.claude(text)
+        self.commit("init")
+        return self.lint().errors
+
+    def test_missing_line_is_an_error(self):
+        errs = self.errors("# demo\n\n## Commands\n- Run: `git --version`\n")
+        self.assertTrue(any("Lint:" in e for e in errs))
+
+    def test_no_commands_section_is_an_error(self):
+        self.assertTrue(any("Lint:" in e for e in self.errors("# demo\n\n## Purpose\nx.\n")))
+
+    def test_placeholder_is_an_error(self):
+        errs = self.errors("# demo\n\n## Commands\n- Lint: `<command>`\n")
+        self.assertTrue(any("placeholder" in e for e in errs))
+
+    def test_unresolvable_command_is_an_error(self):
+        errs = self.errors("# demo\n\n## Commands\n- Lint: `not-a-real-linter-xyz .`\n")
+        self.assertTrue(any("not-a-real-linter-xyz" in e and "does not resolve" in e for e in errs))
+
+    def test_resolvable_command_passes(self):
+        self.assertEqual(self.errors("# demo\n\n## Commands\n- Lint: `git --version`\n"), [])
+
+    def test_lint_command_reads_the_first_backticked_string(self):
+        text = "# demo\n\n## Commands\n- Lint: `git --version` (or `other`)\n"
+        sections, _ = claudemd.parse(text)
+        self.assertEqual(claudemd.lint_command(sections, text.splitlines()), "git --version")
+
+
+class ThisRepoLintLineTest(unittest.TestCase):    # T9 -> AC9 (#33)
+    def test_this_repos_lint_line_is_ruff_check(self):
+        text = (CODE.parent / "CLAUDE.md").read_text(encoding="utf-8")
+        sections, _ = claudemd.parse(text)
+        self.assertEqual(claudemd.lint_command(sections, text.splitlines()), "ruff check .")
+
+
 class ThisRepoTest(unittest.TestCase):          # T11 -> AC11 (#27)
     def test_repo_claude_md_names_the_issue_files_and_lints_clean(self):
         repo = CODE.parent
@@ -326,6 +364,26 @@ class ThisRepoTest(unittest.TestCase):          # T11 -> AC11 (#27)
         self.assertIn("skills/issue/", text)
         self.assertIn(".github/ISSUE_TEMPLATE/issue.md", text)
         self.assertEqual(claudemd.lint(repo).errors, [])
+
+
+class RuffConfigTest(unittest.TestCase):         # T9 -> AC9 (#33)
+    def test_ruff_toml_pins_the_rules(self):
+        text = (CODE.parent / "ruff.toml").read_text(encoding="utf-8")
+        self.assertIn('select = ["E4", "E7", "E9", "F"]', text)
+        self.assertIn('target-version = "py39"', text)
+
+    def test_agent_vault_never_imports_ruff(self):
+        for path in CODE.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("import ruff", text, path)
+            self.assertNotIn("from ruff", text, path)
+
+    def test_repo_passes_ruff(self):
+        # Fails, never skips, when ruff is missing: a tolerant test would let a lint failure through.
+        import shutil
+        self.assertIsNotNone(shutil.which("ruff"), "ruff must be on PATH to run the tests")
+        r = subprocess.run(["ruff", "check", "."], cwd=CODE.parent, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

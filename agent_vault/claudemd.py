@@ -19,6 +19,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import github
@@ -193,6 +195,61 @@ def check_commands(repo: Path, sections: list, lines: list) -> list:
     return errors
 
 
+LINT_RE = re.compile(r"^\s*[-*]\s*Lint:\s*(.*)$")
+
+
+def lint_command(sections: list, lines: list):
+    """The command on the `- Lint:` line of `## Commands` (its first backticked
+    string), or None when there is no such line or it has no backticked string."""
+    for sec in (s for s in sections if s.name == "Commands"):
+        for lineno in range(sec.start, min(sec.end, len(lines)) + 1):
+            m = LINT_RE.match(lines[lineno - 1])
+            if m:
+                found = BACKTICK_RE.search(m.group(1))
+                return found.group(1).strip() if found else None
+    return None
+
+
+def check_lint_line(sections: list, lines: list) -> list:
+    cmd = lint_command(sections, lines)
+    if not cmd:
+        return ["'## Commands' has no 'Lint:' line with a backticked command (#33)"]
+    first = cmd.split()[0]
+    if "<" in first or ">" in first:
+        return [f"the 'Lint:' command '{cmd}' is a placeholder; declare the real lint command"]
+    return []
+
+
+def run_lint_command(top: Path) -> list:
+    """Run the `Lint:` command declared in `top`'s CLAUDE.md, from `top`, without a
+    shell and with its output passed through. Returns failure messages (empty when
+    it passed). A tool that isn't on PATH fails by name; nothing is skipped (#33)."""
+    path = top / "CLAUDE.md"
+    cmd = None
+    if path.is_file():
+        text = lib.read_text(path)
+        sections, _ = parse(text)
+        cmd = lint_command(sections, lib.blank_code_blocks(text))
+    if not cmd or "<" in cmd.split()[0]:
+        return ["no lint command is declared: add a 'Lint:' line with a backticked command "
+                "under '## Commands' in CLAUDE.md"]
+    parts = cmd.split()
+    first = parts[0]
+    if "/" in first or "\\" in first:
+        exe = (top / first) if (top / first).is_file() else None
+    else:
+        exe = shutil.which(first)
+    by_hand = f"run it by hand with: cd {top} && {cmd}"
+    if not exe:
+        return [f"lint tool '{first}' is not installed or not on PATH, so '{cmd}' cannot run; "
+                f"install it, then {by_hand}"]
+    sys.stdout.flush()
+    result = subprocess.run([str(exe), *parts[1:]], cwd=top)
+    if result.returncode != 0:
+        return [f"lint command '{cmd}' failed (exit {result.returncode}); {by_hand}"]
+    return []
+
+
 # --- covers globs and the line cap ----------------------------------------------
 def all_repo_files(repo: Path):
     """Repo-relative, forward-slash paths of every tracked-looking file (skips .git)."""
@@ -314,6 +371,7 @@ def lint(repo: Path) -> LintResult:
     lines = lib.blank_code_blocks(text)
     errors += [f"CLAUDE.md: {e}" for e in check_paths(repo, sections, lines)]
     errors += [f"CLAUDE.md: {e}" for e in check_commands(repo, sections, lines)]
+    errors += [f"CLAUDE.md: {e}" for e in check_lint_line(sections, lines)]
     errors += [f"CLAUDE.md: {e}" for e in check_globs(repo, sections)]
     errors += [f"CLAUDE.md: {e}" for e in check_cap(text.splitlines())]
     stale = check_staleness(repo, "CLAUDE.md", sections)

@@ -22,6 +22,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   log "what happened" [--project <id>]
   repo-init <path>
   claudemd-lint [<repo path>]
+  lint
   validate
   status
   schema
@@ -41,7 +42,7 @@ sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
 import claudemd  # noqa: E402
 import github  # noqa: E402
 import lib  # noqa: E402
-from lib import AGENT, FOLDERS, VAULT
+from lib import AGENT, FOLDERS, VAULT  # noqa: E402
 
 REVIEW_DAYS = 90            # `ideas review` lists open ideas older than this
 SLUG_MAX = 60
@@ -464,6 +465,29 @@ def cmd_claudemd_lint(args) -> None:
     if result.errors:
         sys.exit(1)
     print(f"claudemd-lint OK ({result.stale} stale section(s))" if result.stale else "claudemd-lint OK")
+
+
+def cmd_lint(args) -> None:
+    """claudemd-lint, then the repo's declared `Lint:` command, from the clone's top
+    level; both always run so one pass shows everything to fix (#33)."""
+    found = github.git("rev-parse", "--show-toplevel", check=False)
+    if not found:
+        die("not inside a git clone")
+    top = Path(found)
+    result = claudemd.lint(top)
+    for w in result.warnings:
+        print(f"warning: {w}")
+    for e in result.errors:
+        print(f"error: {e}")
+    failures = []
+    if result.errors:
+        failures.append(f"claudemd-lint failed; run it by hand with: cd {top} && {lib.CLI} claudemd-lint")
+    failures += claudemd.run_lint_command(top)
+    if failures:
+        for f in failures:
+            print(f"lint failed: {f}", file=sys.stderr)
+        sys.exit(1)
+    print("lint OK")
 
 
 def plan_files(body: str) -> list[str]:
@@ -988,8 +1012,8 @@ def cmd_validate(_args) -> None:
 def purpose_line(path: Path) -> str:
     _, body, _ = lib.split_frontmatter(lib.read_text(path))
     lines = body.splitlines()
-    for i, l in enumerate(lines):
-        if l.strip() == "## Purpose":
+    for i, ln in enumerate(lines):
+        if ln.strip() == "## Purpose":
             for nxt in lines[i + 1:]:
                 if nxt.startswith("## "):
                     break
@@ -1065,6 +1089,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("claudemd-lint", help="check a repo's CLAUDE.md (default: the current clone)")
     p.add_argument("path", nargs="?")
     p.set_defaults(fn=cmd_claudemd_lint)
+    p = sub.add_parser("lint", help="claudemd-lint plus the repo's declared lint command (current clone)")
+    p.set_defaults(fn=cmd_lint)
 
     idea = sub.add_parser("idea", help="add, drop or promote an idea").add_subparsers(
         dest="action", required=True, metavar="add|drop|promote")
@@ -1119,7 +1145,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     lib.setup_io()
-    if lib.VAULT is None:
+    if lib.VAULT is None and sys.argv[1:2] != ["lint"]:      # `lint` reads nothing from the vault
         die(f"no usable vault: {lib.CONFIG} is missing, or its vault path has no .obsidian folder; "
             "run install.py --vault <path>")
     args = build_parser().parse_args()

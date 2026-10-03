@@ -30,7 +30,7 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
 
     def test_blocks_from_elsewhere(self):
         elsewhere = Path(self._t.name)
-        for cmd in [f"cd {self.repo} && git push", f"cd r && git push origin 2>&1 | tail -5",
+        for cmd in [f"cd {self.repo} && git push", "cd r && git push origin 2>&1 | tail -5",
                     f"pushd {self.repo}; git push"]:
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.check(cmd, "main", cwd=elsewhere), 2)
@@ -111,7 +111,8 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
                 self.assertEqual(self.check(cmd, branch), 0)
 
     def test_git_bash_paths(self):
-        import importlib.util, os
+        import importlib.util
+        import os
         spec = importlib.util.spec_from_file_location("pg", GUARD)
         pg = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(pg)

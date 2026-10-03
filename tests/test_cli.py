@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import re
 import subprocess
 import unittest
@@ -12,7 +11,7 @@ from pathlib import Path
 
 import sys
 
-from tests.helpers import CODE, make_vault, run_py, tmpdir, write_config
+from tests.helpers import CODE, REPO, make_vault, run_py, tmpdir, write_config
 
 sys.path.insert(0, str(CODE))
 import lib  # noqa: E402
@@ -408,7 +407,8 @@ class ClaudemdLintCliTest(CliCase):        # T1 -> AC1
 
     def test_default_path_uses_the_current_clone(self):
         repo = self.make_repo()
-        (repo / "CLAUDE.md").write_text("# demo\n\n## Purpose\nx.\n", encoding="utf-8", newline="\n")
+        (repo / "CLAUDE.md").write_text("# demo\n\n## Purpose\nx.\n\n## Commands\n- Lint: `git --version`\n",
+                                        encoding="utf-8", newline="\n")
         self.commit(repo)
         r = run_py(CLI, ["claudemd-lint"], config=self.cfg, cwd=repo)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -464,6 +464,89 @@ class IssueDocsTest(CliCase):                                     # T11 -> AC11 
         self.assertIn("`issue` skill", guide)
         repo_init = next(ln for ln in guide.splitlines() if "repo-init <path>" in ln)
         self.assertIn(".github/ISSUE_TEMPLATE/issue.md", repo_init)
+
+
+class LintCliTest(CliCase):                                        # T3-T5, T8 -> AC3-AC5, AC8 (#33)
+    def clone(self, lint: str | None = "git --version", purpose: bool = True) -> Path:
+        repo = self.root / "repo"
+        repo.mkdir()
+        git("init", "-q", "-b", "main", cwd=repo)
+        for k, v in (("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")):
+            git("config", k, v, cwd=repo)
+        text = "# demo\n\n## Purpose\nx.\n\n## Commands\n- Run tests: `git --version`\n"
+        if lint is not None:
+            text += f"- Lint: `{lint}`\n"
+        if not purpose:
+            text += "\n## Layout\n- `missing.py`: nope.\n"
+        (repo / "CLAUDE.md").write_text(text, encoding="utf-8", newline="\n")
+        git("add", "-A", cwd=repo)
+        git("commit", "-q", "-m", "x", cwd=repo)
+        return repo
+
+    def lint(self, repo: Path, cwd: Path | None = None, config: Path | None = None):
+        return run_py(CLI, ["lint"], config=config or self.cfg, cwd=cwd or repo)
+
+    def test_both_pass(self):
+        r = self.lint(self.clone())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("lint OK", r.stdout)
+
+    def test_lint_command_fails(self):
+        r = self.lint(self.clone("git not-a-subcommand"))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("git not-a-subcommand", r.stderr)
+        self.assertIn("run it by hand", r.stderr)
+
+    def test_claudemd_lint_fails_but_the_lint_command_still_runs(self):
+        repo = self.clone(purpose=False)
+        (repo / "marker.py").write_text("", encoding="utf-8")
+        r = self.lint(repo)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("missing.py", r.stdout)
+        self.assertIn("claudemd-lint failed", r.stderr)
+        self.assertIn("claudemd-lint", r.stderr.split("run it by hand with:")[1])
+        self.assertIn("git version", r.stdout)               # the lint command ran: `git --version`
+
+    def test_missing_tool_is_named_and_never_skipped(self):
+        r = self.lint(self.clone("not-a-real-linter-xyz ."))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not-a-real-linter-xyz", r.stderr)
+        self.assertIn("not installed", r.stderr)
+
+    def test_no_lint_line_fails(self):
+        r = self.lint(self.clone(lint=None))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Lint:", r.stderr)
+
+    def test_runs_from_the_top_level_when_started_in_a_subfolder(self):
+        repo = self.clone("git ls-files CLAUDE.md")
+        (repo / "sub").mkdir()
+        r = self.lint(repo, cwd=repo / "sub")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("CLAUDE.md", r.stdout)
+
+    def test_works_when_the_vault_path_does_not_exist(self):
+        cfg = self.root / "other.json"
+        cfg.write_text(json.dumps({"vault": (self.root / "gone").as_posix()}), encoding="utf-8")
+        r = self.lint(self.clone(), config=cfg)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_other_commands_still_need_a_vault(self):
+        cfg = self.root / "other.json"
+        cfg.write_text(json.dumps({"vault": (self.root / "gone").as_posix()}), encoding="utf-8")
+        r = run_py(CLI, ["status"], config=cfg)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no usable vault", r.stderr)
+
+    def test_readme_names_ruff_path_and_the_command(self):         # T10 -> AC10
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        for needle in ("ruff", "PATH", "ruff check ."):
+            self.assertIn(needle, readme)
+
+    def test_usage_and_guide_name_lint(self):                      # T10 -> AC10
+        self.assertIn("\n  lint\n", vault.__doc__)
+        self.assertIn("{{CLI}} lint", TEMPLATE.read_text(encoding="utf-8"))
+        self.assertIn("lint", self.cli("--help").stdout)
 
 
 if __name__ == "__main__":
