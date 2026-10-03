@@ -396,6 +396,30 @@ def followup_problems(impl_body: str, follow_lines: list[str]) -> list[str]:
     return out
 
 
+def lasting_problems(index: lib.Index, repo: str, issue: str) -> list[str]:
+    """Lasting decisions of the issue's sealed plan that have no decision record yet, or whose record
+    doesn't name the record the plan line says it replaces (#36)."""
+    path = work_path(repo, issue, "plan")
+    if not path.is_file():
+        return []
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    if (fm or {}).get("status") != "sealed":
+        return []
+    by_source = {r["fm"].get("source"): r for recs in index.decisions.values() for r in recs}
+    out = []
+    for k, replaces in lib.plan_lasting_decisions(body):
+        source = f"plan {repo}#{issue} D{k}"
+        rec = by_source.get(source)
+        if rec is None:
+            out.append(f"D{k} is a lasting decision with no record; run `decision add <project> \"<title>\" "
+                       f"--decision \"...\" --why \"...\" --source \"{source}\""
+                       + (f" --replaces {replaces}" if replaces else "") + "`")
+        elif replaces and lib.link_target(rec["fm"].get("replaces")) != replaces:
+            out.append(f"D{k} replaces [[{replaces}]], but its record {rec['stem']} doesn't; "
+                       "that record can't be changed, so tell the user")
+    return out
+
+
 def trial_seal_errors(path: Path, fm: dict, body: str) -> list[str]:
     trial = {**fm, "status": "sealed"}
     return lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
@@ -479,6 +503,10 @@ def cmd_seal_retro(args) -> None:
     follow_problems = followup_problems(impl_body, retro_secs.get("Follow-ups", []))
     if follow_problems:
         die(f"{lib.rel(retro_path)} has unsorted review findings:\n  " + "\n  ".join(follow_problems))
+
+    lasting = lasting_problems(index, args.repo, args.issue)
+    if lasting:
+        die("the plan's lasting decisions aren't all recorded yet:\n  " + "\n  ".join(lasting))
 
     for path, fm, body in ((impl_path, impl_fm, impl_body), (retro_path, retro_fm, retro_body)):
         errors = trial_seal_errors(path, fm, body)
