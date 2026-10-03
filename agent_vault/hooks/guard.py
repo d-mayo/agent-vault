@@ -9,6 +9,7 @@ Blocked:
   - the installed code in ~/.claude/agent-vault/ and the vault's CLAUDE.md: both are
     written by install.py from the repo;
   - sealed plan, impl and retro notes;
+  - decision records, existing or new: `vault.py decision add` is the only way to write one;
   - anything in Daily/: daily notes are written only by the CLI;
   - new notes in Agent/ (they come from the CLI) and loose files at the top of Agent/.
 """
@@ -80,6 +81,13 @@ def main() -> None:
         block("daily notes are written only by the CLI, never edited: log with "
               f"`{CLI} log \"<what changed and why>\" --project <id>`. "
               "If a daily line is wrong, tell the user; they fix it in Obsidian.")
+    if folder == lib.FOLDERS["decision"].lower():
+        block("a decision record is never edited, and a new one comes only from the CLI, which also keeps "
+              "the project overview's Standing decisions in step:\n"
+              f"  {CLI} decision add <project> \"<title>\" --decision \"...\" --why \"...\" "
+              "--source \"plan <repo>#<n> D<k> | issue <repo>#<n> | retro <repo>#<n> | session\" "
+              "[--replaces <record>]\n"
+              "To change a decision, add a record that replaces it; if a record is wrong, tell the user.")
     if lib.is_sealed_note(path):
         block("this note is sealed and can't be edited. If something in it turned out wrong, note it "
               "in the issue's impl note (Deviations or Discoveries) while that is open, or tell the user.")
@@ -89,6 +97,7 @@ def main() -> None:
               f"  {CLI} new plan <repo> <issue>   (a draft plan and an open impl note)\n"
               f"  {CLI} new retro <repo> <issue>\n"
               f"  {CLI} idea add \"<title>\" [--project <id>]\n"
+              f"  {CLI} decision add <project> \"<title>\" --decision \"...\" --why \"...\" --source \"...\"\n"
               "Then edit the file it creates.")
 
 

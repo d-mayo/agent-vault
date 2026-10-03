@@ -5,8 +5,8 @@ and registered-repo sessions (as recorded by SessionStart) and blocks at most on
    (repo session) changed this session and nothing was logged to today's daily note after
    the last change, Claude is sent back to log it. A pipeline event logged for the repo
    this session counts as logging.
-2. Shell-write check: sealed notes and closed daily notes are fingerprinted at session
-   start. The guard only sees the edit tools, so one that changed anyway was written
+2. Shell-write check: sealed notes, decision records (all but their status and
+   superseded_by lines) and closed daily notes are fingerprinted at session start. The guard only sees the edit tools, so one that changed anyway was written
    through the shell; Claude must tell the user, not fix it.
 
 Vault changes are found by file modification time; repo changes by git (HEAD moved, or a
@@ -88,7 +88,7 @@ def main() -> None:
     tampered = lib.changed_fingerprints(state.get("fingerprints") or {})
     if tampered:
         problems.append(
-            "These sealed or closed notes changed during this session, so something wrote them "
+            "These sealed or closed notes, or decision records, changed during this session, so something wrote them "
             "through the shell (the edit guard can't see that):\n"
             + "\n".join(f"- {n}" for n in tampered[:MAX_LISTED])
             + "\nDon't try to fix them. Tell the user which notes changed and how, so they can "
