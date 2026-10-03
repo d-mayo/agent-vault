@@ -98,7 +98,7 @@ def project_note(pid: str, repos: list[str], purpose: str) -> str:
             f"## Purpose\n{purpose or '(not written yet)'}\n\n"
             "## Current state\n(nothing yet)\n\n"
             "## Architecture\n(nothing yet)\n\n"
-            "## Standing decisions\n(none yet)\n")
+            f"## {lib.STANDING}\n{lib.NONE_LINE}\n")
 
 
 def plan_note(repo: str, issue: str) -> str:

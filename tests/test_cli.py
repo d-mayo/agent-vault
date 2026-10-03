@@ -84,6 +84,7 @@ class NewProjectTest(CliCase):
         self.assertIn("repos: [me/two-a, me/two-b]", self.text("Projects/two.md"))
         for section in ("Purpose", "Current state", "Architecture", "Standing decisions"):
             self.assertIn(f"## {section}\n", self.text("Projects/one.md"))
+        self.assertTrue(self.text("Projects/one.md").endswith("## Standing decisions\nNone\n"))     # T3 -> AC5
         self.validate()
 
     def test_refusals(self):                              # T2 -> AC2
