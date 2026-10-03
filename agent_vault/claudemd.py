@@ -19,6 +19,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import github
@@ -215,6 +217,36 @@ def check_lint_line(sections: list, lines: list) -> list:
     first = cmd.split()[0]
     if "<" in first or ">" in first:
         return [f"the 'Lint:' command '{cmd}' is a placeholder; declare the real lint command"]
+    return []
+
+
+def run_lint_command(top: Path) -> list:
+    """Run the `Lint:` command declared in `top`'s CLAUDE.md, from `top`, without a
+    shell and with its output passed through. Returns failure messages (empty when
+    it passed). A tool that isn't on PATH fails by name; nothing is skipped (#33)."""
+    path = top / "CLAUDE.md"
+    cmd = None
+    if path.is_file():
+        text = lib.read_text(path)
+        sections, _ = parse(text)
+        cmd = lint_command(sections, lib.blank_code_blocks(text))
+    if not cmd or "<" in cmd.split()[0]:
+        return ["no lint command is declared: add a 'Lint:' line with a backticked command "
+                "under '## Commands' in CLAUDE.md"]
+    parts = cmd.split()
+    first = parts[0]
+    if "/" in first or "\\" in first:
+        exe = (top / first) if (top / first).is_file() else None
+    else:
+        exe = shutil.which(first)
+    by_hand = f"run it by hand with: cd {top} && {cmd}"
+    if not exe:
+        return [f"lint tool '{first}' is not installed or not on PATH, so '{cmd}' cannot run; "
+                f"install it, then {by_hand}"]
+    sys.stdout.flush()
+    result = subprocess.run([str(exe), *parts[1:]], cwd=top)
+    if result.returncode != 0:
+        return [f"lint command '{cmd}' failed (exit {result.returncode}); {by_hand}"]
     return []
 
 
