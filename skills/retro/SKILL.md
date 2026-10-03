@@ -178,3 +178,8 @@ giving that branch an upstream itself if it somehow doesn't have one yet.
 - `vault.py validate` still fails after fixing what's fixable.
 - For an open issue, the branch to check out isn't the impl note's
   `branch:` — the branch was deleted or never existed; don't improvise one.
+- `seal retro` refuses because the PR will no longer close the issue (or,
+  if the PR already merged or closed, never did): put the fix to the user,
+  either restoring the `Closes #<n>` line in the PR description or closing
+  the issue by hand once the PR has merged. Never edit the description or
+  close the issue yourself; act only on the user's go-ahead.

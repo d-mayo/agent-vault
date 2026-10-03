@@ -592,6 +592,56 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.retro.write_text(text, encoding="utf-8", newline="\n")
         self.refused(self.cli("seal", "retro", "widget", "7"), "can't be sealed yet")
 
+    def edit_pr(self, **changes):
+        self.load()
+        pr = self.state["repos"][SLUG]["prs"][0]
+        pr.update(changes)
+        self.save()
+        return pr["number"]
+
+    def filled_prep(self):
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        return git("rev-parse", "HEAD", cwd=self.clone)
+
+    def test_refuses_when_the_pr_no_longer_closes_the_issue(self):    # T2 -> AC1
+        head = self.filled_prep()
+        n = self.edit_pr(closes=[])
+        self.refused(self.cli("seal", "retro", "widget", "7"), f"PR #{n}", "Closes #7")
+        self.assert_nothing_sealed(head)
+        self.assertEqual(git("rev-parse", f"origin/{self.name}", cwd=self.clone), head)
+
+    def test_refuses_a_pr_that_is_no_longer_open(self):    # T3 -> AC2
+        for state in ("MERGED", "CLOSED"):
+            head = self.filled_prep() if state == "MERGED" else git("rev-parse", "HEAD", cwd=self.clone)
+            n = self.edit_pr(closes=[], state=state)
+            r = self.refused(self.cli("seal", "retro", "widget", "7"), f"PR #{n}", state, "by hand")
+            self.assertNotIn("restore", (r.stderr + r.stdout).lower())
+            self.assert_nothing_sealed(head)
+
+    def test_closing_reference_must_match_number_and_repo(self):    # T4 -> AC1, AC4
+        head = self.filled_prep()
+        self.edit_pr(closes=[{"number": 7, "repo": "other/widget"}, {"number": 8, "repo": SLUG}])
+        self.refused(self.cli("seal", "retro", "widget", "7"), "will not close issue #7")
+        self.assert_nothing_sealed(head)
+        self.edit_pr(closes=[{"number": 7, "repo": SLUG.upper()}])
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_closed_issue_makes_no_pr_query(self):    # T4 -> AC3
+        self.filled_prep()
+        self.edit_pr(closes=[], state="MERGED")
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.calls("pr", "view"), [])
+
+    def test_open_issue_whose_pr_closes_it_asks_github_once(self):    # T4 -> AC4, AC6
+        self.filled_prep()
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(len(self.calls("pr", "view")), 1)
+
     def test_refuses_wrong_branch_and_dirty_tree(self):
         self.prep()
         self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
@@ -983,6 +1033,20 @@ class GhHelperTest(GhCase):  # T10 -> AC10
         git("config", "remote.origin.url", "https://example.com/o/n.git", cwd=self.clone)
         with self.assertRaises(github.CmdError):
             github.origin_slug(self.clone)
+
+    def test_pr_closing_reports_state_and_closing_references(self):    # T1 -> AC6
+        body = self.body_file("Closes #7\n\nmore\n")
+        gh_url = github.gh("pr", "create", "--repo", SLUG, "--head", "feat/7-x", "--base", "main",
+                           "--title", "t", "--body-file", body).strip()
+        n = gh_url.rsplit("/", 1)[1]
+        self.assertEqual(github.pr_closing(SLUG, n), {"state": "OPEN", "closes": [("7", SLUG)]})
+        self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        pr = self.state["repos"][SLUG]["prs"][0]
+        pr.update(state="MERGED", closes=[])
+        self.save()
+        self.assertEqual(github.pr_closing(SLUG, n), {"state": "MERGED", "closes": []})
+        self.assertIn(["pr", "view", n, "--repo", SLUG, "--json", "state,closingIssuesReferences"],
+                      self.calls("pr", "view"))
 
 
 if __name__ == "__main__":
