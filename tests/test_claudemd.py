@@ -328,5 +328,25 @@ class ThisRepoTest(unittest.TestCase):          # T11 -> AC11 (#27)
         self.assertEqual(claudemd.lint(repo).errors, [])
 
 
+class RuffConfigTest(unittest.TestCase):         # T9 -> AC9 (#33)
+    def test_ruff_toml_pins_the_rules(self):
+        text = (CODE.parent / "ruff.toml").read_text(encoding="utf-8")
+        self.assertIn('select = ["E4", "E7", "E9", "F"]', text)
+        self.assertIn('target-version = "py39"', text)
+
+    def test_agent_vault_never_imports_ruff(self):
+        for path in CODE.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("import ruff", text, path)
+            self.assertNotIn("from ruff", text, path)
+
+    def test_repo_passes_ruff(self):
+        # Fails, never skips, when ruff is missing: a tolerant test would let a lint failure through.
+        import shutil
+        self.assertIsNotNone(shutil.which("ruff"), "ruff must be on PATH to run the tests")
+        r = subprocess.run(["ruff", "check", "."], cwd=CODE.parent, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

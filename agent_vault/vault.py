@@ -41,7 +41,7 @@ sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
 import claudemd  # noqa: E402
 import github  # noqa: E402
 import lib  # noqa: E402
-from lib import AGENT, FOLDERS, VAULT
+from lib import AGENT, FOLDERS, VAULT  # noqa: E402
 
 REVIEW_DAYS = 90            # `ideas review` lists open ideas older than this
 SLUG_MAX = 60
@@ -988,8 +988,8 @@ def cmd_validate(_args) -> None:
 def purpose_line(path: Path) -> str:
     _, body, _ = lib.split_frontmatter(lib.read_text(path))
     lines = body.splitlines()
-    for i, l in enumerate(lines):
-        if l.strip() == "## Purpose":
+    for i, ln in enumerate(lines):
+        if ln.strip() == "## Purpose":
             for nxt in lines[i + 1:]:
                 if nxt.startswith("## "):
                     break
