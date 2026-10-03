@@ -407,7 +407,8 @@ class ClaudemdLintCliTest(CliCase):        # T1 -> AC1
 
     def test_default_path_uses_the_current_clone(self):
         repo = self.make_repo()
-        (repo / "CLAUDE.md").write_text("# demo\n\n## Purpose\nx.\n", encoding="utf-8", newline="\n")
+        (repo / "CLAUDE.md").write_text("# demo\n\n## Purpose\nx.\n\n## Commands\n- Lint: `git --version`\n",
+                                        encoding="utf-8", newline="\n")
         self.commit(repo)
         r = run_py(CLI, ["claudemd-lint"], config=self.cfg, cwd=repo)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

@@ -800,6 +800,7 @@ class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
         for section in ("Purpose", "Commands", "Layout", "Conventions", "Gotchas"):
             self.assertIn(f"## {section}", text)
         self.assertIn("widgets", text)
+        self.assertIn("- Lint: `<command>`", text)                                       # T2 -> AC2 (#33)
         status = git("status", "--porcelain", "-uall", cwd=self.clone).splitlines()      # not committed
         self.assertEqual(sorted(status), ["?? .github/ISSUE_TEMPLATE/issue.md", "?? CLAUDE.md"])
         issue = (self.clone / ".github" / "ISSUE_TEMPLATE" / "issue.md").read_text(encoding="utf-8")

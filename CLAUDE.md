@@ -7,6 +7,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 ## Commands
 <!-- covers: install.py, tests/**; verified: 2026-10-01 -->
 - Run tests: `python -m unittest discover -s tests -t .` (stdlib only; pytest also works)
+- Lint: `ruff check .`
 - Install locally: `python install.py --vault <path to Notes>`
 - CLI after install: `<installer's python> ~/.claude/agent-vault/vault.py <command>`; the exact string (which the vault's permission rule matches) is lib.CLI, printed by the installer and written into the vault's CLAUDE.md.
 
