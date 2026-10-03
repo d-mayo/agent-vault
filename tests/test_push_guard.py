@@ -110,6 +110,7 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
             with self.subTest(cmd=cmd, branch=branch):
                 self.assertEqual(self.check(cmd, branch), 0)
 
+    def test_git_bash_paths(self):
         import importlib.util
         import os
         spec = importlib.util.spec_from_file_location("pg", GUARD)
