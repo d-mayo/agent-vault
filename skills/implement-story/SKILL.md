@@ -108,9 +108,11 @@ Work through the plan's `## Steps` in order. For each step (numbered `<s>`):
 
 Once every step is committed:
 
-1. Run the plan's `Full check:` command, from its `## Tests` section. If it
-   fails, fix it first, and record what broke under `## Discoveries` (or as
-   a deviation, if the fix touched files beyond the step that broke it).
+1. Run the plan's `Full check:` command, from its `## Tests` section, and
+   `vault.py lint` (`claudemd-lint`, then the repo's `Lint:` command). If
+   either fails, fix it first (a lint failure in its own commit), and record
+   what broke under `## Discoveries` (or as a deviation, if the fix touched
+   files beyond the step that broke it). Request no review while either fails.
 2. Review the whole diff, following `reviewer.md`'s "Prompt" section
    (`git diff <base>..HEAD`, every acceptance criterion, the repo
    `CLAUDE.md`). Record it under `## Verification` as `- Review <k>: R<n>-R<n2>`
@@ -119,7 +121,7 @@ Once every step is committed:
    `- R<n> (major|minor): Review <k>: <finding> → fixed in <sha>`,
    `→ won't fix: <reason>`, or, for a minor one you're leaving, `→ left open`.
 3. Fix every `major` finding, each fix its own commit (no amending: the
-   whole diff is reviewed anyway), then re-run `Full check:` and review the
+   whole diff is reviewed anyway), then re-run `Full check:` and `vault.py lint`, and review the
    whole diff again (`Review <k+1>`). Repeat until a review has no major
    finding. If the third review still has a major finding, stop and ask the
    user; never start a fourth review.
@@ -154,10 +156,11 @@ Asked to act on review comments for an issue that already has an open PR
    in its own commit, or decline it with a reason. If one comment's fix
    touches several files or changes behaviour, tell the reviewer which
    commit to look at first; it gets no extra review.
-3. Review once, covering all the fixes: `git diff <tip>..HEAD`, where `<tip>`
+3. Run `Full check:` and `vault.py lint`, fixing failures first as in **Finish**
+   step 1; then review once, covering all the fixes: `git diff <tip>..HEAD`, where `<tip>`
    is the branch tip before the first fix, with the request texts supplied
    (see `reviewer.md`). Same rules as **Finish** step 3: fix every major
-   finding, re-run `Full check:` and review again, at most three reviews,
+   finding, re-run `Full check:` and `vault.py lint`, and review again, at most three reviews,
    then stop and ask. Record each finding under `## Review findings` as
    `- R<n> (major|minor): PR review: <finding> → fixed in <sha>`,
    `→ won't fix: <reason>` or (minor only) `→ left open`, and the review under
