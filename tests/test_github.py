@@ -984,6 +984,20 @@ class GhHelperTest(GhCase):  # T10 -> AC10
         with self.assertRaises(github.CmdError):
             github.origin_slug(self.clone)
 
+    def test_pr_closing_reports_state_and_closing_references(self):    # T1 -> AC6
+        body = self.body_file("Closes #7\n\nmore\n")
+        gh_url = github.gh("pr", "create", "--repo", SLUG, "--head", "feat/7-x", "--base", "main",
+                           "--title", "t", "--body-file", body).strip()
+        n = gh_url.rsplit("/", 1)[1]
+        self.assertEqual(github.pr_closing(SLUG, n), {"state": "OPEN", "closes": [("7", SLUG)]})
+        self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        pr = self.state["repos"][SLUG]["prs"][0]
+        pr.update(state="MERGED", closes=[])
+        self.save()
+        self.assertEqual(github.pr_closing(SLUG, n), {"state": "MERGED", "closes": []})
+        self.assertIn(["pr", "view", n, "--repo", SLUG, "--json", "state,closingIssuesReferences"],
+                      self.calls("pr", "view"))
+
 
 if __name__ == "__main__":
     unittest.main()

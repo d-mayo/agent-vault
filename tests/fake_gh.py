@@ -4,7 +4,8 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
   {"signed_out": false, "hang": false,
    "repos": {"owner/name": {"default_branch": "main", "head_sha": "<40 hex>", "labels": [...],
        "settings": {...}, "refuse_settings": false, "branches": ["feat/1-x"],
-       "prs": [{"number": 1, "headRefName": "feat/1-x", "url": "..."}],
+       "prs": [{"number": 1, "headRefName": "feat/1-x", "url": "...", "state": "OPEN",
+                "closes": [{"number": 7, "repo": "owner/name"}]}],  (state/closes optional)
        "compare": {"total_commits": 0, "files": [{"filename": "a.py"}]},
        "issues": {"7": {"state": "OPEN", "title": "...", "created": "...Z", "body_edited": null,
                         "renamed": null, "labels": [...]}},
@@ -14,6 +15,7 @@ Unknown repos are created with defaults on first use. Tests read and edit the fi
 """
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -93,11 +95,21 @@ def main():
         n = repo["next_number"]
         repo["next_number"] += 1
         url = f"https://github.com/{slug}/pull/{n}"
+        body = Path(opt(args, "--body-file")).read_text(encoding="utf-8")
+        closes = [{"number": int(m), "repo": slug} for m in re.findall(r"(?im)^closes #(\d+)", body)]
         pr = {"number": n, "headRefName": opt(args, "--head"), "url": url}
-        repo["prs"].append(pr)
+        repo["prs"].append({**pr, "state": "OPEN", "closes": closes})
         repo["created_prs"].append({**pr, "title": opt(args, "--title"), "base": opt(args, "--base"),
-                                    "body": Path(opt(args, "--body-file")).read_text(encoding="utf-8")})
+                                    "body": body})
         print(url)
+    elif cmd == ["pr", "view"]:
+        pr = next((p for p in repo["prs"] if str(p["number"]) == args[2]), None)
+        if pr is None:
+            fail(f"Could not resolve to a PullRequest with the number of {args[2]}")
+        refs = [{"number": c["number"], "repository": {"name": c["repo"].split("/")[1],
+                                                       "owner": {"login": c["repo"].split("/")[0]}}}
+                for c in pr.get("closes", [])]
+        print(json.dumps({"state": pr.get("state", "OPEN"), "closingIssuesReferences": refs}))
     elif cmd[0] == "api":
         rest = [a for a in args[1:] if a != "--paginate"]
         if rest[0] == "graphql":

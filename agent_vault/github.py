@@ -171,6 +171,17 @@ def open_prs(slug: str) -> list[dict]:
                    "--json", "number,headRefName,url")
 
 
+def pr_closing(slug: str, number: str) -> dict:
+    """state and `closes`: the (issue number, owner/name) pairs GitHub says merging the PR closes (D1)."""
+    data = gh_json("pr", "view", str(number), "--repo", slug, "--json", "state,closingIssuesReferences")
+    closes = []
+    for ref in data.get("closingIssuesReferences") or []:
+        repo = ref.get("repository") or {}
+        owner = (repo.get("owner") or {}).get("login", "")
+        closes.append((str(ref["number"]), f"{owner}/{repo.get('name', '')}"))
+    return {"state": data["state"], "closes": closes}
+
+
 def label_names(slug: str) -> list[str]:
     return [x["name"] for x in gh_json("label", "list", "--repo", slug, "--limit", "500",
                                        "--json", "name")]
