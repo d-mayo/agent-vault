@@ -150,7 +150,6 @@ WORK_FILE_RE = re.compile(r"^(?P<repo>[A-Za-z0-9._-]+?)-(?P<n>[1-9]\d*)-(?P<kind
 IDEA_SOURCE_RE = re.compile(r"^(?:retro [A-Za-z0-9._-]+#[1-9]\d*|phone:\S.*|session)$")
 DECISION_SOURCE_RE = re.compile(r"^(?:plan [A-Za-z0-9._-]+#[1-9]\d* D[1-9]\d*|design [a-z0-9]+(?:-[a-z0-9]+)* D[1-9]\d*"
                                 r"|(?:issue|retro) [A-Za-z0-9._-]+#[1-9]\d*|session)$")
-PLAN_SOURCE_RE = re.compile(r"^plan [A-Za-z0-9._-]+#[1-9]\d* D[1-9]\d*$")
 UNIQUE_SOURCE_RE = re.compile(r"^(?:plan [A-Za-z0-9._-]+#[1-9]\d*|design [a-z0-9]+(?:-[a-z0-9]+)*) D[1-9]\d*$")  # one record each
 ISSUE_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issues/[1-9]\d*$")
 DESIGN_SLUG_RE = re.compile(r"^[1-9]\d*-[a-z0-9]+(?:-[a-z0-9]+)*$")      # after '<project>-design-'
