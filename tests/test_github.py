@@ -185,8 +185,8 @@ class GhCase(unittest.TestCase):
         self.ok(self.cli("new", "plan", "widget", "7"))
         self.note("plan").write_text(text, encoding="utf-8", newline="\n")
 
-    def sealed(self):
-        self.new_plan()
+    def sealed(self, plan=SEALED_PLAN):
+        self.new_plan(plan)
         self.ok(self.cli("seal", "plan", "widget", "7"))
         self.load()
 
@@ -401,8 +401,8 @@ FULL_README_AUDIT = "- Overview: confirmed â€” still true\n- Usage: confirmed â€
 
 
 class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
-    def prep(self):
-        self.sealed()
+    def prep(self, plan=SEALED_PLAN):
+        self.sealed(plan)
         self.ok(self.branch())
         self.name = "feat/7-add-widget-frobbing"
         (self.clone / "CLAUDE.md").write_text(CLAUDE_MD, encoding="utf-8", newline="\n")
@@ -512,6 +512,57 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.prep()
         self.flatten_readme()
         self.fill_retro(FULL_CLAUDE_AUDIT, "None", FULL_OVERVIEW_AUDIT)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+
+    # --- lasting decisions (#36) ---
+    def lasting_plan(self, *lines):
+        return SEALED_PLAN.replace("## Decisions\n\n", "## Decisions\n" + "\n".join(lines) + "\n\n")
+
+    def record(self, title, source, *extra):
+        self.ok(self.cli("decision", "add", "widgets", title, "--decision", "d", "--why", "w",
+                         "--source", source, *extra))
+
+    def lasting_prep(self, *lines):
+        self.prep(self.lasting_plan(*lines))
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+
+    def test_refuses_a_lasting_decision_without_a_record(self):           # T7 -> AC7
+        self.lasting_prep("- D1: a, because b", "- D2: keep it, because c (lasting)")
+        head = git("rev-parse", "HEAD", cwd=self.clone)
+        r = self.refused(self.cli("seal", "retro", "widget", "7"), "lasting decisions", "D2")
+        self.assertNotIn("D1 ", r.stderr)
+        self.assert_nothing_sealed(head)
+
+    def test_seals_once_the_lasting_decision_has_its_record(self):        # T7 -> AC7
+        self.lasting_prep("- D1: a, because b", "- D2: keep it, because c (user decision) (lasting)")
+        self.record("Keep it", "plan widget#7 D2")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assert_valid()
+
+    def test_a_record_from_another_plan_decision_does_not_count(self):    # T7 -> AC7
+        self.lasting_prep("- D1: keep it, because c (lasting)")
+        self.record("Keep it", "plan widget#7 D2")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "D1")
+
+    def test_a_replacing_decision_needs_its_record_to_replace(self):      # T7 -> AC7
+        self.record("Old rule", "session")
+        line = "- D1: reverse it, replaces [[widgets-d1-old-rule]], because c (lasting)"
+        self.lasting_prep(line)
+        self.record("New rule", "plan widget#7 D1")                       # recorded without --replaces
+        head = git("rev-parse", "HEAD", cwd=self.clone)
+        self.refused(self.cli("seal", "retro", "widget", "7"), "D1", "widgets-d1-old-rule")
+        self.assert_nothing_sealed(head)
+
+    def test_seals_when_the_replacing_record_replaces(self):              # T7 -> AC7
+        self.record("Old rule", "session")
+        self.lasting_prep("- D1: reverse it, replaces [[widgets-d1-old-rule]], because c (lasting)")
+        self.record("New rule", "plan widget#7 D1", "--replaces", "widgets-d1-old-rule")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assert_valid()
+
+    def test_plans_without_the_marker_need_nothing(self):                 # T7 -> AC7, AC12
+        self.lasting_prep("- D1: a, because b", "- D2: c, because d (user decision)")
         self.ok(self.cli("seal", "retro", "widget", "7"))
 
     def add_findings(self, *lines):

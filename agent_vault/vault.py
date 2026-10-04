@@ -15,6 +15,8 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   idea drop <file> --reason "..."
   idea promote <file> --body-file <file> [--title "..."] [--repo <name>]
   issue create <repo> --title "..." --body-file <file> [--idea <file>]
+  decision add <project> "<title>" --decision "..." --why "..." --source "..." [--replaces <record>]
+  decisions [--project <id>] [--all]
   ideas [--project <id>] [--status open|promoted|dropped]
   ideas review
   handoff list
@@ -98,7 +100,7 @@ def project_note(pid: str, repos: list[str], purpose: str) -> str:
             f"## Purpose\n{purpose or '(not written yet)'}\n\n"
             "## Current state\n(nothing yet)\n\n"
             "## Architecture\n(nothing yet)\n\n"
-            "## Standing decisions\n(none yet)\n")
+            f"## {lib.STANDING}\n{lib.NONE_LINE}\n")
 
 
 def plan_note(repo: str, issue: str) -> str:
@@ -394,6 +396,30 @@ def followup_problems(impl_body: str, follow_lines: list[str]) -> list[str]:
     return out
 
 
+def lasting_problems(index: lib.Index, repo: str, issue: str) -> list[str]:
+    """Lasting decisions of the issue's sealed plan that have no decision record yet, or whose record
+    doesn't name the record the plan line says it replaces (#36)."""
+    path = work_path(repo, issue, "plan")
+    if not path.is_file():
+        return []
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    if (fm or {}).get("status") != "sealed":
+        return []
+    by_source = {r["fm"].get("source"): r for recs in index.decisions.values() for r in recs}
+    out = []
+    for k, replaces in lib.plan_lasting_decisions(body):
+        source = f"plan {repo}#{issue} D{k}"
+        rec = by_source.get(source)
+        if rec is None:
+            out.append(f"D{k} is a lasting decision with no record; run `decision add <project> \"<title>\" "
+                       f"--decision \"...\" --why \"...\" --source \"{source}\""
+                       + (f" --replaces {replaces}" if replaces else "") + "`")
+        elif replaces and lib.link_target(rec["fm"].get("replaces")) != replaces:
+            out.append(f"D{k} replaces [[{replaces}]], but its record {rec['stem']} doesn't; "
+                       "that record can't be changed, so tell the user")
+    return out
+
+
 def trial_seal_errors(path: Path, fm: dict, body: str) -> list[str]:
     trial = {**fm, "status": "sealed"}
     return lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
@@ -477,6 +503,10 @@ def cmd_seal_retro(args) -> None:
     follow_problems = followup_problems(impl_body, retro_secs.get("Follow-ups", []))
     if follow_problems:
         die(f"{lib.rel(retro_path)} has unsorted review findings:\n  " + "\n  ".join(follow_problems))
+
+    lasting = lasting_problems(index, args.repo, args.issue)
+    if lasting:
+        die("the plan's lasting decisions aren't all recorded yet:\n  " + "\n  ".join(lasting))
 
     for path, fm, body in ((impl_path, impl_fm, impl_body), (retro_path, retro_fm, retro_body)):
         errors = trial_seal_errors(path, fm, body)
@@ -980,6 +1010,103 @@ def cmd_ideas(args) -> None:
     print_ideas([(p, fm) for p, fm in rows if fm.get("status") == args.status])
 
 
+# --- decisions -----------------------------------------------------------------
+def decision_note(project: str, title: str, decision: str, why: str, source: str, replaces: str | None) -> str:
+    fm = {"type": "decision", "project": project, "status": "active",
+          "created": lib.today().isoformat(), "source": source}
+    if replaces:
+        fm["replaces"] = f"[[{replaces}]]"
+    return f"{lib.render_frontmatter(fm)}# {title}\n\n## Decision\n{decision}\n\n## Why\n{why}\n"
+
+
+def with_standing_lines(text: str, lines: list[str]) -> str | None:
+    """A project overview with its '## Standing decisions' body replaced by `lines`; None if it has no such heading."""
+    src = text.split("\n")
+    heading = f"## {lib.STANDING}"
+    if heading not in src:
+        return None
+    start = src.index(heading)
+    end = next((i for i in range(start + 1, len(src)) if src[i].startswith("## ")), len(src))
+    return "\n".join(src[:start + 1] + lines + [""] + src[end:])
+
+
+def find_decision(index: lib.Index, project: str, name: str) -> dict:
+    """The record `name` ('<stem>', with or without .md or [[ ]]) of a project, or die."""
+    stem = name.strip().removeprefix("[[").removesuffix("]]").removesuffix(".md")
+    for rec in index.decisions.get(project, []):
+        if rec["stem"] == stem:
+            return rec
+    other = [pid for pid, recs in index.decisions.items() if pid != project and any(r["stem"] == stem for r in recs)]
+    if other:
+        die(f"'{stem}' is a record of project '{other[0]}', not '{project}'")
+    die(f"no decision record '{stem}' in project '{project}'; `decisions --all --project {project}` lists them")
+
+
+def cmd_decision_add(args) -> None:
+    index = lib.Index()
+    require_project(index, args.project)
+    title = args.title.strip()
+    if not title:
+        die("the title is empty")
+    if re.search(r"[\r\n]", title) or "[[" in title or "]]" in title:
+        die("the title must be one line and must not contain [[ or ]]")
+    decision, why = one_line(args.decision), one_line(args.why)
+    if not decision:
+        die("--decision is empty")
+    if not why:
+        die("--why is empty")
+    source = args.source.strip()
+    if not lib.DECISION_SOURCE_RE.match(source):
+        die("source must be 'plan <repo>#<n> D<k>', 'issue <repo>#<n>', 'retro <repo>#<n>' or 'session'")
+    if lib.PLAN_SOURCE_RE.match(source):
+        for recs in index.decisions.values():
+            for rec in recs:
+                if rec["fm"].get("source") == source:
+                    die(f"{source} is already recorded as {rec['stem']}")
+    old = find_decision(index, args.project, args.replaces) if args.replaces else None
+    if old and old["fm"].get("status") != "active":
+        die(f"{old['stem']} is already superseded; replace the record that replaced it instead")
+    records = index.decisions.get(args.project, [])
+    overview = index.projects[args.project]
+    if with_standing_lines(lib.read_text(overview), []) is None:
+        die(f"{lib.rel(overview)} has no '## {lib.STANDING}' section to keep up to date")
+    n = max((r["n"] for r in records), default=0) + 1
+    slug = lib.slugify(title)[:SLUG_MAX].strip("-") or "untitled"
+    path = AGENT / FOLDERS["decision"] / args.project / f"{args.project}-d{n}-{slug}.md"
+    touched = [path, overview] + ([old["path"]] if old else [])
+    saved = {p: (lib.read_text(p) if p.exists() else None) for p in touched}
+    try:
+        commit_note(path, decision_note(args.project, title, decision, why, source, old["stem"] if old else None))
+        if old:
+            update_note(old["path"], status="superseded", superseded_by=f"[[{path.stem}]]")
+        lines = lib.standing_lines(lib.Index().decisions.get(args.project, []))
+        commit_note(overview, with_standing_lines(lib.read_text(overview), lines))
+    except SystemExit:
+        for p, text in saved.items():
+            if text is None:
+                p.unlink(missing_ok=True)
+            else:
+                lib.write_text(p, text)
+        raise
+    append_log(f"- {lib.now_hhmm()} {lib.DECISION_EVENT} — {title} [[{path.stem}]]")
+    print("created " + lib.rel(path))
+    if old:
+        print(f"superseded {lib.rel(old['path'])}")
+    print(f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
+
+
+def cmd_decisions(args) -> None:
+    index = lib.Index()
+    require_project(index, args.project)
+    rows = [r for pid, recs in sorted(index.decisions.items()) if not args.project or pid == args.project
+            for r in recs if args.all or r["fm"].get("status") == "active"]
+    if not rows:
+        print("no decisions")
+    for r in rows:
+        print(f"{r['stem']}.md  {r['title']}  [{r['fm'].get('source')}]"
+              + ("  (superseded)" if r["fm"].get("status") != "active" else ""))
+
+
 # --- log ---------------------------------------------------------------------
 def cmd_log(args) -> None:
     index = lib.Index()
@@ -1178,6 +1305,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project")
     p.add_argument("--status", default="open", choices=lib.STATUSES["idea"])
     p.set_defaults(fn=cmd_ideas)
+
+    dec = sub.add_parser("decision", help="record a decision").add_subparsers(
+        dest="action", required=True, metavar="add")
+    p = dec.add_parser("add", help="create the project's next decision record (never edited afterwards)")
+    p.add_argument("project")
+    p.add_argument("title")
+    p.add_argument("--decision", required=True)
+    p.add_argument("--why", required=True)
+    p.add_argument("--source", required=True, help="plan <repo>#<n> D<k> | issue <repo>#<n> | retro <repo>#<n> | session")
+    p.add_argument("--replaces", help="the active record this one reverses; it is marked superseded")
+    p.set_defaults(fn=cmd_decision_add)
+    p = sub.add_parser("decisions", help="list active decision records (--all: superseded too)")
+    p.add_argument("--project")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_decisions)
 
     p = sub.add_parser("log")
     p.add_argument("text")

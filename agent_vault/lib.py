@@ -42,11 +42,12 @@ AGENT = VAULT / "Agent" if VAULT else None
 HANDOFF_LOG = AGENT / ".handoff-log.json" if AGENT else None
 
 # --- Schema (design-v1.md §6-7) ----------------------------------------------
-TYPES = ["project", "plan", "impl", "retro", "idea", "daily"]
+TYPES = ["project", "plan", "impl", "retro", "idea", "decision", "daily"]
 FOLDERS = {                                # folder key -> folder under Agent/
     "project": "Projects",
     "work": "Work",
     "idea": "Ideas",
+    "decision": "Decisions",
     "daily": "Daily",
 }
 PATHS = {                                  # note type -> layout (for `schema`)
@@ -55,6 +56,7 @@ PATHS = {                                  # note type -> layout (for `schema`)
     "impl": "Work/<repo>/<repo>-<n>-impl.md",
     "retro": "Work/<repo>/<repo>-<n>-retro.md",
     "idea": "Ideas/<YYYY-MM-DD>-<slug>.md",
+    "decision": "Decisions/<project>/<project>-d<n>-<slug>.md",
     "daily": "Daily/<YYYY-MM-DD>.md",
 }
 REQUIRED = {
@@ -63,6 +65,7 @@ REQUIRED = {
     "impl": ["type", "repo", "issue", "status"],
     "retro": ["type", "repo", "issue", "pr", "status"],
     "idea": ["type", "status", "created", "source"],
+    "decision": ["type", "project", "status", "created", "source"],
     "daily": ["type", "date"],
 }
 OPTIONAL = {
@@ -71,11 +74,13 @@ OPTIONAL = {
     "impl": ["branch", "pr"],
     "retro": [],
     "idea": ["project", "promoted_to"],
+    "decision": ["replaces", "superseded_by"],
     "daily": [],
 }
 CONDITIONAL = {                            # shown by `schema`; enforced by FM-COND / PLAN-SEALED
     "plan": "issue_updated and base_sha are required when status is sealed",
     "idea": "promoted_to is required if and only if status is promoted",
+    "decision": "superseded_by is required if and only if status is superseded",
 }
 ALWAYS_ALLOWED = ["tags", "aliases"]
 STATUSES = {
@@ -84,8 +89,9 @@ STATUSES = {
     "impl": ["open", "sealed"],
     "retro": ["open", "sealed"],
     "idea": ["open", "promoted", "dropped"],
+    "decision": ["active", "superseded"],
 }
-DATE_FIELDS = {"project": ["audited"], "idea": ["created"], "daily": ["date"]}
+DATE_FIELDS = {"project": ["audited"], "idea": ["created"], "decision": ["created"], "daily": ["date"]}
 TIMESTAMP_FIELDS = {"plan": ["issue_updated"]}
 SECTIONS = {                               # required `##` sections, in order
     "project": ["Purpose", "Current state", "Architecture", "Standing decisions"],
@@ -94,12 +100,14 @@ SECTIONS = {                               # required `##` sections, in order
     "impl": ["Deviations", "Review findings", "Verification", "Discoveries"],
     "retro": ["Summary", "CLAUDE.md audit", "README audit", "Overview audit", "Follow-ups"],
     "idea": [],
+    "decision": ["Decision", "Why"],
     "daily": ["Log"],
 }
-SIZE_CAPS = {"project": 60, "impl": 80, "retro": 40, "idea": 8}   # body lines; errors
+SIZE_CAPS = {"project": 60, "impl": 80, "retro": 40, "idea": 8, "decision": 12}   # body lines; errors
 PLAN_WARN_LINES = 400                                            # body lines; warning
 EVENTS = ["planned", "started", "pr-opened", "retro-done"]          # '<repo>#<n> <event>' lines
 IDEA_EVENTS = ["idea-added", "idea-promoted"]                       # '<event> — <title> [[<idea>]]' lines
+DECISION_EVENT = "decision-recorded"                                # '<event> — <title> [[<record>]]' lines
 # Completeness rules that only warn while a plan is a draft (errors once sealed).
 DRAFT_SOFT = ["PLAN-AC", "PLAN-STEP", "PLAN-T", "PLAN-COVER", "PLAN-FULL"]
 BRANCH_TYPES = ["feat", "fix", "chore", "docs", "refactor", "test", "perf", "hotfix"]   # design §4
@@ -107,6 +115,8 @@ BRANCH_RE = re.compile(rf"^(?:{'|'.join(BRANCH_TYPES)})/[0-9]+-[a-z0-9-]+$")
 PLANNED_LABEL = ("planned", "0e8a16", "A sealed plan exists (set by agent-vault)")   # name, color, description
 HOOK_MARKER = "agent-vault-hook: pre-push"        # in githooks/pre-push; repo-init recognises the hook by it
 LOG_HEADING = "## Log"
+STANDING = "Standing decisions"            # the project overview section generated from the active records
+LASTING_SUFFIX = " (lasting)"              # ends a plan decision line that is a lasting decision
 NONE_LINE = "None"
 ISSUE_SECTIONS = {                         # GitHub issue body: `##` sections, in order, with a hint each
     "Problem": "What is wrong or missing today, and for whom.",
@@ -127,6 +137,12 @@ REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 IDEA_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$")
 WORK_FILE_RE = re.compile(r"^(?P<repo>[A-Za-z0-9._-]+?)-(?P<n>[1-9]\d*)-(?P<kind>plan|impl|retro)$")
 IDEA_SOURCE_RE = re.compile(r"^(?:retro [A-Za-z0-9._-]+#[1-9]\d*|phone:\S.*|session)$")
+DECISION_SOURCE_RE = re.compile(r"^(?:plan [A-Za-z0-9._-]+#[1-9]\d* D[1-9]\d*|(?:issue|retro) [A-Za-z0-9._-]+#[1-9]\d*|session)$")
+PLAN_SOURCE_RE = re.compile(r"^plan [A-Za-z0-9._-]+#[1-9]\d* D[1-9]\d*$")
+DECISION_SLUG_RE = re.compile(r"^[1-9]\d*-[a-z0-9]+(?:-[a-z0-9]+)*$")      # after '<project>-d'
+LINK_VALUE_RE = re.compile(r"^\[\[([^\]|#]+)\]\]$")                   # a frontmatter value that is one wikilink
+REPLACES_RE = re.compile(r"\breplaces \[\[([^\]|#]+)\]\]")             # in a plan decision line
+PLAN_DECISION_RE = re.compile(r"^- D(\d+): (.+)$")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 STEP_HEADING_RE = re.compile(r"^### [1-9]\d*\. \S")
 AC_LINE_RE = re.compile(r"^- AC(\d+): \S")
@@ -153,7 +169,9 @@ LINE_FORMATS = {
                   re.compile(r"^- R\d+ \(minor\): .+ → left open$"))],
     "RETRO-AUDIT": [("- <section heading>: confirmed|rewritten|removed — <reason>",
                      re.compile(r"^- .+: (?:confirmed|rewritten|removed) — \S"))],
-    "RETRO-FOLLOW": [("- issue #<n> created[ (R<n>[, R<m>…])]",
+    "RETRO-FOLLOW": [("- decision [[<record>]][ (R<n>[, R<m>…])]",
+                      re.compile(rf"^- decision \[\[[^\]]+\]\]{FINDING_REFS}$")),
+                     ("- issue #<n> created[ (R<n>[, R<m>…])]",
                       re.compile(rf"^- issue #[1-9]\d* created{FINDING_REFS}$")),
                      ("- issue #<n> amended[ (R<n>[, R<m>…])]",
                       re.compile(rf"^- issue #[1-9]\d* amended{FINDING_REFS}$")),
@@ -168,6 +186,8 @@ LINE_FORMATS = {
          re.compile(rf"^- {_TIME} session — \S.*?(?: \[\[[^\]]+\]\])?$")),
         ("- HH:MM idea-added|idea-promoted — <title> [[<idea>]]",
          re.compile(rf"^- {_TIME} (?:{'|'.join(IDEA_EVENTS)}) — \S.*? \[\[[^\]]+\]\]$")),
+        (f"- HH:MM {DECISION_EVENT} — <title> [[<record>]]",
+         re.compile(rf"^- {_TIME} {DECISION_EVENT} — \S.*? \[\[[^\]]+\]\]$")),
     ],
 }
 # note type -> section -> (rule, "None" is a valid line)
@@ -196,11 +216,11 @@ RULES = {
     "FM-TS": ("error", "Timestamps are ISO 8601 UTC, e.g. 2026-09-26T21:04:00Z"),
     "FM-FORMAT": ("error", "Field values have the right shape (ids, repo names, numbers, sha, source)"),
     "FM-MATCH": ("error", "id, date, repo and issue must agree with the file name"),
-    "FM-COND": ("error", "promoted_to is set if and only if an idea is promoted"),
+    "FM-COND": ("error", "promoted_to is set if and only if an idea is promoted; superseded_by if and only if a decision is superseded"),
     "SEC-MISSING": ("error", "Every required '##' section must be present"),
     "SEC-ORDER": ("error", "'##' sections must appear in the specified order"),
     "SEC-EXTRA": ("error", "Other (or duplicate) '##' sections are rejected"),
-    "SIZE-CAP": ("error", "Body line caps: project 60, impl 80, retro 40, idea 8"),
+    "SIZE-CAP": ("error", "Body line caps: project 60 (not counting the Standing decisions lines), impl 80, retro 40, idea 8, decision 12"),
     "SIZE-WARN": ("warning", "A plan over 400 body lines should be split into several issues"),
     "PLAN-AC": ("error", "Acceptance criteria are '- AC<n>: …' lines, numbers unique; at least one (warning while draft)"),
     "PLAN-D": ("error", "Decisions are '- D<n>: <decision>, because <reason>' lines"),
@@ -213,11 +233,15 @@ RULES = {
     "IMPL-DEV": ("error", "Deviation lines are '- Step <n>: …' (or None)"),
     "IMPL-REV": ("error", "Review findings end in '→ fixed in <sha>', '→ won't fix: <reason>' or, for minor only, '→ left open' (or None)"),
     "RETRO-AUDIT": ("error", "Audit lines are '- <heading>: confirmed|rewritten|removed — <reason>'"),
-    "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link or dropped, each optionally ending in ' (R<n>[, R<m>…])' for the left-open findings they settle"),
-    "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]', '- HH:MM session — …' or an idea event line"),
+    "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link, decision link or dropped, each optionally ending in ' (R<n>[, R<m>…])' for the left-open findings they settle"),
+    "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]', '- HH:MM session — …' an idea event line or a decision-recorded line"),
     "X-REPO-DUP": ("error", "A repo name appears in the repos: of at most one project"),
     "X-REPO-UNREG": ("error", "Work/<repo>/ belongs to a repo listed in some project's repos:"),
-    "X-PROJECT": ("error", "An idea's 'project:' names an existing project"),
+    "X-PROJECT": ("error", "An idea's or a decision record's 'project:' names an existing project"),
+    "DEC-TITLE": ("error", "A decision record's body starts with a '# <title>' line"),
+    "X-DECISION-LINK": ("error", "A record's replaces links an existing record of the same project; a superseded record's superseded_by links a record of the project that replaces it back"),
+    "X-DECISION-ACTIVE": ("error", "An active record must not be replaced by another record"),
+    "X-STANDING": ("error", "A project's 'Standing decisions' lists exactly its active records, in number order, as '- <title> [[<record>]]' lines (or None)"),
     "X-LINK": ("error", "Every [[link]] in Agent/ resolves (links in code are ignored)"),
 }
 
@@ -336,6 +360,61 @@ def safe_title(text: str) -> str:
     return re.sub(r'[\\/:*?"<>|#^\[\]]', "", text).strip() or "Untitled"
 
 
+def decision_parts(project: str, stem: str):
+    """(n, slug) of a decision record's file name '<project>-d<n>-<slug>', or None."""
+    prefix = f"{project}-d"
+    if not stem.startswith(prefix) or not DECISION_SLUG_RE.match(stem[len(prefix):]):
+        return None
+    n, slug = stem[len(prefix):].split("-", 1)
+    return int(n), slug
+
+
+def decision_title(body: str) -> str | None:
+    """The text of a record's '# <title>' line (the first non-blank body line), or None."""
+    for ln in body.splitlines():
+        if ln.strip():
+            return ln[2:].strip() if ln.startswith("# ") and ln[2:].strip() else None
+    return None
+
+
+def read_decision(path: Path) -> dict | None:
+    """A decision record as {stem, project, n, fm, title, path}, or None if its name or frontmatter isn't one."""
+    parts = decision_parts(path.parent.name, path.stem)
+    if not parts:
+        return None
+    fm, body, _ = split_frontmatter(read_text(path))
+    if not fm or fm.get("type") != "decision":
+        return None
+    return {"stem": path.stem, "project": path.parent.name, "n": parts[0], "fm": fm,
+            "title": decision_title(body) or path.stem, "path": path}
+
+
+def link_target(value) -> str | None:
+    """The note name in a frontmatter value that is one wikilink, e.g. '[[name]]'."""
+    m = LINK_VALUE_RE.match(value) if isinstance(value, str) else None
+    return m.group(1).strip() if m else None
+
+
+def standing_lines(records: list[dict]) -> list[str]:
+    """The lines the project overview's 'Standing decisions' must hold: its active records, in
+    number order, or None."""
+    active = [r for r in records if r["fm"].get("status") == "active"]
+    return [f"- {r['title']} [[{r['stem']}]]" for r in sorted(active, key=lambda r: r["n"])] or [NONE_LINE]
+
+
+def plan_lasting_decisions(body: str) -> list[tuple[int, str | None]]:
+    """(k, record named by 'replaces [[…]]' or None) for each '## Decisions' line of a plan body that
+    ends in the lasting marker."""
+    secs = dict(split_sections(blank_code_blocks(body)))
+    out = []
+    for ln in secs.get("Decisions", []):
+        m = PLAN_DECISION_RE.match(ln)
+        if m and ln.endswith(LASTING_SUFFIX):
+            r = REPLACES_RE.search(m.group(2))
+            out.append((int(m.group(1)), r.group(1).strip() if r else None))
+    return out
+
+
 # --- Vault index ---------------------------------------------------------------
 class Index:
     """Everything a link, project or repo reference could resolve to."""
@@ -348,6 +427,13 @@ class Index:
             self.names.add(p.name.lower())
             if p.suffix.lower() == ".md":
                 self.md_stems.add(p.stem.lower())
+        self.decisions = {}  # project folder -> [record dicts, by number]
+        for p in sorted((AGENT / FOLDERS["decision"]).glob("*/*.md")):
+            rec = read_decision(p)
+            if rec:
+                self.decisions.setdefault(p.parent.name, []).append(rec)
+        for recs in self.decisions.values():
+            recs.sort(key=lambda r: r["n"])
         self.projects = {}   # id -> Path
         self.repos = {}      # repo name -> [project ids that list it in repos:]
         self.slugs = {}      # repo name -> owner/name, as written in repos:
@@ -476,6 +562,10 @@ def classify(parts: tuple[str, ...]):
         if not IDEA_FILE_RE.match(stem):
             return bad_name(PATHS["idea"])
         return "idea", {}, None
+    if top == FOLDERS["decision"] and depth == 3:
+        if not ID_RE.match(parts[1]) or not decision_parts(parts[1], stem):
+            return bad_name(PATHS["decision"])
+        return "decision", {"project": parts[1]}, None
     if top == FOLDERS["work"] and depth == 3:
         m = WORK_FILE_RE.match(stem)
         if not m or m.group("repo") != parts[1]:
@@ -551,6 +641,17 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
         promoted = fm.get("promoted_to") not in (None, "")
         if (status == "promoted") != promoted and status in STATUSES["idea"]:
             res.add("FM-COND", "promoted_to must be set if and only if status is promoted")
+    if ntype == "decision":
+        if scalar("source") and not DECISION_SOURCE_RE.match(scalar("source")):
+            res.add("FM-FORMAT", "source must be 'plan <repo>#<n> D<k>', 'issue <repo>#<n>', "
+                                 "'retro <repo>#<n>' or 'session'")
+        if scalar("project") and not ID_RE.match(scalar("project")):
+            res.add("FM-FORMAT", "project is a plain project id, not a link")
+        for key in ("replaces", "superseded_by"):
+            if fm.get(key) not in (None, "") and not link_target(fm.get(key)):
+                res.add("FM-FORMAT", f"'{key}' must be one link, quoted: {key}: \"[[<record>]]\"")
+        if (status == "superseded") != (fm.get("superseded_by") not in (None, ""))                 and status in STATUSES["decision"]:
+            res.add("FM-COND", "superseded_by must be set if and only if status is superseded")
     if ntype == "plan" and status == "sealed":
         for key in ("issue_updated", "base_sha"):
             if fm.get(key) in (None, ""):
@@ -634,6 +735,35 @@ def _check_plan(res: Result, secs: list, draft: bool = False) -> None:
                 res.add("PLAN-STEP", f"step {head[4:30]!r} has no '{label}' line")
 
 
+def _check_decision(res: Result, path: Path, fm: dict, body: str, index: Index) -> None:
+    """A record's checks against the other records, each reading only their existing state."""
+    if decision_title(body) is None:
+        res.add("DEC-TITLE", "the body must start with a '# <title>' line")
+    records = {r["stem"]: r for r in index.decisions.get(path.parent.name, [])}
+    replaces = link_target(fm.get("replaces"))
+    if replaces and replaces not in records:
+        res.add("X-DECISION-LINK", f"replaces [[{replaces}]], which is not a record of project '{path.parent.name}'")
+    back = link_target(fm.get("superseded_by"))
+    if back and (back not in records or link_target(records[back]["fm"].get("replaces")) != path.stem):
+        res.add("X-DECISION-LINK", f"superseded_by [[{back}]], which is not a record of project "
+                                   f"'{path.parent.name}' that replaces this one")
+    if fm.get("status") == "active":
+        for r in records.values():
+            if link_target(r["fm"].get("replaces")) == path.stem:
+                res.add("X-DECISION-ACTIVE", f"this record is replaced by [[{r['stem']}]] but is still active")
+
+
+def _check_standing(res: Result, project: str, secs: list, index: Index) -> None:
+    section = dict(secs).get(STANDING)
+    if section is None:
+        return
+    have = [ln.strip() for ln in section if ln.strip()]
+    want = standing_lines(index.decisions.get(project, []))
+    if have != want:
+        res.add("X-STANDING", f"'## {STANDING}' must list exactly the active decision records, as generated by "
+                              f"`decision add`; expected {len(want)} line(s) (first: {want[0][:60]!r}), found {len(have)}")
+
+
 def validate_file(path: Path, index: Index | None = None, text: str | None = None) -> Result:
     """Validate a note; `text` checks that content as if it were in the file (nothing is written)."""
     res = Result()
@@ -666,6 +796,8 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
         _check_plan(res, secs, draft=fm.get("status") == "draft")
 
     n_lines = len(body.splitlines())
+    if etype == "project":      # the generated Standing decisions lines don't count toward the cap
+        n_lines -= len(dict(split_sections(body.splitlines())).get(STANDING, []))
     if etype in SIZE_CAPS and n_lines > SIZE_CAPS[etype]:
         res.add("SIZE-CAP", f"{etype} body is {n_lines} lines; the cap is {SIZE_CAPS[etype]}")
     if etype == "plan" and n_lines > PLAN_WARN_LINES:
@@ -680,9 +812,13 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
                         f"{', '.join(sorted(set(owners) | {path.stem}))}")
     if etype in ("plan", "impl", "retro") and parts[1] not in index.repos:
         res.add("X-REPO-UNREG", f"Work/{parts[1]}/ has no project listing repo '{parts[1]}' in repos:")
-    if etype == "idea" and fm.get("project") and ID_RE.match(fm["project"]) \
+    if etype in ("idea", "decision") and fm.get("project") and ID_RE.match(fm["project"]) \
             and fm["project"] not in index.projects:
         res.add("X-PROJECT", f"project '{fm['project']}' does not exist (see Agent/Projects)")
+    if etype == "decision":
+        _check_decision(res, path, fm, body, index)
+    if etype == "project":
+        _check_standing(res, path.stem, secs, index)
     seen = set()
     for ln in lines:
         for target in WIKILINK_RE.findall(re.sub(r"(`+).+?\1", "", ln)):
@@ -731,12 +867,16 @@ def schema_text() -> str:
                "repos entries owner/name; repo, issue, pr are plain values; ids are lowercase-kebab-case.")
     out.append("Idea source: retro <repo>#<n> | phone:<path> | session. "
                "Wikilinks in frontmatter must be quoted.")
+    out.append("Decision source: plan <repo>#<n> D<k> | issue <repo>#<n> | retro <repo>#<n> | session. "
+               "A record is never edited: `decision add` creates it, and `--replaces` marks the old one "
+               "superseded. A plan decision line ending in '" + LASTING_SUFFIX + "' is a lasting decision; "
+               "'replaces [[<record>]]' in it names the record it reverses.")
     out.append("Line formats (a line under these sections must match; 'None' where noted):")
     for t, secs in SECTION_LINES.items():
         for sec, (rule, none_ok) in secs.items():
             out.append(f"  {t} '## {sec}' [{rule}]{' (None allowed)' if none_ok else ''}:")
             out += [f"    {shape}" for shape, _ in LINE_FORMATS[rule]]
-    out.append(f"Daily events: {', '.join(EVENTS)} (with <repo>#<n>); {', '.join(IDEA_EVENTS)} (with <title> and idea link).")
+    out.append(f"Daily events: {', '.join(EVENTS)} (with <repo>#<n>); {', '.join(IDEA_EVENTS)} (with <title> and idea link); {DECISION_EVENT} (with <title> and record link).")
     out.append("Plan checks: every AC is referenced by a test and every referenced AC exists; "
                "each step has Files: and Done when:; Tests ends with a Full check: line; "
                "a sealed plan has issue_updated and base_sha. On a draft plan the completeness checks "
@@ -825,10 +965,29 @@ def _hash(path: Path) -> str:
     return hashlib.sha1(path.read_bytes()).hexdigest()
 
 
+def _record_hash(path: Path) -> str:
+    """A decision record's hash without its frontmatter `status` and `superseded_by` lines: the CLI
+    changes those two when a later record replaces it, and any other change is a forbidden edit."""
+    lines, in_fm = [], False
+    for n, ln in enumerate(read_text(path).splitlines(keepends=True)):
+        if ln.strip() == "---" and (n == 0 or in_fm):
+            in_fm = n == 0
+        elif in_fm and re.match(r"(?:status|superseded_by):", ln):
+            continue
+        lines.append(ln)
+    return hashlib.sha1("".join(lines).encode("utf-8")).hexdigest()
+
+
+def _digest(path: Path, name: str) -> str:
+    return _record_hash(path) if name.startswith(f"{AGENT.name}/{FOLDERS['decision']}/") else _hash(path)
+
+
 def fingerprints() -> dict[str, str]:
-    """Content hashes of every sealed note and every daily note older than today, by vault path.
-    Stop compares against these to catch shell writes the guard can't see (design §9)."""
+    """Content hashes of every sealed note, decision record and every daily note older than today, by
+    vault path. Stop compares against these to catch shell writes the guard can't see (design §9)."""
     out = {}
+    for p in sorted((AGENT / FOLDERS["decision"]).glob("*/*.md")):
+        out[rel(p)] = _digest(p, rel(p))
     for p in sorted((AGENT / FOLDERS["work"]).rglob("*.md")):
         if is_sealed_note(p):
             out[rel(p)] = _hash(p)
@@ -844,7 +1003,7 @@ def changed_fingerprints(before: dict) -> list[str]:
     for name, digest in sorted(before.items()):
         p = VAULT / name
         try:
-            if _hash(p) != digest:
+            if _digest(p, name) != digest:
                 changed.append(name)
         except OSError:
             changed.append(name)

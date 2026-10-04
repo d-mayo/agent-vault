@@ -101,6 +101,10 @@ name (e.g. `agent-vault`), never `owner/name`.
      single-repo facts, even for a single-repo project (those go in the
      repo's own `CLAUDE.md` instead, so they still move if the project
      later grows a second repo).
+   - The overview's `## Standing decisions` is generated: `decision add`
+     rewrites it, and `validate` rejects any hand edit. Audit it as
+     `confirmed`; to change what it says, record or replace a decision
+     (see Decisions below).
    - With no `README.md`, or one with no `##` headings, `## README audit`
      is `None`.
 5. Repo-file rewrites (`CLAUDE.md`, `README.md`) are committed and pushed
@@ -130,6 +134,9 @@ name (e.g. `agent-vault`), never `owner/name`.
    - `- idea [[<idea>]]`: `vault.py idea add "<title>" --project <id>
      --source "retro <repo>#<issue>"`, `<id>` the project whose `repos:`
      lists this repo.
+   - `- decision [[<record>]]`: a decision that came up during
+     implementation and isn't in the plan, recorded as in Decisions below
+     with `--source "retro <repo>#<issue>"`.
    - `- dropped: <why>`.
 
    A line settling a left-open finding ends in its number, e.g.
@@ -139,6 +146,23 @@ name (e.g. `agent-vault`), never `owner/name`.
    `<id>`) and propose dropping, with `vault.py idea drop <file> --reason
    "..."`, the ones this issue resolved.
 3. Write the sorted lines under the retro's `## Follow-ups`.
+
+## Decisions
+
+A decision record is never edited, so show the user each one's exact title,
+decision and why (written to stand alone, without D numbers or AC
+references) before creating it.
+
+1. For every line of the sealed plan's `## Decisions` ending in " (lasting)",
+   run `vault.py decision add <id> "<title>" --decision "..." --why "..."
+   --source "plan <repo>#<issue> D<k>"`, adding `--replaces <record>` when
+   the line says `replaces [[<record>]]` (`<id>` as in Follow-ups). Check
+   `vault.py decisions --all --project <id>` first and skip one already
+   recorded, so a resumed retro never records twice.
+2. For a decision that came up during implementation, run the same
+   command with `--source "retro <repo>#<issue>"` and add its
+   `- decision [[<record>]]` follow-up.
+3. `seal retro` refuses until every lasting plan decision has its record.
 
 ## Seal
 

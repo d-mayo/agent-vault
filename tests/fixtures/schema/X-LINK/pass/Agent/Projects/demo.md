@@ -21,4 +21,4 @@ Syntax: `[[nowhere]]` and
 and [[Ideas]].
 
 ## Standing decisions
-- Keep it small, because it is a demo.
+None

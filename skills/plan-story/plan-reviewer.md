@@ -27,7 +27,9 @@ Give the reviewer, verbatim and in full:
 4. The spec sections and the code the plan's `Context` and `Files:` lines
    point at, and the neighbouring issues research turned up.
 5. The project overview note.
-6. The exact instructions under "Findings format" below — the severity
+6. The project's active decision records, in full (`vault.py decisions
+   --project <id>` lists them; the notes are in `Agent/Decisions/<id>/`).
+7. The exact instructions under "Findings format" below — the severity
    definitions and the requirement to answer with nothing but those lines.
 
 Ask it to check the draft against all of the above:
@@ -40,6 +42,8 @@ Ask it to check the draft against all of the above:
   repo as it stands?
 - Does anything in the draft contradict the code, the spec, or a
   neighbouring issue's scope?
+- Does anything in the draft contradict an active decision record without
+  a decision saying `replaces [[<record>]]` for it?
 - Does the plan's `Acceptance criteria` cover everything the issue's title
   and body actually require — not just what the draft's own `Out of scope`
   excludes?
@@ -59,8 +63,9 @@ or `No findings.` if there's nothing to report. Nothing else in the reply.
 `major`: a referenced test doesn't actually exercise the acceptance
 criterion it claims to cover, an acceptance criterion the issue requires is
 missing from the plan altogether, a step can't be done as written, or the
-draft contradicts the code, the spec, the repo `CLAUDE.md`, or a
-neighbouring issue's scope. `minor`: everything else worth recording —
+draft contradicts the code, the spec, the repo `CLAUDE.md`, a
+neighbouring issue's scope, or an active decision record that the draft
+doesn't name as replaced. `minor`: everything else worth recording —
 scope creep beyond the issue itself, a missed edge case, a small
 inconsistency.
 

@@ -84,6 +84,7 @@ class NewProjectTest(CliCase):
         self.assertIn("repos: [me/two-a, me/two-b]", self.text("Projects/two.md"))
         for section in ("Purpose", "Current state", "Architecture", "Standing decisions"):
             self.assertIn(f"## {section}\n", self.text("Projects/one.md"))
+        self.assertTrue(self.text("Projects/one.md").endswith("## Standing decisions\nNone\n"))     # T3 -> AC5
         self.validate()
 
     def test_refusals(self):                              # T2 -> AC2
@@ -341,6 +342,113 @@ class LogTest(CliCase):
         self.refused("log", "x", "--project", "ghost", why="does not exist")
         self.refused("log", "  ", why="empty")
         self.assertFalse(self.path(f"Daily/{TODAY}.md").exists())
+
+
+class DecisionAddTest(CliCase):                                    # T4, T5 -> AC3, AC4 (#36)
+    def setUp(self):
+        super().setUp()
+        self.project("demo", "me/demo")
+        self.project("other")
+
+    def add(self, title="Keep it small", source="plan demo#2 D1", project="demo", *extra, ok=True):
+        return self.cli("decision", "add", project, title, "--decision", "Keep the demo small.",
+                        "--why", "It is a demo.", "--source", source, *extra, ok=ok)
+
+    def snapshot(self):
+        return {p: p.read_bytes() for p in (self.vault / "Agent").rglob("*.md")}
+
+    def test_numbers_content_overview_and_log(self):
+        self.add("Keep it small")
+        self.add("Why: #1 [and more]", "issue demo#3")
+        d1, d2 = "Decisions/demo/demo-d1-keep-it-small.md", "Decisions/demo/demo-d2-why-1-and-more.md"
+        self.assertEqual(self.text(d1), f"---\ntype: decision\nproject: demo\nstatus: active\ncreated: {TODAY}\n"
+                                        "source: plan demo#2 D1\n---\n# Keep it small\n\n## Decision\n"
+                                        "Keep the demo small.\n\n## Why\nIt is a demo.\n")
+        self.assertIn("# Why: #1 [and more]\n", self.text(d2))
+        self.assertTrue(self.text("Projects/demo.md").endswith(
+            "## Standing decisions\n- Keep it small [[demo-d1-keep-it-small]]\n"
+            "- Why: #1 [and more] [[demo-d2-why-1-and-more]]\n"))
+        log = self.text(f"Daily/{TODAY}.md")
+        self.assertRegex(log, r"- \d\d:\d\d decision-recorded — Keep it small \[\[demo-d1-keep-it-small\]\]")
+        self.assertIn("decision-recorded — Why: #1 [and more] [[demo-d2-why-1-and-more]]", log)
+        self.add("Other thing", "session", "other")
+        self.assertTrue(self.path("Decisions/other/other-d1-other-thing.md").is_file())
+        self.validate()
+
+    def test_replacing_supersedes_without_touching_the_body(self):
+        self.add("Keep it small")
+        old = "Decisions/demo/demo-d1-keep-it-small.md"
+        before = self.text(old)
+        self.add("Keep it tiny", "issue demo#4", "demo", "--replaces", "demo-d1-keep-it-small")
+        after = self.text(old)
+        self.assertEqual(after.split("---\n", 2)[2], before.split("---\n", 2)[2])
+        self.assertIn("status: superseded\n", after)
+        self.assertIn('superseded_by: "[[demo-d2-keep-it-tiny]]"\n', after)
+        self.assertIn('replaces: "[[demo-d1-keep-it-small]]"\n', self.text("Decisions/demo/demo-d2-keep-it-tiny.md"))
+        self.assertTrue(self.text("Projects/demo.md").endswith(
+            "## Standing decisions\n- Keep it tiny [[demo-d2-keep-it-tiny]]\n"))
+        self.validate()
+
+    def test_standing_section_in_the_middle_keeps_what_follows(self):
+        p = self.path("Projects/demo.md")
+        p.write_text(p.read_text(encoding="utf-8") + "\n## Notes\nkept\n", encoding="utf-8", newline="\n")
+        self.add()
+        self.assertIn("[[demo-d1-keep-it-small]]\n", self.text("Projects/demo.md"))
+        self.assertTrue(self.text("Projects/demo.md").endswith("\n## Notes\nkept\n"))
+
+    def test_refusals_leave_every_note_unchanged(self):
+        self.add("Keep it small")
+        self.add("Second", "issue demo#9")
+        self.cli("decision", "add", "demo", "Third", "--decision", "x", "--why", "y", "--source", "session",
+                 "--replaces", "demo-d2-second")
+        before = self.snapshot()
+        cases = [
+            (("demo", "  ", "--decision", "d", "--why", "w", "--source", "session"), "title is empty"),
+            (("demo", "T", "--decision", " ", "--why", "w", "--source", "session"), "--decision is empty"),
+            (("demo", "T", "--decision", "d", "--why", "  ", "--source", "session"), "--why is empty"),
+            (("ghost", "T", "--decision", "d", "--why", "w", "--source", "session"), "does not exist"),
+            (("demo", "T", "--decision", "d", "--why", "w", "--source", "somewhere"), "source must be"),
+            (("demo", "T [[x]]", "--decision", "d", "--why", "w", "--source", "session"), "[["),
+            (("demo", "T\nU", "--decision", "d", "--why", "w", "--source", "session"), "one line"),
+            (("demo", "T", "--decision", "d", "--why", "w", "--source", "plan demo#2 D1"), "already recorded as demo-d1"),
+            (("demo", "T", "--decision", "d", "--why", "w", "--source", "session", "--replaces", "demo-d2-second"),
+             "already superseded"),
+            (("demo", "T", "--decision", "d", "--why", "w", "--source", "session", "--replaces", "demo-d9-none"),
+             "no decision record"),
+            (("other", "T", "--decision", "d", "--why", "w", "--source", "session", "--replaces", "demo-d1-keep-it-small"),
+             "record of project 'demo'"),
+        ]
+        for args, why in cases:
+            with self.subTest(args=args):
+                self.refused("decision", "add", *args, why=why)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_a_refused_overview_rolls_everything_back(self):
+        p = self.path("Projects/demo.md")
+        p.write_text(p.read_text(encoding="utf-8").replace("## Standing decisions\nNone\n", ""),
+                     encoding="utf-8", newline="\n")
+        before = self.snapshot()
+        self.refused("decision", "add", "demo", "T", "--decision", "d", "--why", "w", "--source", "session",
+                     why="no '## Standing decisions' section")
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.path("Decisions").exists())
+
+    def test_decisions_lists_active_all_and_by_project(self):
+        self.add("Keep it small")
+        self.add("Keep it tiny", "issue demo#4", "demo", "--replaces", "demo-d1-keep-it-small")
+        self.add("Elsewhere", "retro demo#5", "other")
+        active = self.cli("decisions").stdout
+        self.assertIn("demo-d2-keep-it-tiny.md  Keep it tiny  [issue demo#4]", active)
+        self.assertIn("other-d1-elsewhere.md  Elsewhere  [retro demo#5]", active)
+        self.assertNotIn("demo-d1-keep-it-small", active)
+        everything = self.cli("decisions", "--all").stdout
+        self.assertIn("demo-d1-keep-it-small.md  Keep it small  [plan demo#2 D1]  (superseded)", everything)
+        only = self.cli("decisions", "--all", "--project", "demo").stdout
+        self.assertNotIn("other-d1", only)
+        self.assertIn("demo-d2", only)
+        self.project("solo")
+        self.assertIn("no decisions", self.cli("decisions", "--project", "solo").stdout)
+        self.refused("decisions", "--project", "ghost", why="does not exist")
 
 
 class AllCommandsTest(CliCase):

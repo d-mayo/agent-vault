@@ -7,6 +7,7 @@ This vault has two sides.
   - `Projects/<id>.md`: one overview note per project; it lists the project's GitHub repos in `repos:`.
   - `Work/<repo>/<repo>-<n>-plan.md`, `-impl.md`, `-retro.md`: one set per GitHub issue.
   - `Ideas/<date>-<slug>.md`: one idea per file.
+  - `Decisions/<project>/<project>-d<n>-<slug>.md`: one decision record per lasting decision; never edited, only replaced by a later record.
   - `Daily/<date>.md`: the log, one file per day.
 
 The scripts live outside the vault, in `~/.claude/agent-vault/`, installed from the `d-mayo/agent-vault` repo; change them there, never in place. Code repos live outside the vault. A finished project gets `status: archived` in place.
@@ -19,7 +20,7 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what 
 - A project reference is always `[[project-id]]` of a project that exists. If it's unclear which project something belongs to, ask me instead of guessing.
 - Never write vault files through the shell (`echo >`, `sed -i`, `Set-Content`, `mv`, …): use the CLI commands below or the edit tools, which the hooks check. Sealed notes and past daily notes are never edited; if one is wrong, tell me.
 - Log work with `{{CLI}} log "..." --project <id>`. Past daily notes are closed.
-- A project's current truth lives in its project note (`Purpose`, `Current state`, `Architecture`, `Standing decisions`). Daily notes are history.
+- A project's current truth lives in its project note (`Purpose`, `Current state`, `Architecture`, `Standing decisions`, the last generated from the decision records). Daily notes are history.
 
 ## Commands
 
@@ -32,6 +33,7 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what 
 - `{{CLI}} repo-init <path>`: one-time setup of a repo clone (squash-only merges, `planned` label, shared pre-push hook, `CLAUDE.md` skeleton, `.github/ISSUE_TEMPLATE/issue.md`; the last two are left uncommitted).
 - `{{CLI}} idea add "<title>" [--project <id>] [--source ...]` and `{{CLI}} idea drop <file> --reason "..."`, `{{CLI}} idea promote <file> --body-file <file> [--title "..."] [--repo <name>]` (creates the GitHub issue from a body in the issue template; only after I approve)
 - `{{CLI}} issue create <repo> --title "..." --body-file <file> [--idea <file>]`: the one way to create a GitHub issue; refuses a body that isn't the issue template (`{{CLI}} schema` lists its sections), and only after I approve the exact title and body
+- `{{CLI}} decision add <project> "<title>" --decision "..." --why "..." --source "plan <repo>#<n> D<k> | issue <repo>#<n> | retro <repo>#<n> | session" [--replaces <record>]`: the only way to write a decision record; it also rewrites the project note's `Standing decisions` (generated, never hand-edited). `{{CLI}} decisions [--project <id>] [--all]` lists the active records (`--all`: superseded too).
 - `{{CLI}} ideas [--project <id>] [--status open]` lists ideas; `{{CLI}} ideas review` lists open ideas older than 90 days.
 - `{{CLI}} handoff list` and `{{CLI}} handoff pull "<path>" [--project <id>]`
 - `{{CLI}} log "<text>" [--project <id>]`

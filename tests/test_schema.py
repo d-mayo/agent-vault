@@ -210,7 +210,7 @@ class LayoutAndFrontmatterTest(VaultCase):
         for p in (self.vault / "Agent").rglob("*.md"):
             fm, _, _ = lib.split_frontmatter(p.read_text(encoding="utf-8"))
             types.add(fm["type"])
-        self.assertEqual(types, set(lib.TYPES))
+        self.assertEqual(types, set(lib.TYPES) - {"decision"})     # records have their own fixtures
 
     def test_stray_and_wrong_names(self):         # T3 -> AC3
         idea = (self.vault / "Agent/Ideas/2026-09-26-an-idea.md").read_text(encoding="utf-8")
@@ -260,7 +260,8 @@ class SectionsAndSizeTest(VaultCase):
         for rel, heading in [("Agent/Projects/demo.md", "Current state"),
                              ("Agent/Work/demo/demo-1-impl.md", "Verification"),
                              ("Agent/Work/demo/demo-1-retro.md", "Summary")]:
-            cap = lib.SIZE_CAPS[lib.split_frontmatter((self.vault / rel).read_text(encoding="utf-8"))[0]["type"]]
+            ntype = lib.split_frontmatter((self.vault / rel).read_text(encoding="utf-8"))[0]["type"]
+            cap = lib.SIZE_CAPS[ntype] + (1 if ntype == "project" else 0)   # the Standing decisions line is free
             with self.subTest(rel=rel):
                 path = self.body_padded(rel, heading, cap)
                 self.assertEqual(lib.validate_file(path).errors, [])
@@ -409,6 +410,150 @@ class RetroFollowRefTest(VaultCase):      # T1 -> AC1
         text = buf.getvalue()
         self.assertIn("- issue #<n> created[ (R<n>[, R<m>…])]", text)
         self.assertIn("(R<n>[, R<m>…])", text)
+
+
+class DecisionRecordTest(VaultCase):
+    """Decision records, their links and the generated Standing decisions (#36)."""
+    D1, D2 = "demo-d1-keep-it-small", "demo-d2-keep-it-tiny"
+
+    def record(self, **over):
+        fm = {"type": "decision", "project": "demo", "status": "active", "created": "2026-09-26",
+              "source": "plan demo#1 D1", **over}
+        fm = {k: v for k, v in fm.items() if v is not None}
+        return lib.render_frontmatter(fm) + "# Keep it small\n\n## Decision\nSmall.\n\n## Why\nDemo.\n"
+
+    def setUp(self):
+        super().setUp()
+        self.load_base()
+
+    def standing(self, *lines):
+        path = self.vault / "Agent/Projects/demo.md"
+        head, _ = path.read_text(encoding="utf-8").split("## Standing decisions\n")
+        path.write_text(head + "## Standing decisions\n" + "\n".join(lines or ["None"]) + "\n",
+                        encoding="utf-8", newline="\n")
+
+    def rules(self, relpath):
+        res = lib.validate_file(self.vault / relpath)
+        return sorted({m[1:m.index("]")] for m in res.errors})
+
+    def test_well_formed_record_validates(self):           # T1 -> AC1
+        self.put(f"Agent/Decisions/demo/{self.D1}.md", self.record())
+        self.standing(f"- Keep it small [[{self.D1}]]")
+        self.assertEqual(self.check(), ({}, {}))
+
+    def test_record_problems_each_fail(self):              # T1 -> AC1, AC2
+        rel = f"Agent/Decisions/demo/{self.D1}.md"
+        good = self.record()
+        cases = {
+            "missing field": (good.replace("created: 2026-09-26\n", ""), "FM-REQUIRED"),
+            "bad source": (good.replace("plan demo#1 D1", "somewhere"), "FM-FORMAT"),
+            "bad status": (good.replace("status: active", "status: gone"), "FM-ENUM"),
+            "missing section": (good.replace("## Why", "## Because"), "SEC-MISSING"),
+            "no title": (good.replace("# Keep it small\n\n", ""), "DEC-TITLE"),
+            "too long": (good + "- x\n" * 7, "SIZE-CAP"),
+            "superseded without link": (good.replace("status: active", "status: superseded"), "FM-COND"),
+            "link without superseded": (good.replace("source:", 'superseded_by: "[[x]]"\nsource:'), "FM-COND"),
+            "unquoted link": (good.replace("source:", "replaces: [[x]]\nsource:"), "FM-PARSE"),
+        }
+        for label, (text, rule) in cases.items():
+            with self.subTest(label):
+                self.put(rel, text)
+                self.assertIn(rule, self.rules(rel))
+
+    def test_every_source_form_is_accepted(self):          # T1 -> AC2
+        rel = f"Agent/Decisions/demo/{self.D1}.md"
+        for source in ("plan demo#1 D1", "plan demo#12 D3", "issue demo#4", "retro demo#4", "session"):
+            with self.subTest(source):
+                self.put(rel, self.record(source=source))
+                self.assertEqual(self.rules(rel), [])
+
+    def test_links_between_records(self):                  # T1 -> AC2
+        old, new = f"Agent/Decisions/demo/{self.D1}.md", f"Agent/Decisions/demo/{self.D2}.md"
+        self.put(old, self.record(status="superseded", superseded_by=f"[[{self.D2}]]"))
+        self.put(new, self.record(replaces=f"[[{self.D1}]]", source="issue demo#2"))
+        self.assertEqual((self.rules(old), self.rules(new)), ([], []))
+        self.put(new, self.record(source="issue demo#2"))                     # no longer replaces back
+        self.assertEqual(self.rules(old), ["X-DECISION-LINK"])
+        self.put(new, self.record(replaces="[[demo-d9-gone]]", source="issue demo#2"))
+        self.assertEqual(self.rules(new), ["X-DECISION-LINK"])
+        self.put(new, self.record(replaces=f"[[{self.D1}]]", source="issue demo#2"))
+        self.put(old, self.record())                                          # replaced but still active
+        self.assertEqual(self.rules(old), ["X-DECISION-ACTIVE"])
+
+    def test_standing_decisions_match_active_records(self):    # T3 -> AC5
+        old, new = f"Agent/Decisions/demo/{self.D1}.md", f"Agent/Decisions/demo/{self.D2}.md"
+        proj = "Agent/Projects/demo.md"
+        self.standing()
+        self.assertEqual(self.rules(proj), [])                                 # None, no records
+        self.put(old, self.record())
+        self.put(new, self.record(source="issue demo#2"))
+        line1, line2 = f"- Keep it small [[{self.D1}]]", f"- Keep it small [[{self.D2}]]"
+        for label, lines, ok in [("both", (line1, line2), True), ("none", (), False),
+                                 ("missing", (line1,), False), ("extra", (line1, line2, line2), False),
+                                 ("reordered", (line2, line1), False),
+                                 ("wrong title", (f"- Other [[{self.D1}]]", line2), False)]:
+            with self.subTest(label):
+                self.standing(*lines)
+                self.assertEqual(self.rules(proj) == [], ok, self.rules(proj))
+        self.put(old, self.record(status="superseded", superseded_by=f"[[{self.D2}]]"))
+        self.put(new, self.record(replaces=f"[[{self.D1}]]", source="issue demo#2"))
+        self.standing(line1, line2)
+        self.assertEqual(self.rules(proj), ["X-STANDING"])
+        self.standing(line2)
+        self.assertEqual(self.rules(proj), [])
+
+    def test_standing_lines_do_not_count_toward_the_cap(self):   # T3 -> AC5
+        path = self.vault / "Agent/Projects/demo.md"
+        text = path.read_text(encoding="utf-8").replace("## Architecture\n", "## Architecture\n" + "- filler\n" * 40, 1)
+        path.write_text(text, encoding="utf-8", newline="\n")
+        stems = [f"demo-d{n}-record-{n}" for n in range(1, 71)]
+        for n, stem in enumerate(stems, 1):
+            self.put(f"Agent/Decisions/demo/{stem}.md",
+                     self.record(source=f"issue demo#{n}").replace("Keep it small", f"Record {n}", 1))
+        self.standing(*[f"- Record {n} [[{stem}]]" for n, stem in enumerate(stems, 1)])
+        self.assertGreater(len(path.read_text(encoding="utf-8").splitlines()), 100)
+        self.assertEqual(self.rules("Agent/Projects/demo.md"), [])
+
+    def test_schema_shows_the_decision_type(self):         # T1 -> AC1
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            vault.cmd_schema(None)
+        text = buf.getvalue()
+        for want in ("Decisions/<project>/<project>-d<n>-<slug>.md", "superseded_by", "## Decision, ## Why",
+                     "decision-recorded", "- decision [[<record>]]", "X-STANDING", "plan <repo>#<n> D<k>"):
+            self.assertIn(want, text)
+
+
+class LastingMarkerTest(unittest.TestCase):
+    def body(self, *lines):
+        return "## Decisions\n" + "\n".join(lines) + "\n\n## Tests\n"
+
+    def test_marker_after_because_and_after_user_decision(self):     # T2 -> AC7
+        body = self.body("- D1: a, because b (lasting)", "- D2: a, because b (user decision) (lasting)",
+                         "- D3: a, because b", "- D4: a, because b (user decision)")
+        self.assertEqual(lib.plan_lasting_decisions(body), [(1, None), (2, None)])
+        for ln in ("- D1: a, because b (lasting)", "- D2: a, because b (user decision) (lasting)"):
+            self.assertTrue(any(rx.match(ln) for _, rx in lib.LINE_FORMATS["PLAN-D"]))
+
+    def test_replaces_phrase_only(self):                             # T2 -> AC7
+        body = self.body("- D1: reverse, replaces [[demo-d3-x]], because b (lasting)",
+                         "- D2: cite [[demo-d4-y]], because b (lasting)")
+        self.assertEqual(lib.plan_lasting_decisions(body), [(1, "demo-d3-x"), (2, None)])
+
+    def test_marker_must_end_the_line_and_sit_in_decisions(self):    # T2 -> AC7
+        self.assertEqual(lib.plan_lasting_decisions(self.body("- D1: a, because b (lasting) more")), [])
+        self.assertEqual(lib.plan_lasting_decisions("## Goal\n- D1: a, because b (lasting)\n"), [])
+
+    def test_followup_and_daily_forms(self):                         # T2 -> AC8
+        def follow(ln):
+            return any(rx.match(ln) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"])
+
+        def daily(ln):
+            return any(rx.match(ln) for _, rx in lib.LINE_FORMATS["DAILY-LINE"])
+        self.assertTrue(follow("- decision [[demo-d1-x]]") and follow("- decision [[demo-d1-x]] (R2)"))
+        self.assertFalse(follow("- decision demo-d1-x") or follow("- decision [[demo-d1-x]] (2)"))
+        self.assertTrue(daily("- 09:30 decision-recorded — Why: #1 [[demo-d1-x]]"))
+        self.assertFalse(daily("- 09:30 decision-recorded — no link"))
 
 
 class CrossNoteTest(VaultCase):

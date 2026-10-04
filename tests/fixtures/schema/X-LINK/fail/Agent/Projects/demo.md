@@ -17,4 +17,4 @@ A demo project.
 See [[nowhere]].
 
 ## Standing decisions
-- Keep it small, because it is a demo.
+None

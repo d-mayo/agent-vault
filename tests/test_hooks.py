@@ -154,6 +154,14 @@ class GuardTest(HookCase):  # T5 -> AC5, AC6, T12
         self.blocked(self.agent("loose.md"), says="loose files")
         self.blocked(self.agent("loose.md"), tool="Edit", says="Projects/")
 
+    def test_decision_records_cannot_be_edited_or_created(self):      # T6 -> AC6
+        self.cli("decision", "add", "demo", "Keep it small", "--decision", "d", "--why", "w", "--source", "session")
+        msg = self.blocked(self.agent("Decisions/demo/demo-d1-keep-it-small.md"), tool="Edit", says="decision add")
+        self.assertIn("replaces it", msg)
+        self.blocked(self.agent("Decisions/demo/demo-d2-new.md"), says="decision add")
+        self.blocked(self.agent("Decisions/demo/demo-d1-keep-it-small.md"), tool="MultiEdit", says="never edited")
+        self.assertIn("decision add", self.blocked(self.agent("Projects/new.md"), says="new project"))
+
     def test_allowed_edits(self):
         self.allowed(self.agent("Work/widget/widget-7-impl.md"))
         self.allowed(self.agent("Work/widget/widget-7-plan.md"))           # a draft plan
@@ -488,6 +496,33 @@ class StopTest(HookCase):
         self.assertIn("Tell the user", r.stderr)
         self.assertNotIn(time.strftime("%Y-%m-%d"), r.stderr)       # today's note isn't in the list
         self.assertEqual(self.stop(active=True).returncode, 0)
+
+    def decision_session(self):
+        self.cli("decision", "add", "demo", "Keep it small", "--decision", "d", "--why", "w", "--source", "session")
+        self.start(self.vault)
+        self.tick()
+        return self.agent("Decisions/demo/demo-d1-keep-it-small.md")
+
+    def test_replacing_a_record_is_not_a_shell_edit(self):              # T6 -> AC6
+        rec = self.decision_session()
+        self.cli("decision", "add", "demo", "Keep it tiny", "--decision", "d", "--why", "w",
+                 "--source", "issue widget#3", "--replaces", "demo-d1-keep-it-small")
+        self.assertIn("status: superseded", rec.read_text(encoding="utf-8"))
+        r = self.stop()
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_shell_edit_to_a_record_is_named(self):                     # T6 -> AC6
+        rec = self.decision_session()
+        text = rec.read_text(encoding="utf-8")
+        for old, new in (("## Decision\nd", "## Decision\nx"), ("source: session", "source: issue widget#9"),
+                         ("## Why\nw", "## Why\nww")):
+            with self.subTest(old=old):
+                rec.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+                self.cli("log", "logged", "--project", "demo")
+                r = self.stop()
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertIn("Decisions/demo/demo-d1-keep-it-small.md", r.stderr)
+                rec.write_text(text, encoding="utf-8", newline="\n")
 
     def test_deleted_sealed_note_is_named(self):
         self.seal(self.agent("Work/widget/widget-7-impl.md"))
