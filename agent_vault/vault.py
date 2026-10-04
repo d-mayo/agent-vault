@@ -9,6 +9,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   seal plan <repo> <issue>
   seal retro <repo> <issue>
   seal design <design>
+  design stories <design>
   preflight <repo> <issue>
   branch <repo> <issue> [--type feat] [--slug <slug>]
   open-pr <repo> <issue> [--body-file <file>]
@@ -1251,6 +1252,42 @@ def cmd_seal_design(args) -> None:
           f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
 
 
+def story_issues(slug: str, design: str) -> dict[int, list[tuple[str, dict]]]:
+    """Story number -> (owner/name, issue) for each issue of the repo whose Source section names
+    '[[<design>]] S<n>'. Only the Source section counts: a mention anywhere else is not a filing."""
+    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
+    found: dict[int, list[tuple[str, dict]]] = {}
+    for issue in github.repo_issues(slug):
+        source = dict(lib.split_sections(lib.blank_code_blocks(issue.get("body") or ""))).get("Source", [])
+        for n in sorted({int(m.group(1)) for ln in source for m in link.finditer(ln)}):
+            found.setdefault(n, []).append((slug, issue))
+    return found
+
+
+def cmd_design_stories(args) -> None:
+    path = find_design(args.design)
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    if (fm or {}).get("status") != "sealed":
+        die(f"{lib.rel(path)} is a draft; stories are filed from a sealed design (`seal design {path.stem}`)")
+    index = lib.Index()
+    project = fm["project"]
+    repos = sorted(n for n, pids in index.repos.items() if project in pids)
+    filed: dict[int, list[tuple[str, dict]]] = {}
+    for name in repos:
+        for n, issues in story_issues(index.slugs[name], path.stem).items():
+            filed.setdefault(n, []).extend(issues)
+    stories = lib.design_stories(body)
+    for s in stories:
+        issues = filed.get(s["n"])
+        print(f"S{s['n']}. {s['title']}: "
+              + (", ".join(f"{slug}#{i['number']} ({i['state'].lower()})" for slug, i in issues)
+                 if issues else "not filed"))
+    if not repos:
+        print(f"project '{project}' has no repos yet, so nothing can be filed; register one first")
+    unfiled = [s for s in stories if s["n"] not in filed]
+    print(f"{len(stories) - len(unfiled)} of {len(stories)} stories filed" if stories else "no stories")
+
+
 def cmd_decisions(args) -> None:
     index = lib.Index()
     require_project(index, args.project)
@@ -1480,6 +1517,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="plan <repo>#<n> D<k> | design <design> D<k> | issue <repo>#<n> | retro <repo>#<n> | session")
     p.add_argument("--replaces", help="the active record this one reverses; it is marked superseded")
     p.set_defaults(fn=cmd_decision_add)
+    des = sub.add_parser("design", help="list a sealed design's stories with their issues").add_subparsers(
+        dest="action", required=True, metavar="stories")
+    p = des.add_parser("stories", help="each story with the issues whose Source names it, or 'not filed'")
+    p.add_argument("design")
+    p.set_defaults(fn=cmd_design_stories)
     p = sub.add_parser("decisions", help="list active decision records (--all: superseded too)")
     p.add_argument("--project")
     p.add_argument("--all", action="store_true")

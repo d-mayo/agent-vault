@@ -152,6 +152,19 @@ def issue_info(slug: str, number: str) -> dict:
             "edited": max(s for s in stamps if s)}
 
 
+ISSUE_LIMIT = 5000
+
+
+def repo_issues(slug: str) -> list[dict]:
+    """Every issue of a repo, open and closed, as {number, title, state, url, body}. Read straight from
+    GitHub, never from its search index, which lags behind a just-filed issue (#37 D8)."""
+    found = gh_json("issue", "list", "--repo", slug, "--state", "all", "--limit", str(ISSUE_LIMIT),
+                    "--json", "number,title,state,url,body")
+    if len(found) >= ISSUE_LIMIT:
+        raise CmdError(f"{slug} has {ISSUE_LIMIT} or more issues; more than `design stories` can list")
+    return found
+
+
 def head_sha(slug: str, branch: str) -> str:
     return gh_json("api", f"repos/{slug}/commits/{branch}")["sha"]
 
