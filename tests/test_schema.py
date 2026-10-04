@@ -556,6 +556,174 @@ class LastingMarkerTest(unittest.TestCase):
         self.assertFalse(daily("- 09:30 decision-recorded — no link"))
 
 
+class DesignNoteTest(VaultCase):
+    """The design note type: layout, sections, entry formats, links, sealing checks (#37)."""
+    D1 = "Agent/Designs/demo/demo-design-1-first.md"
+
+    def setUp(self):
+        super().setUp()
+        self.load_base()
+        self.draft = (self.vault / self.D1).read_text(encoding="utf-8")
+
+    def rules(self, text, relpath=None, warnings=False):
+        rel = relpath or self.D1
+        self.put(rel, text)
+        res = lib.validate_file(self.vault / rel)
+        return sorted({m[1:m.index("]")] for m in (res.warnings if warnings else res.errors)})
+
+    def sealed(self, text=None):
+        return (text or self.draft).replace("status: draft", "status: sealed\nsealed: 2026-09-27")
+
+    def test_draft_and_sealed_validate(self):                      # T1 -> AC1
+        self.assertEqual(self.check(), ({}, {}))
+        shutil.copytree(FIXTURES / "DESIGN-SEALED" / "pass", self.vault, dirs_exist_ok=True)
+        self.assertEqual(self.check(), ({}, {}))
+
+    def test_frontmatter_problems(self):                           # T1 -> AC1
+        for label, old, new, rule in [
+                ("missing field", "created: 2026-09-26\n", "", "FM-REQUIRED"),
+                ("unknown field", "status: draft", "status: draft\nextra: 1", "FM-UNKNOWN"),
+                ("bad status", "status: draft", "status: open", "FM-ENUM"),
+                ("project mismatch", "project: demo", "project: other", "FM-MATCH"),
+                ("sealed without date", "status: draft", "status: sealed", "DESIGN-SEALED"),
+                ("date on a draft", "status: draft", "status: draft\nsealed: 2026-09-27", "DESIGN-SEALED"),
+                ("unquoted link", "status: draft", "status: draft\nextends: [[x]]", "FM-PARSE"),
+                ("link as text", "status: draft", "status: draft\nextends: x", "FM-FORMAT")]:
+            with self.subTest(label):
+                self.assertIn(rule, self.rules(self.draft.replace(old, new, 1)))
+
+    def test_sections_in_order(self):                              # T1 -> AC1
+        swapped = self.draft.replace("## Goals", "## Tmp").replace("## Non-goals", "## Goals").replace("## Tmp", "## Non-goals")
+        for label, text, rule in [("missing", self.draft.replace("## Non-goals\n", ""), "SEC-MISSING"),
+                                  ("misordered", swapped, "SEC-ORDER"),
+                                  ("extra", self.draft + "\n## Appendix\n", "SEC-EXTRA")]:
+            with self.subTest(label):
+                self.assertIn(rule, self.rules(text))
+
+    def test_over_400_lines_warns_but_has_no_cap(self):            # T1 -> AC1
+        text = self.draft.replace("## Problem\n", "## Problem\n" + "- filler\n" * 400, 1)
+        self.assertEqual(self.rules(text), [])
+        self.assertEqual(self.rules(text, warnings=True), ["SIZE-WARN"])
+
+    def test_schema_shows_the_design_type(self):                   # T1 -> AC1
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            vault.cmd_schema(None)
+        text = buf.getvalue()
+        for want in ("Designs/<project>/<project>-design-<n>-<slug>.md", "extends", "## Non-goals, ## Ideas",
+                     "design-sealed", "DESIGN-DEC", "X-DESIGN-SEALED", "design <design> D<k>", "### S<n>. <title>"):
+            self.assertIn(want, text)
+
+    def test_entry_problems_warn_on_a_draft_and_error_when_sealed(self):   # T2 -> AC2
+        bad = {
+            ("## Decisions", "DESIGN-DEC"): {
+                "no why": "### D1. Keep it small\nDecision: Keep it small.",
+                "no decision": "### D1. Keep it small\nWhy: because.",
+                "bracket title": "### D1. See [[demo]]\nDecision: a\nWhy: b",
+                "duplicate number": "### D1. A\nDecision: a\nWhy: b\n\n### D1. B\nDecision: a\nWhy: b",
+                "unnumbered heading": "### Keep it small\nDecision: a\nWhy: b"},
+            ("## Stories", "DESIGN-STORY"): {
+                "no outcome": "### S1. A\nDepends on: None",
+                "no depends": "### S1. A\nOutcome: x",
+                "later dependency": "### S1. A\nOutcome: x\nDepends on: S2\n\n### S2. B\nOutcome: y\nDepends on: None",
+                "missing dependency": "### S1. A\nOutcome: x\nDepends on: S3",
+                "bad dependency": "### S1. A\nOutcome: x\nDepends on: 1",
+                "bad repo": "### S1. A\nOutcome: x\nDepends on: None\nRepo: me/demo"},
+            ("## Ideas", "DESIGN-IDEA"): {"not a link": "- an idea", "prose": "Some ideas."}}
+        good = {"## Decisions": "### D1. Keep it small\nDecision: Keep it small.\nWhy: It is a demo.",
+                "## Stories": "### S1. Build it\nOutcome: It exists.\nDepends on: None",
+                "## Ideas": "None"}
+
+        def with_section(name, body):
+            text = self.draft
+            for head, ok in good.items():
+                before, after = text.split(head + "\n", 1)
+                rest = after.split("\n## ", 1)[1]
+                text = before + head + "\n" + (body if head == name else ok) + "\n\n## " + rest
+            return text
+
+        for (head, rule), cases in bad.items():
+            for label, body in cases.items():
+                with self.subTest(rule=rule, case=label):
+                    text = with_section(head, body)
+                    self.assertEqual(self.rules(text), [], "a draft only warns")
+                    self.assertIn(rule, self.rules(text, warnings=True))
+                    self.assertIn(rule, self.rules(self.sealed(text)))
+
+    def test_entry_parsers(self):                                  # T2 -> AC2
+        body = self.draft.split("---\n", 2)[2]
+        self.assertEqual([(d["n"], d["title"], d["replaces"]) for d in lib.design_decisions(body)],
+                         [(1, "Keep it small", None)])
+        stories = lib.design_stories(body)
+        self.assertEqual([(s["n"], s["depends"], s["repo"]) for s in stories], [(1, [], None), (2, [1], "demo")])
+        self.assertEqual(lib.design_ideas(body.replace("## Ideas\nNone", "## Ideas\n- [[a]]\n- [[b c]]")), ["a", "b c"])
+
+    def test_a_missing_project_fails_only_when_sealed(self):       # T2 -> AC3
+        ghost = "Agent/Designs/ghost/ghost-design-1-x.md"
+        text = self.draft.replace("project: demo", "project: ghost")
+        self.assertEqual(self.rules(text, ghost), [])
+        self.assertIn("X-PROJECT", self.rules(self.sealed(text), ghost))
+
+    def test_sealed_design_needs_its_records_and_promoted_ideas(self):     # T3 -> AC6
+        shutil.copytree(FIXTURES / "DESIGN-SEALED" / "pass", self.vault, dirs_exist_ok=True)
+        rec = "Agent/Decisions/demo/demo-d1-keep-it-small.md"
+        sealed = (self.vault / self.D1).read_text(encoding="utf-8")
+        two = sealed.replace("## Stories", "### D2. Second\nDecision: b\nWhy: c\n\n## Stories")
+        self.assertIn("X-DESIGN-SEALED", self.rules(two))                      # D2 has no record
+        self.put(rec.replace("d1-keep-it-small", "d2-second"),
+                 (self.vault / rec).read_text(encoding="utf-8").replace("D1", "D2"))
+        self.assertNotIn("X-DESIGN-SEALED", self.rules(two))
+        idea = "Agent/Ideas/2026-09-26-an-idea.md"
+        text = (self.vault / idea).read_text(encoding="utf-8")
+        for label, new in (("open", text.replace("status: promoted", "status: open")),
+                           ("elsewhere", text.replace("[[demo-design-1-first]]", "[[demo-design-2-x]]"))):
+            with self.subTest(label):
+                self.put(idea, new)
+                self.assertIn("X-DESIGN-SEALED", self.rules(sealed))
+
+    def test_promoted_to_takes_an_issue_url_or_a_design_link(self):        # T3 -> AC9
+        idea = "Agent/Ideas/2026-09-26-an-idea.md"
+        text = (self.vault / idea).read_text(encoding="utf-8").replace('promoted_to: ""', "promoted_to: PLACE") \
+            .replace("status: open", "status: promoted")
+        self.put("Agent/Designs/demo/demo-design-2-next.md", self.draft.replace("First", "Next"))
+        for value, ok in (("https://github.com/me/demo/issues/4", True), ('"[[demo-design-1-first]]"', True),
+                          ('"[[demo-design-2-next]]"', True), ("https://example.com/4", False),
+                          ('"[[demo-d1-keep-it-small]]"', False), ('"[[demo-design-7-gone]]"', False),
+                          ("https://github.com/me/demo/pull/4", False), ("4", False)):
+            with self.subTest(value):
+                self.put(idea, text.replace("PLACE", value))
+                rules = {m[1:m.index("]")] for m in lib.validate_file(self.vault / idea).errors}
+                self.assertEqual("FM-FORMAT" not in rules, ok, rules)
+
+    def test_decision_record_with_a_design_source(self):           # T3 -> AC5
+        rel = "Agent/Decisions/demo/demo-d1-keep-it-small.md"
+        record = lib.render_frontmatter({"type": "decision", "project": "demo", "status": "active",
+                                         "created": "2026-09-26", "source": "design demo-design-1-first D2"}) \
+            + "# Keep it small\n\n## Decision\nSmall.\n\n## Why\nDemo.\n"
+        self.put(rel, record)
+        self.assertEqual([m for m in lib.validate_file(self.vault / rel).errors if "FM-FORMAT" in m], [])
+        for bad in ("design First D2", "design demo-design-1-first", "design demo-design-1-first D0"):
+            self.put(rel, record.replace("design demo-design-1-first D2", bad))
+            self.assertTrue(any("FM-FORMAT" in m for m in lib.validate_file(self.vault / rel).errors), bad)
+
+    def test_design_sealed_daily_line(self):                       # T3 -> AC1
+        def daily(ln):
+            return any(rx.match(ln) for _, rx in lib.LINE_FORMATS["DAILY-LINE"])
+        self.assertTrue(daily("- 09:30 design-sealed — Portable setups [[demo-design-1-first]]"))
+        self.assertFalse(daily("- 09:30 design-sealed — no link"))
+
+    def test_sealed_designs_are_sealed_notes_and_fingerprinted(self):      # T3 -> AC8
+        path = self.vault / self.D1
+        self.assertFalse(lib.is_sealed_note(path))
+        self.assertNotIn(lib.rel(path), lib.fingerprints())
+        path.write_text(self.sealed(), encoding="utf-8", newline="\n")
+        self.assertTrue(lib.is_sealed_note(path))
+        before = lib.fingerprints()
+        self.assertIn(lib.rel(path), before)
+        path.write_text(self.sealed().replace("The demo", "A demo"), encoding="utf-8", newline="\n")
+        self.assertEqual(lib.changed_fingerprints(before), [lib.rel(path)])
+
+
 class CrossNoteTest(VaultCase):
     def test_repos_empty_and_code_links(self):    # T9 -> AC9
         self.load_base()
