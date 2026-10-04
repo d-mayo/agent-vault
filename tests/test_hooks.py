@@ -162,6 +162,22 @@ class GuardTest(HookCase):  # T5 -> AC5, AC6, T12
         self.blocked(self.agent("Decisions/demo/demo-d1-keep-it-small.md"), tool="MultiEdit", says="never edited")
         self.assertIn("decision add", self.blocked(self.agent("Projects/new.md"), says="new project"))
 
+    def test_sealed_designs_are_blocked_and_drafts_are_not(self):      # T8 -> AC8
+        self.cli("new", "design", "demo", "Portable setups")
+        design = self.agent("Designs/demo/demo-design-1-portable-setups.md")
+        self.allowed(design)
+        self.allowed(design, tool="Write")
+        design.write_text(design.read_text(encoding="utf-8").replace("status: draft", "status: sealed\nsealed: 2026-09-27"),
+                          encoding="utf-8", newline="\n")
+        for tool in ("Edit", "Write", "MultiEdit"):
+            msg = self.blocked(design, tool=tool, says="extends or replaces")
+            self.assertIn("new design", msg)
+
+    def test_new_designs_come_only_from_the_cli(self):                 # T8 -> AC8
+        msg = self.blocked(self.agent("Designs/demo/demo-design-1-x.md"), says="new design")
+        self.assertIn("new project", msg)
+        self.assertIn("design <design> D<k>", self.blocked(self.agent("Decisions/demo/demo-d9-new.md"), says="decision add"))
+
     def test_allowed_edits(self):
         self.allowed(self.agent("Work/widget/widget-7-impl.md"))
         self.allowed(self.agent("Work/widget/widget-7-plan.md"))           # a draft plan

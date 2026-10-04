@@ -1102,3 +1102,75 @@ class GhHelperTest(GhCase):  # T10 -> AC10
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DesignStoriesTest(GhCase):  # T7 -> AC7
+    NAME = "duo-design-1-pair"
+
+    def setUp(self):
+        super().setUp()
+        self.ok(self.cli("new", "project", "duo", "--repo", "acme/duo-a", "--repo", "acme/duo-b"))
+        stories = ("### S1. Build it\nOutcome: x.\nDepends on: None\nRepo: duo-a\n\n"
+                   "### S2. Ship it\nOutcome: y.\nDepends on: S1\nRepo: duo-b")
+        body = ("# Pair\n\n## Problem\np\n\n## Goals\ng\n\n## Non-goals\nn\n\n## Ideas\nNone\n\n"
+                "## Options considered\no\n\n## Chosen design\nc\n\n## Decisions\n"
+                "### D1. Pair up\nDecision: d.\nWhy: w.\n\n## Stories\n" + stories + "\n\n## Open questions\nNone\n")
+        self.path = self.vault / "Agent" / "Designs" / "duo" / f"{self.NAME}.md"
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(f"---\ntype: design\nproject: duo\nstatus: draft\ncreated: 2026-09-26\n---\n{body}",
+                             encoding="utf-8", newline="\n")
+
+    def seal(self):
+        self.ok(self.cli("seal", "design", self.NAME))
+
+    def add_issue(self, slug, n, state, body):
+        self.load()
+        repo = self.state["repos"].setdefault(slug, {
+            "default_branch": "main", "head_sha": "a" * 40, "labels": [], "settings": {},
+            "refuse_settings": False, "branches": [], "prs": [], "compare": {"total_commits": 0, "files": []},
+            "issues": {}, "created_prs": [], "created_issues": [], "next_number": 20})
+        repo["issues"][str(n)] = {"state": state, "title": "t", "created": CREATED, "body_edited": None,
+                                  "renamed": None, "labels": [], "body": body}
+        self.save()
+
+    def source(self, text):
+        return ISSUE_BODY.replace("## Source\nsession", f"## Source\n{text}")
+
+    def test_filed_in_the_second_repo_and_not_filed(self):
+        self.seal()
+        self.add_issue("acme/duo-b", 4, "CLOSED", self.source(f"[[{self.NAME}]] S1"))
+        self.add_issue("acme/duo-a", 9, "OPEN", ISSUE_BODY.replace("## Problem\n", f"## Problem\nSee [[{self.NAME}]] S2\n"))
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("S1. Build it: acme/duo-b#4 (closed)", out)
+        self.assertIn("S2. Ship it: not filed", out)
+        self.assertIn("1 of 2 stories filed", out)
+
+    def test_every_filed_story_and_a_prefix_is_not_a_match(self):
+        self.seal()
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"))
+        self.add_issue("acme/duo-b", 2, "OPEN", self.source(f"[[{self.NAME}]] S2\n[[{self.NAME}-x]] S1"))
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("S1. Build it: acme/duo-a#1 (open)", out)
+        self.assertIn("S2. Ship it: acme/duo-b#2 (open)", out)
+        self.assertIn("2 of 2 stories filed", out)
+
+    def test_reads_issues_from_github_each_time(self):
+        self.seal()
+        self.assertIn("not filed", self.ok(self.cli("design", "stories", self.NAME)).stdout)
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"))
+        self.assertIn("acme/duo-a#1", self.ok(self.cli("design", "stories", self.NAME)).stdout)
+        self.assertTrue(self.calls("issue", "list"))
+
+    def test_a_draft_design_is_refused(self):
+        self.refused(self.cli("design", "stories", self.NAME), "draft")
+
+    def test_a_project_without_repos(self):
+        self.ok(self.cli("new", "project", "bare"))
+        path = self.vault / "Agent" / "Designs" / "bare" / "bare-design-1-x.md"
+        path.parent.mkdir(parents=True)
+        text = self.path.read_text(encoding="utf-8").replace("project: duo", "project: bare").replace(
+            "status: draft", "status: sealed\nsealed: 2026-09-27").replace("\nRepo: duo-a", "").replace("\nRepo: duo-b", "")
+        path.write_text(text, encoding="utf-8", newline="\n")
+        out = self.ok(self.cli("design", "stories", "bare-design-1-x")).stdout
+        self.assertIn("S1. Build it: not filed", out)
+        self.assertIn("has no repos yet", out)

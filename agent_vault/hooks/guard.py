@@ -8,8 +8,8 @@ Blocked:
   - .obsidian/ (Obsidian's own config);
   - the installed code in ~/.claude/agent-vault/ and the vault's CLAUDE.md: both are
     written by install.py from the repo;
-  - sealed plan, impl and retro notes;
-  - decision records, existing or new: `vault.py decision add` is the only way to write one;
+  - sealed plan, impl, retro and design notes (a later design extends or replaces a sealed design);
+  - decision records, existing or new: `vault.py decision add` and `vault.py seal design` are the only ways to write one;
   - anything in Daily/: daily notes are written only by the CLI;
   - new notes in Agent/ (they come from the CLI) and loose files at the top of Agent/.
 """
@@ -85,9 +85,14 @@ def main() -> None:
         block("a decision record is never edited, and a new one comes only from the CLI, which also keeps "
               "the project overview's Standing decisions in step:\n"
               f"  {CLI} decision add <project> \"<title>\" --decision \"...\" --why \"...\" "
-              "--source \"plan <repo>#<n> D<k> | issue <repo>#<n> | retro <repo>#<n> | session\" "
+              "--source \"plan <repo>#<n> D<k> | design <design> D<k> | issue <repo>#<n> | retro <repo>#<n> "
+              "| session\" "
               "[--replaces <record>]\n"
               "To change a decision, add a record that replaces it; if a record is wrong, tell the user.")
+    if lib.is_sealed_note(path) and folder == lib.FOLDERS["design"].lower():
+        block("this design is sealed and can't be edited: later plans are checked against it as approved. "
+              "To change it, start a design that extends or replaces it "
+              f"(`{CLI} new design <project> \"<title>\"`, then set `extends` or `replaces` to this design).")
     if lib.is_sealed_note(path):
         block("this note is sealed and can't be edited. If something in it turned out wrong, note it "
               "in the issue's impl note (Deviations or Discoveries) while that is open, or tell the user.")
@@ -96,6 +101,7 @@ def main() -> None:
               f"  {CLI} new project <id> [--repo owner/name] [--purpose \"...\"]\n"
               f"  {CLI} new plan <repo> <issue>   (a draft plan and an open impl note)\n"
               f"  {CLI} new retro <repo> <issue>\n"
+              f"  {CLI} new design <project> \"<title>\"   (a draft design)\n"
               f"  {CLI} idea add \"<title>\" [--project <id>]\n"
               f"  {CLI} decision add <project> \"<title>\" --decision \"...\" --why \"...\" --source \"...\"\n"
               "Then edit the file it creates.")

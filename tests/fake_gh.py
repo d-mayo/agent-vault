@@ -8,7 +8,7 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
                 "closes": [{"number": 7, "repo": "owner/name"}]}],  (state/closes optional)
        "compare": {"total_commits": 0, "files": [{"filename": "a.py"}]},
        "issues": {"7": {"state": "OPEN", "title": "...", "created": "...Z", "body_edited": null,
-                        "renamed": null, "labels": [...]}},
+                        "renamed": null, "labels": [...], "body": "..."}},   (body optional)
        "created_prs": [], "created_issues": [], "next_number": 20}},
    "calls": [[...args of every call...]]}
 Unknown repos are created with defaults on first use. Tests read and edit the file directly.
@@ -79,6 +79,12 @@ def main():
         issue = repo["issues"][args[2]]
         if label not in issue["labels"]:
             issue["labels"].append(label)
+    elif cmd == ["issue", "list"]:
+        wanted = opt(args, "--state", "open").upper()
+        print(json.dumps([{"number": int(n), "title": i["title"], "state": i["state"], "body": i.get("body", ""),
+                           "url": f"https://github.com/{slug}/issues/{n}"}
+                          for n, i in sorted(repo["issues"].items(), key=lambda kv: int(kv[0]))
+                          if wanted == "ALL" or i["state"] == wanted]))
     elif cmd == ["issue", "create"]:
         n = repo["next_number"]
         repo["next_number"] += 1

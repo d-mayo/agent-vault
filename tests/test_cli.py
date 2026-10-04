@@ -8,6 +8,7 @@ import re
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import sys
 
@@ -449,6 +450,212 @@ class DecisionAddTest(CliCase):                                    # T4, T5 -> A
         self.project("solo")
         self.assertIn("no decisions", self.cli("decisions", "--project", "solo").stdout)
         self.refused("decisions", "--project", "ghost", why="does not exist")
+
+
+DESIGN_BODY = """# Portable setups
+
+## Problem
+It only works on one machine.
+
+## Goals
+- Work elsewhere.
+
+## Non-goals
+- Everything else.
+
+## Ideas
+{ideas}
+
+## Options considered
+- A or B.
+
+## Chosen design
+A.
+
+## Decisions
+{decisions}
+
+## Stories
+{stories}
+
+## Open questions
+None
+"""
+TWO_DECISIONS = ("### D1. Keep it small\nDecision: Keep the demo small.\nWhy: It is a demo.\n\n"
+                 "### D2. Keep it tiny\nDecision: Keep it tiny.\nWhy: Smaller is better.\nReplaces: [[demo-d1-first]]")
+TWO_STORIES = ("### S1. Build it\nOutcome: It exists.\nDepends on: None\n\n"
+               "### S2. Ship it\nOutcome: It ships.\nDepends on: S1")
+
+
+class DesignCase(CliCase):
+    """Designs of project 'demo' (one repo), with an existing active record to replace."""
+
+    def setUp(self):
+        super().setUp()
+        self.project("demo", "me/demo")
+        self.project("other", "me/other")
+        self.cli("decision", "add", "demo", "First", "--decision", "One.", "--why", "Because.", "--source", "session")
+        self.idea("2026-09-01-one", extra="project: demo\n", body="# Idea one\n")
+        self.idea("2026-09-01-two", body="# Idea two\n")
+
+    def design(self, n=1, title="Portable setups", project="demo", ideas="- [[2026-09-01-one]]\n- [[2026-09-01-two]]",
+               decisions=TWO_DECISIONS, stories=TWO_STORIES, status="draft"):
+        rel = f"Agent/Designs/{project}/{project}-design-{n}-portable-setups.md"
+        fm = f"---\ntype: design\nproject: {project}\nstatus: {status}\ncreated: {TODAY}\n---\n"
+        self.put(rel, fm + DESIGN_BODY.format(ideas=ideas, decisions=decisions, stories=stories)
+                 .replace("Portable setups", title, 1))
+        return f"{project}-design-{n}-portable-setups"
+
+    def snapshot(self):
+        return {p: p.read_bytes() for p in (self.vault / "Agent").rglob("*.md")}
+
+
+class NewDesignTest(DesignCase):
+    def test_numbers_per_project_and_creates_every_section(self):        # T4 -> AC3
+        r = self.cli("new", "design", "demo", "Portable setups")
+        self.assertIn("created Agent/Designs/demo/demo-design-1-portable-setups.md", r.stdout)
+        self.cli("new", "design", "demo", "Second look")
+        self.cli("new", "design", "other", "Other thing")
+        text = self.text("Designs/demo/demo-design-1-portable-setups.md")
+        self.assertTrue(text.startswith(f"---\ntype: design\nproject: demo\nstatus: draft\ncreated: {TODAY}\n---\n"
+                                        "# Portable setups\n"))
+        for section in lib.SECTIONS["design"]:
+            self.assertIn(f"\n## {section}\n", text)
+        self.assertTrue(self.path("Designs/demo/demo-design-2-second-look.md").is_file())
+        self.assertTrue(self.path("Designs/other/other-design-1-other-thing.md").is_file())
+        self.validate()          # a fresh draft only has warnings
+
+    def test_a_project_that_does_not_exist_yet(self):                    # T4 -> AC3
+        self.cli("new", "design", "brand-new", "A new thing")
+        self.assertTrue(self.path("Designs/brand-new/brand-new-design-1-a-new-thing.md").is_file())
+        self.validate()
+
+    def test_refusals(self):                                             # T4 -> AC3
+        before = self.snapshot()
+        self.refused("new", "design", "Not An Id", "T", why="lowercase-kebab-case")
+        self.refused("new", "design", "demo", "   ", why="title is empty")
+        self.assertEqual(self.snapshot(), before)
+
+
+class SealDesignTest(DesignCase):
+    def seal(self, name, ok=True, why=""):
+        return self.cli("seal", "design", name) if ok else self.refused("seal", "design", name, why=why)
+
+    def test_seals_and_records_everything(self):                         # T5 -> AC4
+        name = self.design()
+        r = self.seal(name)
+        self.assertIn("2 decision record(s), 2 idea(s) promoted", r.stdout)
+        sealed = self.text(f"Designs/demo/{name}.md")
+        self.assertIn(f"status: sealed\ncreated: {TODAY}\nsealed: {TODAY}\n", sealed)
+        d2 = self.text("Decisions/demo/demo-d3-keep-it-tiny.md")
+        self.assertIn(f"source: design {name} D2\n", d2)
+        self.assertIn('replaces: "[[demo-d1-first]]"\n', d2)
+        self.assertIn(f"source: design {name} D1\n", self.text("Decisions/demo/demo-d2-keep-it-small.md"))
+        old = self.text("Decisions/demo/demo-d1-first.md")
+        self.assertIn("status: superseded\n", old)
+        self.assertIn('superseded_by: "[[demo-d3-keep-it-tiny]]"\n', old)
+        for idea in ("2026-09-01-one", "2026-09-01-two"):
+            self.assertIn('status: promoted\n', self.text(f"Ideas/{idea}.md"))
+            self.assertIn(f'promoted_to: "[[{name}]]"\n', self.text(f"Ideas/{idea}.md"))
+        self.assertTrue(self.text("Projects/demo.md").endswith(
+            "## Standing decisions\n- Keep it small [[demo-d2-keep-it-small]]\n- Keep it tiny [[demo-d3-keep-it-tiny]]\n"))
+        log = self.text(f"Daily/{TODAY}.md")
+        self.assertEqual(len(re.findall(r"decision-recorded — ", log)), 3)       # First, plus the two
+        self.assertIn("decision-recorded — Keep it tiny [[demo-d3-keep-it-tiny]]", log)
+        self.assertEqual(len(re.findall(r"idea-promoted — ", log)), 2)
+        self.assertIn("idea-promoted — Idea one [[2026-09-01-one]]", log)
+        self.assertRegex(log, rf"- \d\d:\d\d design-sealed — Portable setups \[\[{name}\]\]")
+        self.assertTrue(log.rstrip().endswith(f"[[{name}]]"), "the design-sealed line comes last")
+        self.validate()
+        self.seal(name, ok=False, why="already sealed")
+        self.cli("decision", "add", "demo", "T", "--decision", "d", "--why", "w", "--source", f"design {name} D1",
+                 ok=False)
+
+    def test_decision_add_refuses_a_used_design_source(self):            # T5 -> AC5
+        name = self.design()
+        self.seal(name)
+        r = self.cli("decision", "add", "demo", "Again", "--decision", "d", "--why", "w",
+                     "--source", f"design {name} D2", ok=False)
+        self.assertIn("already recorded as demo-d3-keep-it-tiny", r.stderr)
+        self.cli("decision", "add", "demo", "Fresh", "--decision", "d", "--why", "w", "--source", f"design {name} D9")
+        self.validate()
+
+    def test_a_design_without_ideas_or_replacements(self):               # T5 -> AC4
+        name = self.design(ideas="None", decisions="### D1. Only\nDecision: x.\nWhy: y.")
+        self.seal(name)
+        self.assertIn("status: active\n", self.text("Decisions/demo/demo-d1-first.md"))
+        self.validate()
+
+    def test_refusals_leave_every_note_unchanged(self):                  # T6 -> AC4
+        self.cli("decision", "add", "demo", "Third", "--decision", "x", "--why", "y", "--source", "session",
+                 "--replaces", "demo-d1-first")
+        self.cli("decision", "add", "demo", "Fourth", "--decision", "x", "--why", "y", "--source", "session")
+        self.idea("2026-09-01-done", status="dropped")
+        self.idea("2026-09-01-elsewhere", extra="project: other\n")
+        one = "### D1. A\nDecision: x.\nWhy: y.\n"
+        cases = {
+            "missing project": (dict(project="ghost", ideas="None", decisions=one), "does not exist"),
+            "sealed-rule failure": (dict(stories="### S1. A\nDepends on: None"), "DESIGN-STORY"),
+            "replaces a superseded record": (dict(decisions=one + "Replaces: [[demo-d1-first]]"), "already superseded"),
+            "replaces another project's record": (dict(decisions=one + "Replaces: [[other-d1-x]]"), "not a record of project"),
+            "replaces nothing real": (dict(decisions=one + "Replaces: [[demo-d9-none]]"), "not a record of project"),
+            "two replace one": (dict(decisions=one + "Replaces: [[demo-d3-fourth]]\n\n"
+                                                      "### D2. B\nDecision: x.\nWhy: y.\nReplaces: [[demo-d3-fourth]]"),
+                                "both replace"),
+            "idea not open": (dict(ideas="- [[2026-09-01-done]]"), "dropped"),
+            "idea of another project": (dict(ideas="- [[2026-09-01-elsewhere]]"), "belongs to project 'other'"),
+            "idea that does not exist": (dict(ideas="- [[2026-09-01-nope]]"), "does not exist"),
+            "story repo the project lacks": (dict(stories="### S1. A\nOutcome: x.\nDepends on: None\nRepo: nope"),
+                                             "is not one of project 'demo'"),
+        }
+        for label, (kw, why) in cases.items():
+            with self.subTest(label):
+                name = self.design(**kw)
+                before = self.snapshot()
+                self.seal(name, ok=False, why=why)
+                self.assertEqual(self.snapshot(), before)
+        self.refused("seal", "design", "demo-design-9-none", why="no design")
+
+    def test_a_story_without_repo_in_a_two_repo_project(self):           # T6 -> AC4
+        self.cli("new", "project", "duo", "--repo", "me/duo-a", "--repo", "me/duo-b")
+        name = self.design(project="duo", ideas="None", decisions="### D1. A\nDecision: x.\nWhy: y.")
+        before = self.snapshot()
+        self.seal(name, ok=False, why="has no 'Repo:' line")
+        self.assertEqual(self.snapshot(), before)
+        text = self.text(f"Designs/duo/{name}.md").replace("Depends on: None", "Depends on: None\nRepo: duo-b", 1)
+        self.put(f"Agent/Designs/duo/{name}.md", text.replace("Depends on: S1", "Depends on: S1\nRepo: duo-a"))
+        self.seal(name)
+        self.validate()
+
+    def test_a_project_without_repos_accepts_any_story(self):            # T6 -> AC4
+        self.project("bare")
+        self.seal(self.design(project="bare", ideas="None", decisions="### D1. A\nDecision: x.\nWhy: y."))
+        self.validate()
+
+    def test_a_failed_write_puts_everything_back(self):                  # T6 -> AC4
+        name = self.design()
+        before = self.snapshot()
+        files_before = sorted(p.relative_to(self.vault).as_posix() for p in (self.vault / "Agent").rglob("*"))
+        patches = [mock.patch.object(lib, "VAULT", self.vault), mock.patch.object(lib, "AGENT", self.vault / "Agent"),
+                   mock.patch.object(vault, "AGENT", self.vault / "Agent"), mock.patch.object(vault, "VAULT", self.vault)]
+        for p in patches:
+            p.start()
+        real = vault.append_log
+
+        def fail_on_the_seal_line(entry):
+            if lib.DESIGN_EVENT in entry:
+                vault.die("simulated failure")
+            return real(entry)
+        try:
+            with mock.patch.object(vault, "append_log", fail_on_the_seal_line), \
+                    self.assertRaises(SystemExit):
+                vault.cmd_seal_design(mock.Mock(design=name))
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(sorted(p.relative_to(self.vault).as_posix() for p in (self.vault / "Agent").rglob("*")),
+                         files_before)
 
 
 class AllCommandsTest(CliCase):

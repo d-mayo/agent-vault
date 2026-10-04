@@ -5,8 +5,11 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   new project <id> [--repo owner/name ...] [--purpose "..."]
   new plan <repo> <issue>
   new retro <repo> <issue>
+  new design <project> "<title>"
   seal plan <repo> <issue>
   seal retro <repo> <issue>
+  seal design <design>
+  design stories <design>
   preflight <repo> <issue>
   branch <repo> <issue> [--type feat] [--slug <slug>]
   open-pr <repo> <issue> [--body-file <file>]
@@ -223,6 +226,38 @@ def cmd_new_retro(args) -> None:
         die(f"{lib.rel(impl)} has no 'pr:' yet; open the PR first")
     commit_note(retro, retro_note(args.repo, args.issue, pr))
     print("created " + lib.rel(retro))
+
+
+def design_note(project: str, title: str) -> str:
+    fm = lib.render_frontmatter({"type": "design", "project": project, "status": "draft",
+                                 "created": lib.today().isoformat()})
+    return (f"{fm}# {title}\n\n"
+            "## Problem\n<!-- What is wrong or missing, and for whom. -->\n\n"
+            "## Goals\n<!-- What this design must achieve. -->\n\n"
+            "## Non-goals\n<!-- What it deliberately does not cover. -->\n\n"
+            "## Ideas\nNone\n\n"
+            "## Options considered\n<!-- At least two genuinely different options for each major choice, "
+            "each with its trade-offs. -->\n\n"
+            "## Chosen design\n<!-- The design, the technology it needs, and Mermaid diagrams where they read "
+            "better than prose. -->\n\n"
+            "## Decisions\n\n"
+            "## Stories\n\n"
+            "## Open questions\n<!-- Risks and unknowns; never write these up as decisions. -->\n")
+
+
+def cmd_new_design(args) -> None:
+    project = args.project
+    if not lib.ID_RE.match(project):
+        die("project must be a lowercase-kebab-case project id, e.g. garden-redesign")
+    if not one_line(args.title):
+        die("the title is empty")
+    title = lib.safe_title(one_line(args.title))
+    folder = AGENT / FOLDERS["design"] / project
+    taken = [parts[0] for p in folder.glob("*.md") if (parts := lib.design_parts(project, p.stem))]
+    slug = lib.slugify(title)[:SLUG_MAX].strip("-") or "untitled"
+    path = folder / f"{project}-design-{max(taken, default=0) + 1}-{slug}.md"
+    commit_note(path, design_note(project, title))
+    print("created " + lib.rel(path))
 
 
 def set_fields(path: Path, **fields) -> None:
@@ -1042,6 +1077,40 @@ def find_decision(index: lib.Index, project: str, name: str) -> dict:
     die(f"no decision record '{stem}' in project '{project}'; `decisions --all --project {project}` lists them")
 
 
+def record_path(project: str, records: list[dict], title: str) -> Path:
+    """Where the project's next decision record goes."""
+    n = max((r["n"] for r in records), default=0) + 1
+    slug = lib.slugify(title)[:SLUG_MAX].strip("-") or "untitled"
+    return AGENT / FOLDERS["decision"] / project / f"{project}-d{n}-{slug}.md"
+
+
+def write_record(path: Path, project: str, title: str, decision: str, why: str, source: str,
+                 old: dict | None) -> None:
+    """Create a decision record, and mark the record it replaces superseded. Shared by `decision add`
+    and `seal design`; the callers keep the overview and the log in step."""
+    commit_note(path, decision_note(project, title, decision, why, source, old["stem"] if old else None))
+    if old:
+        update_note(old["path"], status="superseded", superseded_by=f"[[{path.stem}]]")
+
+
+def refresh_standing(project: str, overview: Path) -> None:
+    lines = lib.standing_lines(lib.Index().decisions.get(project, []))
+    commit_note(overview, with_standing_lines(lib.read_text(overview), lines))
+
+
+def snapshot(paths: list[Path]) -> dict:
+    """Each path's text now, or None if it doesn't exist yet, for `restore`."""
+    return {p: (lib.read_text(p) if p.exists() else None) for p in paths}
+
+
+def restore(saved: dict) -> None:
+    for p, text in saved.items():
+        if text is None:
+            p.unlink(missing_ok=True)
+        else:
+            lib.write_text(p, text)
+
+
 def cmd_decision_add(args) -> None:
     index = lib.Index()
     require_project(index, args.project)
@@ -1057,8 +1126,9 @@ def cmd_decision_add(args) -> None:
         die("--why is empty")
     source = args.source.strip()
     if not lib.DECISION_SOURCE_RE.match(source):
-        die("source must be 'plan <repo>#<n> D<k>', 'issue <repo>#<n>', 'retro <repo>#<n>' or 'session'")
-    if lib.PLAN_SOURCE_RE.match(source):
+        die("source must be 'plan <repo>#<n> D<k>', 'design <design> D<k>', 'issue <repo>#<n>', "
+            "'retro <repo>#<n>' or 'session'")
+    if lib.UNIQUE_SOURCE_RE.match(source):
         for recs in index.decisions.values():
             for rec in recs:
                 if rec["fm"].get("source") == source:
@@ -1070,29 +1140,152 @@ def cmd_decision_add(args) -> None:
     overview = index.projects[args.project]
     if with_standing_lines(lib.read_text(overview), []) is None:
         die(f"{lib.rel(overview)} has no '## {lib.STANDING}' section to keep up to date")
-    n = max((r["n"] for r in records), default=0) + 1
-    slug = lib.slugify(title)[:SLUG_MAX].strip("-") or "untitled"
-    path = AGENT / FOLDERS["decision"] / args.project / f"{args.project}-d{n}-{slug}.md"
-    touched = [path, overview] + ([old["path"]] if old else [])
-    saved = {p: (lib.read_text(p) if p.exists() else None) for p in touched}
+    path = record_path(args.project, records, title)
+    saved = snapshot([path, overview] + ([old["path"]] if old else []))
     try:
-        commit_note(path, decision_note(args.project, title, decision, why, source, old["stem"] if old else None))
-        if old:
-            update_note(old["path"], status="superseded", superseded_by=f"[[{path.stem}]]")
-        lines = lib.standing_lines(lib.Index().decisions.get(args.project, []))
-        commit_note(overview, with_standing_lines(lib.read_text(overview), lines))
+        write_record(path, args.project, title, decision, why, source, old)
+        refresh_standing(args.project, overview)
     except SystemExit:
-        for p, text in saved.items():
-            if text is None:
-                p.unlink(missing_ok=True)
-            else:
-                lib.write_text(p, text)
+        restore(saved)
         raise
     append_log(f"- {lib.now_hhmm()} {lib.DECISION_EVENT} — {title} [[{path.stem}]]")
     print("created " + lib.rel(path))
     if old:
         print(f"superseded {lib.rel(old['path'])}")
     print(f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
+
+
+def find_design(name: str) -> Path:
+    """The design '<stem>' (with or without .md), or die."""
+    stem = Path(name.replace("\\", "/")).name
+    stem = stem[:-3] if stem.lower().endswith(".md") else stem
+    found = sorted((AGENT / FOLDERS["design"]).glob(f"*/{stem}.md"))
+    if not found or not lib.DESIGN_NAME_RE.match(stem):
+        die(f"no design '{stem}' in {FOLDERS['design']}/; `new design <project> \"<title>\"` creates one")
+    return found[0]
+
+
+def seal_design_problems(index: lib.Index, path: Path, fm: dict, body: str) -> list[str]:
+    """Everything that stops a design being sealed, checked before any write."""
+    project, problems = fm.get("project", ""), []
+    if project not in index.projects:
+        return [f"project '{project}' does not exist; create it (`new project {project}`) before sealing"]
+    trial = {**fm, "status": "sealed", "sealed": lib.today().isoformat()}
+    for e in lib.validate_file(path, index, lib.render_frontmatter(trial) + body.lstrip("\n")).errors:
+        if not e.startswith("[X-DESIGN-SEALED]"):       # holds only once the records and promotions exist
+            problems.append(e)
+    records = {r["stem"]: r for r in index.decisions.get(project, [])}
+    recorded = {r["fm"].get("source"): r["stem"] for recs in index.decisions.values() for r in recs}
+    replaced = {}
+    for d in lib.design_decisions(body):
+        source = f"design {path.stem} D{d['n']}"
+        if source in recorded:
+            problems.append(f"D{d['n']} is already recorded as {recorded[source]}")
+        old = d["replaces"]
+        if old is None:
+            continue
+        if old not in records:
+            problems.append(f"D{d['n']} replaces [[{old}]], which is not a record of project '{project}'")
+        elif records[old]["fm"].get("status") != "active":
+            problems.append(f"D{d['n']} replaces [[{old}]], which is already superseded")
+        elif old in replaced:
+            problems.append(f"D{d['n']} and D{replaced[old]} both replace [[{old}]]")
+        replaced.setdefault(old, d["n"])
+    for name in lib.design_ideas(body):
+        ifm = index.ideas.get(name)
+        if ifm is None:
+            problems.append(f"idea [[{name}]] does not exist in {FOLDERS['idea']}/")
+        elif ifm.get("status") != "open":
+            problems.append(f"idea [[{name}]] is {ifm.get('status')}; only open ideas can be promoted")
+        elif ifm.get("project") not in (None, "", project):
+            problems.append(f"idea [[{name}]] belongs to project '{ifm.get('project')}', not '{project}'")
+    repos = sorted(n for n, pids in index.repos.items() if project in pids)
+    for s in lib.design_stories(body):
+        if s["repo"] is not None and s["repo"] not in repos:
+            problems.append(f"S{s['n']}'s repo '{s['repo']}' is not one of project '{project}': "
+                            f"{', '.join(repos) or 'it has no repos'}")
+        elif s["repo"] is None and len(repos) > 1:
+            problems.append(f"S{s['n']} has no 'Repo:' line, and project '{project}' has {len(repos)} repos "
+                            f"({', '.join(repos)})")
+    if with_standing_lines(lib.read_text(index.projects[project]), []) is None:
+        problems.append(f"{lib.rel(index.projects[project])} has no '## {lib.STANDING}' section to keep up to date")
+    return problems
+
+
+def cmd_seal_design(args) -> None:
+    path = find_design(args.design)
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    fm = fm or {}
+    if fm.get("status") == "sealed":
+        die(f"{lib.rel(path)} is already sealed")
+    index = lib.Index()
+    problems = seal_design_problems(index, path, fm, body)
+    if problems:
+        die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(problems))
+
+    project, overview = fm["project"], index.projects[fm["project"]]
+    ideas = [AGENT / FOLDERS["idea"] / f"{name}.md" for name in lib.design_ideas(body)]
+    saved = snapshot([path, overview, lib.daily_path(), *ideas,
+                      *[r["path"] for r in index.decisions.get(project, [])]])
+    created = []
+    try:
+        for d in lib.design_decisions(body):
+            records = lib.Index().decisions.get(project, [])
+            old = next((r for r in records if r["stem"] == d["replaces"]), None)
+            rec = record_path(project, records, d["title"])
+            created.append(rec)
+            saved.setdefault(rec, None)
+            write_record(rec, project, d["title"], d["decision"], d["why"], f"design {path.stem} D{d['n']}", old)
+            append_log(f"- {lib.now_hhmm()} {lib.DECISION_EVENT} — {d['title']} [[{rec.stem}]]")
+        for idea in ideas:
+            _, idea_body, _ = lib.split_frontmatter(lib.read_text(idea))
+            update_note(idea, status="promoted", promoted_to=f"[[{path.stem}]]")
+            log_idea_event("idea-promoted", lib.decision_title(idea_body) or idea.stem, idea)
+        refresh_standing(project, overview)
+        append_log(f"- {lib.now_hhmm()} {lib.DESIGN_EVENT} — {lib.decision_title(body) or path.stem} [[{path.stem}]]")
+        sealed = {**fm, "status": "sealed", "sealed": lib.today().isoformat()}
+        commit_note(path, lib.render_frontmatter(sealed) + body.lstrip("\n"))
+    except SystemExit:
+        restore(saved)
+        raise
+    print(f"sealed {lib.rel(path)}: {len(created)} decision record(s), {len(ideas)} idea(s) promoted; "
+          f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
+
+
+def story_issues(slug: str, design: str) -> dict[int, list[tuple[str, dict]]]:
+    """Story number -> (owner/name, issue) for each issue of the repo whose Source section names
+    '[[<design>]] S<n>'. Only the Source section counts: a mention anywhere else is not a filing."""
+    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
+    found: dict[int, list[tuple[str, dict]]] = {}
+    for issue in github.repo_issues(slug):
+        source = dict(lib.split_sections(lib.blank_code_blocks(issue.get("body") or ""))).get("Source", [])
+        for n in sorted({int(m.group(1)) for ln in source for m in link.finditer(ln)}):
+            found.setdefault(n, []).append((slug, issue))
+    return found
+
+
+def cmd_design_stories(args) -> None:
+    path = find_design(args.design)
+    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
+    if (fm or {}).get("status") != "sealed":
+        die(f"{lib.rel(path)} is a draft; stories are filed from a sealed design (`seal design {path.stem}`)")
+    index = lib.Index()
+    project = fm["project"]
+    repos = sorted(n for n, pids in index.repos.items() if project in pids)
+    filed: dict[int, list[tuple[str, dict]]] = {}
+    for name in repos:
+        for n, issues in story_issues(index.slugs[name], path.stem).items():
+            filed.setdefault(n, []).extend(issues)
+    stories = lib.design_stories(body)
+    for s in stories:
+        issues = filed.get(s["n"])
+        print(f"S{s['n']}. {s['title']}: "
+              + (", ".join(f"{slug}#{i['number']} ({i['state'].lower()})" for slug, i in issues)
+                 if issues else "not filed"))
+    if not repos:
+        print(f"project '{project}' has no repos yet, so nothing can be filed; register one first")
+    unfiled = [s for s in stories if s["n"] not in filed]
+    print(f"{len(stories) - len(unfiled)} of {len(stories)} stories filed" if stories else "no stories")
 
 
 def cmd_decisions(args) -> None:
@@ -1234,7 +1427,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>")
 
     new = sub.add_parser("new", help="create a project, plan or retro note").add_subparsers(
-        dest="kind", required=True, metavar="project|plan|retro")
+        dest="kind", required=True, metavar="project|plan|retro|design")
     p = new.add_parser("project")
     p.add_argument("id")
     p.add_argument("--repo", action="append", default=[], metavar="OWNER/NAME")
@@ -1245,14 +1438,21 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("repo")
         p.add_argument("issue")
         p.set_defaults(fn=fn)
+    p = new.add_parser("design", help="a draft design for a project (which need not exist yet)")
+    p.add_argument("project")
+    p.add_argument("title")
+    p.set_defaults(fn=cmd_new_design)
 
-    seal = sub.add_parser("seal", help="seal a plan or a retro").add_subparsers(
-        dest="kind", required=True, metavar="plan|retro")
+    seal = sub.add_parser("seal", help="seal a plan, a retro or a design").add_subparsers(
+        dest="kind", required=True, metavar="plan|retro|design")
     for kind, fn in (("plan", cmd_seal_plan), ("retro", cmd_seal_retro)):
         p = seal.add_parser(kind)
         p.add_argument("repo")
         p.add_argument("issue")
         p.set_defaults(fn=fn)
+    p = seal.add_parser("design", help="record its decisions, promote its ideas, then seal it")
+    p.add_argument("design")
+    p.set_defaults(fn=cmd_seal_design)
     for name, fn in (("preflight", cmd_preflight), ("stage", cmd_stage), ("branch", cmd_branch),
                      ("open-pr", cmd_open_pr)):
         p = sub.add_parser(name)
@@ -1313,9 +1513,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("title")
     p.add_argument("--decision", required=True)
     p.add_argument("--why", required=True)
-    p.add_argument("--source", required=True, help="plan <repo>#<n> D<k> | issue <repo>#<n> | retro <repo>#<n> | session")
+    p.add_argument("--source", required=True,
+                   help="plan <repo>#<n> D<k> | design <design> D<k> | issue <repo>#<n> | retro <repo>#<n> | session")
     p.add_argument("--replaces", help="the active record this one reverses; it is marked superseded")
     p.set_defaults(fn=cmd_decision_add)
+    des = sub.add_parser("design", help="list a sealed design's stories with their issues").add_subparsers(
+        dest="action", required=True, metavar="stories")
+    p = des.add_parser("stories", help="each story with the issues whose Source names it, or 'not filed'")
+    p.add_argument("design")
+    p.set_defaults(fn=cmd_design_stories)
     p = sub.add_parser("decisions", help="list active decision records (--all: superseded too)")
     p.add_argument("--project")
     p.add_argument("--all", action="store_true")
