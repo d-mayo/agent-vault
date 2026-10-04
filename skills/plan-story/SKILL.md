@@ -54,7 +54,12 @@ Before asking the user anything:
    --project <id>` lists them (`<id>` as in step 5), then read the ones
    that bear on this issue in `Agent/Decisions/<id>/`. A plan must not
    contradict one unless a decision in it replaces that record.
-7. Read the code the issue will touch.
+7. If the issue's `Source` links a design (`[[<design>]] S<n>`), read that design in
+   `Agent/Designs/<project>/` (the note is sealed) and the story `S<n>`: the
+   design's Problem, Chosen design and decisions are the reasoning the plan
+   must stay consistent with, and the story's outcome and dependencies bound
+   the issue's scope.
+8. Read the code the issue will touch.
 
 ## Interview
 

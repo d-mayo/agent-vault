@@ -496,5 +496,22 @@ class DesignSkillTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC10-AC1
                             "not filed", "a project with no repo yet waits", "filing later", "file the stories of")
 
 
+class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#37)
+    def test_plan_story_reads_the_design(self):
+        self.assertMentions("links a design", "`[[<design>]] s<n>`", "agent/designs/<project>/", "the story `s<n>`",
+                            text=read("plan-story", "SKILL.md"))
+
+    def test_vault_guide_names_designs(self):
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertMentions("designs/<project>/<project>-design-<n>-<slug>.md", "new design <project>",
+                            "seal design <design>", "design stories <design>", "design <design> d<k>",
+                            "(by convention)", "the `design` skill", "file the stories of", text=guide)
+        self.assertMentions("start a fresh session on opus", text=guide)
+
+    def test_repo_claude_md_names_the_skill(self):
+        self.assertMentions("`skills/design/`", "`skills/design/design-reviewer.md`",
+                            text=(REPO / "CLAUDE.md").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
