@@ -9,7 +9,7 @@ Blocked:
   - the installed code in ~/.claude/agent-vault/ and the vault's CLAUDE.md: both are
     written by install.py from the repo;
   - sealed plan, impl, retro and design notes (a later design extends or replaces a sealed design);
-  - decision records, existing or new: `vault.py decision add` is the only way to write one;
+  - decision records, existing or new: `vault.py decision add` and `vault.py seal design` are the only ways to write one;
   - anything in Daily/: daily notes are written only by the CLI;
   - new notes in Agent/ (they come from the CLI) and loose files at the top of Agent/.
 """
