@@ -28,6 +28,7 @@ SKILLS = {
     "plan-story": (r"plan (#\d|issue \d)", "plan-reviewer.md"),
     "retro": (r"retro (#\d|issue \d)", None),
     "issue": (r"file an issue for", None),
+    "design": (r"design a \.\.\.", "design-reviewer.md"),
 }
 
 
@@ -457,6 +458,42 @@ class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T
     def test_vault_guide_lists_the_folder_and_both_commands(self):       # AC10
         self.assertMentions("`Decisions/<project>/<project>-d<n>-<slug>.md`", "decision add", "{{CLI}} decisions",
                             "--replaces", text=self.guide)
+
+
+class DesignSkillTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC10-AC13 (#37)
+    def setUp(self):
+        self.skill = read("design", "SKILL.md")
+        self.reviewer = read("design", "design-reviewer.md")
+
+    def test_triggers(self):                                          # AC10
+        desc = frontmatter(self.skill)["description"].lower()
+        for phrase in ("design a", "let''s design", "combine these ideas"):
+            self.assertIn(phrase, desc)
+
+    def test_research_interview_and_resume(self):                     # AC10
+        self.assertMentions("runs on opus", "active decision records", "open ideas", "open issues",
+                            "outside the codebase", "web search", "open-ended", "states the fact that raised it",
+                            "as many rounds as", "challenge assumptions", "resume, don't restart",
+                            "a draft there is the design in progress")
+
+    def test_rigor_rules(self):                                       # AC11
+        self.assertMentions("at least two genuinely different options", "trade-offs", "every decision has a reason",
+                            "the technology the design needs is named in `chosen design`", "mermaid",
+                            "risks and unknowns stay in `open questions`", "never decisions")
+
+    def test_review_summary_and_sealing(self):                        # AC12
+        self.assertMentions("independent reviewer subagent on opus", "never silently fall back",
+                            "one pointed question", "create its note now, after approval and before sealing",
+                            "vault.py seal design", "vault.py new project")
+        self.assertMentions("`model: \"opus\"`", "never the drafting session's own model", text=self.reviewer)
+        self.assertMentions("goal that no story delivers", "can't be built or shipped alone",
+                            "active decision record", "open question, risk or unknown written up as a decision",
+                            "genuinely different", "(major)", "(minor)", "no findings.", text=self.reviewer)
+
+    def test_filing_the_stories(self):                                # AC13
+        self.assertMentions("[[<design>]] s<n>", "under source", "depends on: s<n>", "exactly as they will be posted",
+                            "vault.py issue create", "never run `gh issue create`", "vault.py design stories",
+                            "not filed", "a project with no repo yet waits", "filing later", "file the stories of")
 
 
 if __name__ == "__main__":
