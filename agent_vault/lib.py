@@ -73,7 +73,7 @@ REQUIRED = {
 }
 OPTIONAL = {
     "project": ["audited"],
-    "plan": ["issue_updated", "base_sha"],
+    "plan": ["issue_updated", "base_sha", "pr"],
     "impl": ["branch", "pr"],
     "retro": [],
     "idea": ["project", "promoted_to"],
@@ -82,7 +82,8 @@ OPTIONAL = {
     "daily": [],
 }
 CONDITIONAL = {                            # shown by `schema`; enforced by FM-COND / PLAN-SEALED
-    "plan": "issue_updated and base_sha are required when status is sealed",
+    "plan": "issue_updated and base_sha are required when status is sealed; pr, if present, is none (the issue ends without a pull request)",
+    "retro": "pr is a number, or none when the plan declares pr: none; then a non-empty '## Closing comment' section follows Follow-ups, and only then",
     "idea": "promoted_to is required if and only if status is promoted",
     "decision": "superseded_by is required if and only if status is superseded",
     "design": "sealed is required if and only if status is sealed; extends and replaces each link a sealed design of the same project",
@@ -264,6 +265,8 @@ RULES = {
     "IMPL-REV": ("error", "Review findings end in '→ fixed in <sha>', '→ won't fix: <reason>' or, for minor only, '→ left open' (or None)"),
     "RETRO-AUDIT": ("error", "Audit lines are '- <heading>: confirmed|rewritten|removed — <reason>'"),
     "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link, decision link or dropped, each optionally ending in ' (R<n>[, R<m>…])' for the left-open findings they settle"),
+    "PLAN-PR": ("error", "A plan's optional 'pr' field can only be 'none' (the issue ends without a pull request)"),
+    "RETRO-CLOSE": ("error", "A retro with 'pr: none' has a non-empty '## Closing comment' section after Follow-ups; a retro with a PR has none"),
     "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]', '- HH:MM session — …' an idea event line, a decision-recorded line or a design-sealed line"),
     "X-REPO-DUP": ("error", "A repo name appears in the repos: of at most one project"),
     "X-REPO-UNREG": ("error", "Work/<repo>/ belongs to a repo listed in some project's repos:"),
@@ -675,7 +678,12 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
     if scalar("repo") and not REPO_NAME_RE.match(scalar("repo")):
         res.add("FM-FORMAT", "repo is the plain repo name, e.g. agent-vault (not owner/name)")
     for key in ("issue", "pr"):
-        if scalar(key) and not NUMBER_RE.match(scalar(key)):
+        if key == "pr" and ntype == "plan":
+            if fm.get(key) not in (None, NO_PR):
+                res.add("PLAN-PR", f"a plan's 'pr' can only be '{NO_PR}' (got {fm.get(key)!r}); omit it when the issue ends in a PR")
+        elif key == "pr" and ntype == "retro" and scalar(key) == NO_PR:
+            pass
+        elif scalar(key) and not NUMBER_RE.match(scalar(key)):
             res.add("FM-FORMAT", f"'{key}' must be a number like 12")
     if scalar("base_sha") and not SHA_RE.match(scalar("base_sha")):
         res.add("FM-FORMAT", "base_sha must be a 7-40 character lowercase hex sha")
@@ -730,9 +738,28 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
             res.add("FM-MATCH", f"'{key}' is {fm[key]!r} but the file name says {want!r}")
 
 
-def _check_sections(res: Result, ntype: str, secs: list) -> None:
+NO_PR = "none"                  # a plan's (and then its retro's) `pr:` when the issue ends without a pull request
+CLOSING = "Closing comment"     # the retro section holding the comment `seal retro` closes a no-PR issue with
+
+
+def sections_for(ntype: str, fm: dict) -> list:
+    """The `##` sections a note of this type needs; a no-PR retro also has a closing comment."""
+    if ntype == "retro" and fm.get("pr") == NO_PR:
+        return SECTIONS["retro"] + [CLOSING]
+    return SECTIONS[ntype]
+
+
+def closing_comment(body: str) -> str:
+    """A retro's closing comment text: HTML comments removed, trimmed; '' if none or empty."""
+    sec = dict(split_sections(body.splitlines())).get(CLOSING)
+    if sec is None:
+        return ""
+    return re.sub(r"<!--.*?(?:-->|\Z)", "", "\n".join(sec), flags=re.S).strip()
+
+
+def _check_sections(res: Result, ntype: str, secs: list, fm: dict | None = None) -> None:
     names = [n for n, _ in secs]
-    want = SECTIONS[ntype]
+    want = sections_for(ntype, fm or {})
     for sec in want:
         if sec not in names:
             res.add("SEC-MISSING", f"missing section '## {sec}'")
@@ -1004,7 +1031,13 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
     _check_frontmatter(res, etype, fm, derived)
     lines = blank_code_blocks(body)
     secs = split_sections(lines)
-    _check_sections(res, etype, secs)
+    _check_sections(res, etype, secs, fm)
+    if etype == "retro":
+        names = [n for n, _ in secs]
+        if fm.get("pr") == NO_PR and not closing_comment(body):
+            res.add("RETRO-CLOSE", f"a retro with pr: none needs a non-empty '## {CLOSING}' (the comment the issue is closed with)")
+        elif fm.get("pr") != NO_PR and CLOSING in names:
+            res.add("RETRO-CLOSE", f"'## {CLOSING}' belongs only to a retro with pr: none")
     _check_line_formats(res, etype, secs)
     if etype == "plan":
         _check_plan(res, secs, draft=fm.get("status") == "draft")
