@@ -131,13 +131,16 @@ def impl_note(repo: str, issue: str) -> str:
 
 
 def retro_note(repo: str, issue: str, pr: str) -> str:
+    """A fresh retro; a `pr: none` one also gets the closing comment `seal retro` posts."""
     fm = lib.render_frontmatter({"type": "retro", "repo": repo, "issue": issue, "pr": pr, "status": "open"})
     return (f"{fm}# {repo}-{issue}-retro\n\n"
             "## Summary\n<!-- What was built and how it went. -->\n\n"
             "## CLAUDE.md audit\n\n"
             "## README audit\n\n"
             "## Overview audit\n\n"
-            "## Follow-ups\nNone\n")
+            "## Follow-ups\nNone\n"
+            + (f"\n## {lib.CLOSING}\n<!-- The comment the issue is closed with; the user approves it with this retro. -->\n"
+               if pr == lib.NO_PR else ""))
 
 
 def idea_note(title: str, source: str, project: str | None, context: str = "") -> str:
@@ -223,7 +226,9 @@ def cmd_new_retro(args) -> None:
         die(f"{lib.rel(retro)} already exists")
     fm, _, _ = lib.split_frontmatter(lib.read_text(impl))
     pr = (fm or {}).get("pr")
-    if not isinstance(pr, str) or not lib.NUMBER_RE.match(pr):
+    if plan_is_no_pr(args.repo, args.issue):
+        pr = lib.NO_PR
+    elif not isinstance(pr, str) or not lib.NUMBER_RE.match(pr):
         die(f"{lib.rel(impl)} has no 'pr:' yet; open the PR first")
     commit_note(retro, retro_note(args.repo, args.issue, pr))
     print("created " + lib.rel(retro))

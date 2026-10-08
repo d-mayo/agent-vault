@@ -266,7 +266,7 @@ RULES = {
     "RETRO-AUDIT": ("error", "Audit lines are '- <heading>: confirmed|rewritten|removed — <reason>'"),
     "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link, decision link or dropped, each optionally ending in ' (R<n>[, R<m>…])' for the left-open findings they settle"),
     "PLAN-PR": ("error", "A plan's optional 'pr' field can only be 'none' (the issue ends without a pull request)"),
-    "RETRO-CLOSE": ("error", "A retro with 'pr: none' has a non-empty '## Closing comment' section after Follow-ups; a retro with a PR has none"),
+    "RETRO-CLOSE": ("error", "A retro with 'pr: none' has a non-empty '## Closing comment' section after Follow-ups (a warning while open); a retro with a PR has none"),
     "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]', '- HH:MM session — …' an idea event line, a decision-recorded line or a design-sealed line"),
     "X-REPO-DUP": ("error", "A repo name appears in the repos: of at most one project"),
     "X-REPO-UNREG": ("error", "Work/<repo>/ belongs to a repo listed in some project's repos:"),
@@ -1035,7 +1035,8 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
     if etype == "retro":
         names = [n for n, _ in secs]
         if fm.get("pr") == NO_PR and not closing_comment(body):
-            res.add("RETRO-CLOSE", f"a retro with pr: none needs a non-empty '## {CLOSING}' (the comment the issue is closed with)")
+            res.add("RETRO-CLOSE", f"a retro with pr: none needs a non-empty '## {CLOSING}' (the comment the issue is closed with)",
+                    fm.get("status") != "sealed")
         elif fm.get("pr") != NO_PR and CLOSING in names:
             res.add("RETRO-CLOSE", f"'## {CLOSING}' belongs only to a retro with pr: none")
     _check_line_formats(res, etype, secs)
