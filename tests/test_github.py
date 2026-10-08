@@ -502,6 +502,20 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.assertIn("docs(claude): verify audited sections (#7)", log)
         self.assert_valid()
 
+    def test_never_closes_the_issue_itself(self):         # T7 -> AC7
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.calls("issue", "close"), [])
+
+    def test_a_no_pr_retro_on_a_pr_plan_is_refused(self):      # T6 -> AC6
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        text = self.retro.read_text(encoding="utf-8").replace("pr: 20", "pr: none")
+        self.retro.write_text(text + "\n## Closing comment\nbye\n", encoding="utf-8", newline="\n")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "must agree")
+        self.assertEqual(self.calls("issue", "close"), [])
+
     def test_refuses_missing_audit_lines(self):
         self.prep()
         self.fill_retro("- Purpose: confirmed — still true\n", FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
@@ -961,6 +975,106 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
         (self.clone / "dirty.txt").write_text("x", encoding="utf-8")
         self.refused(self.cli("seal", "retro", "widget", "7"), "isn't clean")
+
+
+class NoPrRetroTest(GhCase):  # T6, T7 -> AC6, AC7
+    fill_retro = SealRetroTest.fill_retro
+    add_findings = SealRetroTest.add_findings
+    set_follow_ups = SealRetroTest.set_follow_ups
+    lasting_plan = SealRetroTest.lasting_plan
+    record = SealRetroTest.record
+    COMMENT = "Done in the vault.\nSecond line."
+
+    def prep(self, plan=NO_PR_PLAN, comment=COMMENT):
+        self.sealed(plan)
+        (self.clone / "CLAUDE.md").write_text(CLAUDE_MD, encoding="utf-8", newline="\n")
+        (self.clone / "README.md").write_text(README_MD, encoding="utf-8", newline="\n")
+        git("add", "CLAUDE.md", "README.md", cwd=self.clone)
+        git("commit", "-q", "-m", "docs: claude.md and readme", cwd=self.clone)
+        git("push", "-q", "origin", "main", cwd=self.clone)
+        self.ok(self.cli("new", "retro", "widget", "7"))
+        self.retro = self.note("retro")
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        text = self.retro.read_text(encoding="utf-8")
+        text = text.replace("<!-- The comment the issue is closed with; the user approves it with this retro. -->\n",
+                            "<!-- hint -->\n" + comment + "\n")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+        self.head = git("rev-parse", "HEAD", cwd=self.clone)
+
+    def sealed_nothing(self):
+        self.assertEqual(self.fm(self.note("impl"))["status"], "open")
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+
+    def test_closes_with_the_comment_and_seals_without_a_commit(self):
+        self.prep()
+        out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
+        self.assertIn("closed issue #7", out)
+        issue = self.load()["issues"]["7"]
+        self.assertEqual(issue["state"], "CLOSED")
+        self.assertEqual(issue["closed_comment"], self.COMMENT)       # verbatim, no HTML comment
+        self.assertEqual(issue["closed_reason"], "completed")
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.clone), self.head)
+        self.assertIn(f"audited: {dt.date.today().isoformat()}",
+                      (self.vault / "Agent" / "Projects" / "widgets.md").read_text(encoding="utf-8"))
+        self.assertNotIn("verified:", (self.clone / "CLAUDE.md").read_text(encoding="utf-8"))
+        self.assertEqual(self.calls("pr"), [])
+        self.assert_valid()
+
+    def test_works_from_any_branch_with_a_dirty_tree(self):
+        self.prep()
+        git("switch", "-q", "-c", "scratch", cwd=self.clone)
+        (self.clone / "junk.txt").write_text("x", encoding="utf-8")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+
+    def test_an_already_closed_issue_is_only_sealed(self):
+        self.prep()
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.calls("issue", "close"), [])
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_a_failed_close_seals_nothing(self):
+        self.prep()
+        self.state["refuse_close"] = "HTTP 500"
+        self.save()
+        self.refused(self.cli("seal", "retro", "widget", "7"), "nothing is sealed")
+        self.sealed_nothing()
+        self.assertEqual(self.load()["issues"]["7"]["state"], "OPEN")
+
+    def test_retro_pr_must_agree_with_the_plan(self):
+        self.prep()
+        self.retro.write_text(self.retro.read_text(encoding="utf-8").replace("pr: none", "pr: 5"),
+                              encoding="utf-8", newline="\n")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "must agree")
+        self.sealed_nothing()
+        self.assertEqual(self.calls("issue", "close"), [])
+
+    def test_empty_closing_comment_is_refused(self):
+        self.prep(comment="")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "Closing comment")
+        self.sealed_nothing()
+        self.assertEqual(self.calls("issue", "close"), [])
+
+    def test_still_requires_the_audit(self):
+        self.prep()
+        text = self.retro.read_text(encoding="utf-8").replace("- Commands: confirmed — still true\n", "")
+        self.retro.write_text(text, encoding="utf-8", newline="\n")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "missing an audit line")
+        self.assertEqual(self.calls("issue", "close"), [])
+
+    def test_still_requires_sorted_follow_ups(self):
+        self.prep()
+        self.add_findings("- R1 (minor): Review 1: odd name → left open")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "unsorted", "R1")
+        self.assertEqual(self.calls("issue", "close"), [])
+
+    def test_still_requires_recorded_lasting_decisions(self):
+        self.prep(NO_PR_PLAN.replace("## Decisions\n\n", "## Decisions\n- D1: keep it, because c (lasting)\n\n"))
+        self.refused(self.cli("seal", "retro", "widget", "7"), "lasting decisions", "D1")
+        self.assertEqual(self.calls("issue", "close"), [])
 
 
 class StageTest(GhCase):  # T5 -> AC5

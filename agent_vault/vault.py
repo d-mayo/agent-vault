@@ -549,37 +549,42 @@ def cmd_seal_retro(args) -> None:
 
     top = require_clone(slug)
     info = github.issue_info(slug, args.issue)
-    current_branch = github.git("branch", "--show-current", cwd=top)
     closed = info["state"] != "OPEN"
-    if closed:
-        default = github.default_branch(slug)
-        if current_branch == default or not current_branch:
-            die(f"issue #{args.issue} is closed; check out a branch other than {default} "
-                f"(currently {current_branch or '(detached)'}; the impl note's own branch "
-                "may already be deleted)")
-    else:
-        branch = impl_fm.get("branch")
-        if not branch:
-            die(f"{lib.rel(impl_path)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
-        if current_branch != branch:
-            die(f"the current branch is {current_branch or '(detached)'}, but {lib.rel(impl_path)} "
-                f"says {branch}; check out {branch} first")
-    if github.git("status", "--porcelain", cwd=top):
-        die("the working tree isn't clean; commit or stash your changes first")
+    no_pr = plan_is_no_pr(args.repo, args.issue)
+    if no_pr != (retro_fm.get("pr") == lib.NO_PR):
+        die(f"{lib.rel(retro_path)} says pr: {retro_fm.get('pr')}, but the plan "
+            f"{'declares pr: none' if no_pr else 'has a PR'}; they must agree")
     merging, bump_done, default = False, False, ""
     pr = retro_fm.get("pr", "")
-    if not closed:
-        pr_info = github.pr_closing(slug, pr)
-        if (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
-            if pr_info["state"] == "OPEN":
-                die(f"PR #{pr} will not close issue #{args.issue} when it merges; restore a "
-                    f"`Closes #{args.issue}` line in its description, then run this again")
-            die(f"PR #{pr} is {pr_info['state']} and did not close issue #{args.issue}; "
-                "close the issue by hand, then run this again")
-        merging = pr_info["state"] == "OPEN"
-        if merging:
+    if not no_pr:     # an issue with a PR: the branch, the PR and the merge (a no-PR one has none of them)
+        current_branch = github.git("branch", "--show-current", cwd=top)
+        if closed:
             default = github.default_branch(slug)
-            bump_done = check_merge_ready(top, pr, pr_info, args.issue)
+            if current_branch == default or not current_branch:
+                die(f"issue #{args.issue} is closed; check out a branch other than {default} "
+                    f"(currently {current_branch or '(detached)'}; the impl note's own branch "
+                    "may already be deleted)")
+        else:
+            branch = impl_fm.get("branch")
+            if not branch:
+                die(f"{lib.rel(impl_path)} has no 'branch:'; `branch {args.repo} {args.issue}` sets it")
+            if current_branch != branch:
+                die(f"the current branch is {current_branch or '(detached)'}, but {lib.rel(impl_path)} "
+                    f"says {branch}; check out {branch} first")
+        if github.git("status", "--porcelain", cwd=top):
+            die("the working tree isn't clean; commit or stash your changes first")
+        if not closed:
+            pr_info = github.pr_closing(slug, pr)
+            if (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
+                if pr_info["state"] == "OPEN":
+                    die(f"PR #{pr} will not close issue #{args.issue} when it merges; restore a "
+                        f"`Closes #{args.issue}` line in its description, then run this again")
+                die(f"PR #{pr} is {pr_info['state']} and did not close issue #{args.issue}; "
+                    "close the issue by hand, then run this again")
+            merging = pr_info["state"] == "OPEN"
+            if merging:
+                default = github.default_branch(slug)
+                bump_done = check_merge_ready(top, pr, pr_info, args.issue)
 
     claude_path = top / "CLAUDE.md"
     if not claude_path.is_file():
@@ -630,7 +635,7 @@ def cmd_seal_retro(args) -> None:
 
     confirmed = {h for h, v in claude_audit if v == "confirmed"}
     new_text, bumped = claudemd.bump_verified(claude_text, sections, confirmed, lib.today())
-    if bump_done:       # a rerun after a refused merge: HEAD already is the bump commit, so add no second one
+    if no_pr or bump_done:      # no-PR: nothing to commit (D5); a rerun after a refused merge: HEAD already is the bump commit
         bumped = []
     if bumped:
         lib.write_text(claude_path, new_text)
@@ -649,13 +654,21 @@ def cmd_seal_retro(args) -> None:
             die(f"PR #{pr} was not merged, and nothing is sealed: {e.stderr or e}\n"
                 "fix that, then run this again; it adds no second verified commit")
 
+    if no_pr and not closed:
+        try:
+            github.close_issue(slug, args.issue, lib.closing_comment(retro_body))
+        except github.CmdError as e:
+            die(f"issue #{args.issue} was not closed, and nothing is sealed: {e.stderr or e}\n"
+                "fix that, then run this again")
+
     update_note(impl_path, status="sealed")
     update_note(retro_path, status="sealed")
     update_note(project_path, audited=lib.today().isoformat())
     log_event(args.repo, args.issue, "retro-done")
     print(f"sealed {lib.rel(impl_path)} and {lib.rel(retro_path)}; set audited: {lib.today().isoformat()} "
           f"on {lib.rel(project_path)}" + (f"; bumped verified on: {', '.join(bumped)}" if bumped else "")
-          + (f"; merged PR #{pr}" if merging else ""))
+          + (f"; merged PR #{pr}" if merging else "")
+          + (f"; closed issue #{args.issue}" if no_pr and not closed else ""))
     if merging:
         sync_default_branch(top, default, pr)
 

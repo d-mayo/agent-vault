@@ -192,6 +192,13 @@ def main():
             if not found:
                 fail(f"Could not resolve to an Issue: {sub}")
             found[2]["parent"] = f"https://github.com/{slug}/issues/{args[2]}"
+    elif cmd == ["issue", "close"]:
+        if state.get("refuse_close"):
+            fail(state["refuse_close"])
+        issue = repo["issues"][args[2]]
+        issue["state"] = "CLOSED"
+        issue["closed_comment"] = opt(args, "--comment")
+        issue["closed_reason"] = opt(args, "--reason")
     elif cmd == ["issue", "list"]:
         wanted = opt(args, "--state", "open").upper()
         label = opt(args, "--label")
