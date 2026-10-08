@@ -565,6 +565,16 @@ class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#3
         self.assertMentions("`skills/design/`", "`skills/design/design-reviewer.md`",
                             text=(REPO / "CLAUDE.md").read_text(encoding="utf-8"))
 
+    def test_docs_name_features(self):                                # T12 -> AC11 (#56)
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertMentions("--feature", "--parent <n>|<repo>#<n>]` (creates", "{{CLI}} features", "no feature yet",
+                            "the `planned`, `feature` and `bug` labels", text=guide)
+        self.assertMentions("--feature", "--parent", "vault.py features", text=(REPO / "CLAUDE.md").read_text(encoding="utf-8"))
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertMentions("2.94.0", text=readme.split("## Install")[1].split("## Git conventions")[0])
+        self.assertMentions("--feature", "--parent", "under its feature issue",
+                            text=readme.split("## Git conventions")[1])
+
 
 if __name__ == "__main__":
     unittest.main()
