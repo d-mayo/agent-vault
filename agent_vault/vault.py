@@ -17,7 +17,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   idea add "<title>" [--project <id>] [--source <source>]
   idea drop <file> --reason "..."
   idea promote <file> --body-file <file> [--title "..."] [--repo <name>]
-  issue create <repo> --title "..." --body-file <file> [--idea <file>]
+  issue create <repo> --title "..." --body-file <file> [--idea <file>] [--feature <design> | --parent <n>|<repo>#<n>]
   decision add <project> "<title>" --decision "..." --why "..." --source "..." [--replaces <record>]
   decisions [--project <id>] [--all]
   ideas [--project <id>] [--status open|promoted|dropped]
@@ -865,9 +865,8 @@ def idea_for_issue(index: lib.Index, idea_file: str, repo: str) -> Path:
     return path
 
 
-def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Path | None = None) -> None:
-    """Create an issue from a body file that matches the template; with an idea, promote it.
-    Everything is checked before `gh` runs. The body is posted exactly as the file has it."""
+def checked_issue(index: lib.Index, repo: str, title: str, body_file: str) -> tuple[str, str]:
+    """(title, body) of an issue to create, after the repo, title and the template are checked."""
     require_repo(index, repo)
     title = one_line(title)
     if not title:
@@ -879,7 +878,16 @@ def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Pa
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         sys.exit(1)
-    url = create_with_body(["issue", "create", "--repo", index.slugs[repo], "--title", title], body)
+    return title, body
+
+
+def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Path | None = None,
+               parent: str | None = None) -> None:
+    """Create an issue from a body file that matches the template; with an idea, promote it; with a
+    `parent` (the parent issue's URL), file it as that issue's sub-issue.
+    Everything is checked before `gh` runs. The body is posted exactly as the file has it."""
+    title, body = checked_issue(index, repo, title, body_file)
+    url = create_with_body(github.issue_create_args(index.slugs[repo], title, parent=parent), body)
     if idea is not None:
         try:
             update_note(idea, status="promoted", promoted_to=url)
@@ -891,9 +899,90 @@ def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Pa
     print(url)
 
 
+def source_lines(issue: dict) -> list[str]:
+    return dict(lib.split_sections(lib.blank_code_blocks(issue.get("body") or ""))).get("Source", [])
+
+
+def is_feature_of(issue: dict, design: str) -> bool:
+    """Whether the issue's Source section links the design with no story number (D3)."""
+    source = "\n".join(source_lines(issue))
+    return f"[[{design}]]" in source and not re.search(rf"\[\[{re.escape(design)}\]\] S[1-9]", source)
+
+
+def project_issues(index: lib.Index, project: str) -> list[tuple[str, dict]]:
+    """(owner/name, issue) for every issue, open or closed, of the project's repos."""
+    return [(index.slugs[name], issue) for name in sorted(n for n, pids in index.repos.items() if project in pids)
+            for issue in github.repo_issues(index.slugs[name])]
+
+
+def feature_issues(issues: list[tuple[str, dict]], design: str) -> list[tuple[str, dict]]:
+    return [(slug, i) for slug, i in issues if is_feature_of(i, design)]
+
+
+def feature_design(index: lib.Index, repo: str, name: str) -> tuple[Path, str]:
+    """(design path, project) of a sealed design whose project owns the repo, or die."""
+    path = find_design(name)
+    fm, _, _ = lib.split_frontmatter(lib.read_text(path))
+    if (fm or {}).get("status") != "sealed":
+        die(f"{lib.rel(path)} is a draft; a feature is filed for a sealed design (`seal design {path.stem}`)")
+    if fm["project"] not in index.repos.get(repo, []):
+        die(f"repo '{repo}' doesn't belong to the design's project '{fm['project']}'")
+    return path, fm["project"]
+
+
+def cmd_issue_create_feature(args, index: lib.Index) -> None:
+    """File the design's feature issue and attach every filed story that has no parent (AC1-AC3)."""
+    if args.idea:
+        die("--feature can't be combined with --idea")
+    path, project = feature_design(index, args.repo, args.feature)
+    design = path.stem
+    title, body = checked_issue(index, args.repo, args.title, args.body_file)
+    source = "\n".join(source_lines({"body": body}))
+    if f"[[{design}]]" not in source:
+        die(f"the body's Source section must link [[{design}]]")
+    if re.search(r"\[\[[^\]]+\]\] S[1-9]", source):
+        die("a feature's Source names no story: remove the 'S<n>' after the design link")
+    issues = project_issues(index, project)
+    existing = feature_issues(issues, design)
+    if existing:
+        slug, issue = existing[0]
+        die(f"{design} already has a feature: {slug}#{issue['number']} ({issue['state'].lower()}); "
+            "change it on GitHub by hand")
+    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
+    stories = []                      # (story number, owner/name, issue) for every filed story
+    for story_slug, issue in issues:
+        found = {int(m.group(1)) for ln in source_lines(issue) for m in link.finditer(ln)}
+        stories += [(n, story_slug, issue) for n in sorted(found)]
+    stories.sort(key=lambda x: (x[0], x[1], x[2]["number"]))
+    slug = index.slugs[args.repo]
+    name, color, desc = lib.FEATURE_LABEL
+    github.ensure_label(slug, name, color, desc)
+    url = create_with_body(github.issue_create_args(slug, title, label=name), body)
+    number = url.rstrip("/").rsplit("/", 1)[1]
+    failed = []
+    for n, story_slug, issue in stories:
+        ref = f"{story_slug}#{issue['number']}"
+        if issue.get("parent"):
+            print(f"S{n} {ref} is already under {issue['parent']['url']}; left where it is")
+            continue
+        try:
+            github.add_sub_issue(slug, number, issue["url"])
+        except github.CmdError as e:
+            failed.append(ref)
+            print(f"S{n} {ref} could not be attached: {e.stderr or e}\n  run: gh issue edit {number} "
+                  f"--repo {slug} --add-sub-issue {issue['url']}", file=sys.stderr)
+            continue
+        print(f"S{n} {ref} attached to {slug}#{number}")
+    print(url)
+    if failed:
+        sys.exit(1)
+
+
 def cmd_issue_create(args) -> None:
     index = lib.Index()
     require_repo(index, args.repo)
+    if args.feature:
+        return cmd_issue_create_feature(args, index)
     idea = idea_for_issue(index, args.idea, args.repo) if args.idea else None
     file_issue(index, args.repo, args.title, args.body_file, idea)
 
@@ -1562,6 +1651,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", required=True)
     p.add_argument("--body-file", required=True)
     p.add_argument("--idea", help="an open idea to mark promoted")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("--feature", metavar="DESIGN", help="file the sealed design's feature issue")
+    where.add_argument("--parent", metavar="N|REPO#N", help="file the issue under this open feature")
     p.set_defaults(fn=cmd_issue_create)
 
     p = sub.add_parser("ideas", help="list ideas, or `ideas review` for old open ones")

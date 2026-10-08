@@ -212,6 +212,11 @@ def main():
         repo["created_issues"].append({"number": n, "title": opt(args, "--title"), "url": url,
                                        "body": Path(opt(args, "--body-file")).read_text(encoding="utf-8"),
                                        "parent": opt(args, "--parent"), "label": label})
+        repo["issues"][str(n)] = {"state": "OPEN", "title": opt(args, "--title"), "created": "2026-01-01T00:00:00Z",
+                                  "body_edited": None, "renamed": None, "labels": [label] if label else [],
+                                  "body": repo["created_issues"][-1]["body"]}
+        if opt(args, "--parent"):
+            repo["issues"][str(n)]["parent"] = opt(args, "--parent")
         print(url)
     elif cmd == ["repo", "view"]:
         repo = repo_state(state, args[2])

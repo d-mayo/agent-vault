@@ -1355,7 +1355,8 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class DesignStoriesTest(GhCase):  # T7 -> AC7
+class DuoCase(GhCase):
+    """A sealed-able design `duo-design-1-pair` with stories S1 (duo-a) and S2 (duo-b) in project `duo`."""
     NAME = "duo-design-1-pair"
 
     def setUp(self):
@@ -1374,19 +1375,24 @@ class DesignStoriesTest(GhCase):  # T7 -> AC7
     def seal(self):
         self.ok(self.cli("seal", "design", self.NAME))
 
-    def add_issue(self, slug, n, state, body):
+    def add_issue(self, slug, n, state, body, labels=(), parent=None):
         self.load()
         repo = self.state["repos"].setdefault(slug, {
             "default_branch": "main", "head_sha": "a" * 40, "labels": [], "settings": {},
             "refuse_settings": False, "branches": [], "prs": [], "compare": {"total_commits": 0, "files": []},
             "issues": {}, "created_prs": [], "created_issues": [], "next_number": 20})
         repo["issues"][str(n)] = {"state": state, "title": "t", "created": CREATED, "body_edited": None,
-                                  "renamed": None, "labels": [], "body": body}
+                                  "renamed": None, "labels": list(labels), "body": body}
+        if parent:
+            repo["issues"][str(n)]["parent"] = parent
         self.save()
 
     def source(self, text):
         return ISSUE_BODY.replace("## Source\nsession", f"## Source\n{text}")
 
+
+
+class DesignStoriesTest(DuoCase):  # T7 -> AC7
     def test_filed_in_the_second_repo_and_not_filed(self):
         self.seal()
         self.add_issue("acme/duo-b", 4, "CLOSED", self.source(f"[[{self.NAME}]] S1"))
@@ -1425,3 +1431,92 @@ class DesignStoriesTest(GhCase):  # T7 -> AC7
         out = self.ok(self.cli("design", "stories", "bare-design-1-x")).stdout
         self.assertIn("S1. Build it: not filed", out)
         self.assertIn("has no repos yet", out)
+
+
+class FeatureCreateTest(DuoCase):  # T2-T4 -> AC1-AC3
+    def setUp(self):
+        super().setUp()
+        self.seal()
+        self.url_a = "https://github.com/acme/duo-a/issues"
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"))
+        self.add_issue("acme/duo-b", 2, "OPEN", self.source(f"[[{self.NAME}]] S2"),
+                       parent="https://github.com/acme/duo-b/issues/9")
+        self.add_issue("acme/duo-b", 9, "OPEN", ISSUE_BODY, labels=["feature"])
+
+    def feature(self, *extra, source=None, repo="duo-a", body=None):
+        text = body or self.source(source if source is not None else f"[[{self.NAME}]]")
+        return self.cli("issue", "create", repo, "--title", "The pair", "--body-file", self.body_file(text),
+                        *(extra or ("--feature", self.NAME)))
+
+    def writes(self):
+        self.load()
+        return [c for c in self.state["calls"] if c[:2] in (["issue", "create"], ["label", "create"],
+                                                              ["issue", "edit"])]
+
+    def test_creates_the_labelled_feature_and_attaches_the_parentless_story(self):    # T2 -> AC1
+        out = self.ok(self.feature()).stdout
+        self.assertEqual(self.writes()[0][:2], ["label", "create"])
+        made = self.load() and self.state["repos"]["acme/duo-a"]["created_issues"]
+        self.assertEqual((made[0]["label"], made[0]["parent"]), ("feature", None))
+        edits = self.calls("issue", "edit")
+        self.assertEqual(edits, [["issue", "edit", "20", "--repo", "acme/duo-a", "--add-sub-issue",
+                                  f"{self.url_a}/1"]])
+        self.assertIn("S2 acme/duo-b#2 is already under https://github.com/acme/duo-b/issues/9", out)
+        self.assertIn("left where it is", out)
+        self.assertTrue(out.strip().endswith("https://github.com/acme/duo-a/issues/20"))
+
+    def test_an_existing_label_is_not_created_again(self):
+        self.load()
+        self.state["repos"]["acme/duo-a"]["labels"].append("feature")
+        self.save()
+        self.ok(self.feature())
+        self.assertEqual(self.calls("label", "create"), [])
+
+    def refuses_without_writing(self, r, *words):
+        self.refused(r, *words)
+        self.assertEqual(self.writes(), [])
+
+    def test_a_missing_design(self):    # T3 -> AC2
+        self.refuses_without_writing(self.feature("--feature", "duo-design-9-none"), "no design")
+
+    def test_a_draft_design(self):
+        text = self.path.read_text(encoding="utf-8").replace("status: sealed", "status: draft")
+        self.path.write_text(text, encoding="utf-8", newline="\n")
+        self.refuses_without_writing(self.feature(), "draft")
+
+    def test_a_repo_of_another_project(self):
+        self.refuses_without_writing(self.feature(repo="widget"), "doesn't belong")
+
+    def test_a_source_without_the_design_link(self):
+        self.refuses_without_writing(self.feature(source="session"), f"[[{self.NAME}]]")
+
+    def test_a_source_naming_a_story(self):
+        self.refuses_without_writing(self.feature(source=f"[[{self.NAME}]] S1"), "names no story")
+        self.refuses_without_writing(self.feature(source=f"[[{self.NAME}]]\n[[other-design-1-x]] S2"),
+                                     "names no story")
+
+    def test_a_closed_feature_in_the_other_repo(self):
+        self.add_issue("acme/duo-b", 9, "CLOSED", self.source(f"[[{self.NAME}]]"), labels=["feature"])
+        self.refuses_without_writing(self.feature(), "already has a feature", "acme/duo-b#9")
+
+    def test_an_unlabelled_issue_with_that_source(self):
+        self.add_issue("acme/duo-b", 9, "OPEN", self.source(f"[[{self.NAME}]]"))
+        self.refuses_without_writing(self.feature(), "already has a feature")
+
+    def test_idea_and_parent_are_refused(self):
+        self.refuses_without_writing(self.feature("--feature", self.NAME, "--idea", "x"), "--idea")
+        r = self.feature("--feature", self.NAME, "--parent", "9")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(self.writes(), [])
+
+    def test_a_failed_attach_does_not_stop_the_rest(self):    # T4 -> AC3
+        self.add_issue("acme/duo-b", 2, "OPEN", self.source(f"[[{self.NAME}]] S2"))
+        self.load()
+        self.state["refuse_sub_issue"] = {f"{self.url_a}/1": "Issue is already a sub-issue"}
+        self.save()
+        r = self.feature()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("Issue is already a sub-issue", r.stderr)
+        self.assertIn(f"gh issue edit 20 --repo acme/duo-a --add-sub-issue {self.url_a}/1", r.stderr)
+        self.assertIn("S2 acme/duo-b#2 attached to acme/duo-a#20", r.stdout)
+        self.assertTrue(r.stdout.strip().endswith("https://github.com/acme/duo-a/issues/20"))
