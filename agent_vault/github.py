@@ -184,15 +184,41 @@ def open_prs(slug: str) -> list[dict]:
                    "--json", "number,headRefName,url")
 
 
+PASSED_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
+
+
+def unpassed_checks(rollup: list) -> list[str]:
+    """The checks in a `statusCheckRollup` that haven't passed, as 'name (state)': a check run passed when
+    it concluded SUCCESS, NEUTRAL or SKIPPED, a status context when it is SUCCESS (#51 D3)."""
+    out = []
+    for check in rollup or []:
+        if check.get("__typename") == "StatusContext":
+            if check.get("state") != "SUCCESS":
+                out.append(f"{check.get('context', '?')} ({(check.get('state') or 'unknown').lower()})")
+        elif check.get("conclusion") not in PASSED_CONCLUSIONS:
+            out.append(f"{check.get('name', '?')} "
+                       f"({(check.get('conclusion') or check.get('status') or 'unknown').lower()})")
+    return out
+
+
 def pr_closing(slug: str, number: str) -> dict:
-    """state and `closes`: the (issue number, owner/name) pairs GitHub says merging the PR closes (D1)."""
-    data = gh_json("pr", "view", str(number), "--repo", slug, "--json", "state,closingIssuesReferences")
+    """state, `closes` (the (issue number, owner/name) pairs GitHub says merging the PR closes, D1), `head`
+    (its head commit) and `unpassed` (the checks that haven't passed, see `unpassed_checks`)."""
+    data = gh_json("pr", "view", str(number), "--repo", slug, "--json",
+                   "state,headRefOid,statusCheckRollup,closingIssuesReferences")
     closes = []
     for ref in data.get("closingIssuesReferences") or []:
         repo = ref.get("repository") or {}
         owner = (repo.get("owner") or {}).get("login", "")
         closes.append((str(ref["number"]), f"{owner}/{repo.get('name', '')}"))
-    return {"state": data["state"], "closes": closes}
+    return {"state": data["state"], "closes": closes, "head": data.get("headRefOid") or "",
+            "unpassed": unpassed_checks(data.get("statusCheckRollup"))}
+
+
+def squash_merge(slug: str, number: str, sha: str) -> None:
+    """Squash-merge the PR, only if its head is still `sha`; raises CmdError with GitHub's reason (#51 D1).
+    No --delete-branch, --admin or --auto: GitHub's own settings decide those."""
+    gh("pr", "merge", str(number), "--repo", slug, "--squash", "--match-head-commit", sha)
 
 
 def label_names(slug: str) -> list[str]:

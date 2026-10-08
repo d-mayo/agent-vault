@@ -460,6 +460,53 @@ def trial_seal_errors(path: Path, fm: dict, body: str) -> list[str]:
     return lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
 
 
+def bump_subject(issue: str) -> str:
+    return f"docs(claude): verify audited sections (#{issue})"
+
+
+def check_merge_ready(top: Path, pr: str, pr_info: dict, issue: str) -> bool:
+    """Refuse, before anything is committed, unless the PR's head is the local HEAD (or its parent, when HEAD
+    is this issue's own bump commit, D5) and every check of that head passed (D3). Returns whether HEAD
+    already is the bump commit (D6)."""
+    local = github.git("rev-parse", "HEAD", cwd=top)
+    bumped = github.git("log", "-1", "--format=%s", cwd=top) == bump_subject(issue)
+    parent = github.git("rev-parse", "HEAD^", cwd=top) if bumped else None
+    if pr_info["head"] not in (local, parent):
+        die(f"PR #{pr}'s head is {pr_info['head'][:12] or '(unknown)'}, but the local {top.name} branch is at "
+            f"{local[:12]}; push or pull until they match, then run this again")
+    if pr_info["unpassed"]:
+        die(f"PR #{pr} has checks that haven't passed: {', '.join(pr_info['unpassed'])}; "
+            "wait for them (or fix them), then run this again")
+    return bumped
+
+
+def worktree_holding(top: Path, branch: str) -> Path | None:
+    """The worktree that has `branch` checked out, if any (it can be this clone's own)."""
+    path = None
+    for ln in github.git("worktree", "list", "--porcelain", cwd=top).splitlines():
+        if ln.startswith("worktree "):
+            path = Path(ln[len("worktree "):])
+        elif ln == f"branch refs/heads/{branch}" and path is not None:
+            return path
+    return None
+
+
+def sync_default_branch(top: Path, default: str, pr: str) -> None:
+    """After the merge: leave the clone on the default branch, pulled up to date, or pull it in the worktree
+    that has it checked out (D8, D9, D12). Dies, with the commands to run by hand, if that fails."""
+    pull = ["pull", "--ff-only", "origin", default]
+    holder = worktree_holding(top, default)
+    where = holder if holder is not None and holder.resolve() != top.resolve() else top
+    steps = [] if where != top else [["switch", default]]
+    try:
+        for step in steps + [pull]:
+            github.git(*step, cwd=where)
+    except github.CmdError as e:
+        by_hand = "".join(f"\n  git -C {where} {' '.join(s)}" for s in steps + [pull])
+        die(f"PR #{pr} is merged and the notes are sealed, but {default} in {where} couldn't be brought up "
+            f"to date: {e.stderr or e}\nfix that, then run:{by_hand}")
+
+
 def cmd_seal_retro(args) -> None:
     index = lib.Index()
     require_number(args.issue)
@@ -491,8 +538,9 @@ def cmd_seal_retro(args) -> None:
                 f"says {branch}; check out {branch} first")
     if github.git("status", "--porcelain", cwd=top):
         die("the working tree isn't clean; commit or stash your changes first")
+    merging, bump_done, default = False, False, ""
+    pr = retro_fm.get("pr", "")
     if not closed:
-        pr = retro_fm["pr"]
         pr_info = github.pr_closing(slug, pr)
         if (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
             if pr_info["state"] == "OPEN":
@@ -500,6 +548,10 @@ def cmd_seal_retro(args) -> None:
                     f"`Closes #{args.issue}` line in its description, then run this again")
             die(f"PR #{pr} is {pr_info['state']} and did not close issue #{args.issue}; "
                 "close the issue by hand, then run this again")
+        merging = pr_info["state"] == "OPEN"
+        if merging:
+            default = github.default_branch(slug)
+            bump_done = check_merge_ready(top, pr, pr_info, args.issue)
 
     claude_path = top / "CLAUDE.md"
     if not claude_path.is_file():
@@ -550,22 +602,34 @@ def cmd_seal_retro(args) -> None:
 
     confirmed = {h for h, v in claude_audit if v == "confirmed"}
     new_text, bumped = claudemd.bump_verified(claude_text, sections, confirmed, lib.today())
+    if bump_done:       # a rerun after a refused merge: HEAD already is the bump commit, so add no second one
+        bumped = []
     if bumped:
         lib.write_text(claude_path, new_text)
         github.git("add", "CLAUDE.md", cwd=top)
-        github.git("commit", "-q", "-m", f"docs(claude): verify audited sections (#{args.issue})", cwd=top)
+        github.git("commit", "-q", "-m", bump_subject(args.issue), cwd=top)
+    if bumped or bump_done:
         if closed and not github.git("rev-parse", "--abbrev-ref", "--symbolic-full-name",
                                      "@{u}", cwd=top, check=False):
             github.git("push", "-u", "origin", "HEAD", cwd=top)
         else:
             github.git("push", cwd=top)
+    if merging:
+        try:
+            github.squash_merge(slug, pr, github.git("rev-parse", "HEAD", cwd=top))
+        except github.CmdError as e:
+            die(f"PR #{pr} was not merged, and nothing is sealed: {e.stderr or e}\n"
+                "fix that, then run this again; it adds no second verified commit")
 
     update_note(impl_path, status="sealed")
     update_note(retro_path, status="sealed")
     update_note(project_path, audited=lib.today().isoformat())
     log_event(args.repo, args.issue, "retro-done")
     print(f"sealed {lib.rel(impl_path)} and {lib.rel(retro_path)}; set audited: {lib.today().isoformat()} "
-          f"on {lib.rel(project_path)}" + (f"; bumped verified on: {', '.join(bumped)}" if bumped else ""))
+          f"on {lib.rel(project_path)}" + (f"; bumped verified on: {', '.join(bumped)}" if bumped else "")
+          + (f"; merged PR #{pr}" if merging else ""))
+    if merging:
+        sync_default_branch(top, default, pr)
 
 
 def cmd_claudemd_lint(args) -> None:

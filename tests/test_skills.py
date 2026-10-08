@@ -334,15 +334,52 @@ class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-A
     def test_seal_after_validate_and_summary_approval(self):  # AC5
         self.assertMentions("vault.py validate", "plain-language summary", "vault.py seal retro")
 
-    def test_never_merges_pushes_main_edits_sealed_or_installs(self):  # AC5
-        self.assertMentions("never merge", "never push to `main`", "never edit a sealed",
-                             "never run `install.py`")
+    def test_merging_is_seal_retros_alone_and_nothing_else_pushes_main_edits_sealed_or_installs(self):  # T6 -> AC6 (#51)
+        text = " ".join(self.skill.lower().split())
+        self.assertNotIn("never merge a pr", text)
+        never = " ".join(re.search(r"^## Never\n(.*?)^## ", self.skill, re.S | re.M).group(1).lower().split())
+        self.assertIn("merging is `seal retro`'s job alone", never)
+        self.assertIn("never `gh pr merge`", never)
+        self.assertIn("github's merge button", never)
+        self.assertMentions("never push to `main`", "never edit a sealed", "never run `install.py`")
+        self.assertIn("never merge a pr", " ".join(read("implement-story", "SKILL.md").lower().split()))
+
+    def test_summary_approval_is_the_merge_approval_and_a_backfill_merges_nothing(self):  # T6 -> AC6 (#51)
+        seal = " ".join(re.search(r"^## Seal\n(.*?)^## ", self.skill, re.S | re.M).group(1).lower().split())
+        self.assertIn("names the pr sealing merges; approving the summary approves that merge", seal)
+        backfill = " ".join(re.search(r"^## Backfill[^\n]*\n(.*?)^## ", self.skill, re.S | re.M)
+                            .group(1).lower().split())
+        self.assertIn("a backfill's approval merges nothing", backfill)
+        self.assertIn("never merges a closed issue", backfill)
+        stop = " ".join(re.search(r"^## Stop and ask if\n(.*)", self.skill, re.S | re.M).group(1).lower().split())
+        self.assertIn("refuses over the pr's checks or head, or github refuses the merge", stop)
+        self.assertIn("never merge any other way", stop)
+        desc = frontmatter(self.skill)["description"].lower()
+        self.assertIn("squash-merges the pr", desc)
 
     def test_closed_issue_backfill_path(self):  # AC7
         self.assertMentions("## backfill", "closed", "no `branch:`", "dirty tree", "upstream")
 
     def test_stop_and_ask(self):
         self.assertMentions("## stop and ask if")
+
+
+class SealRetroMergeDocsTest(unittest.TestCase):  # T7 -> AC7 (#51)
+    def squashed(self, text):
+        return " ".join(text.lower().split())
+
+    def test_readme_git_conventions_say_seal_retro_merges(self):
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        section = self.squashed(re.search(r"^## Git conventions\n(.*?)^## ", readme, re.S | re.M).group(1))
+        self.assertIn("only the owner merges", section)
+        self.assertIn("`vault.py seal retro`, which squash-merges the pr itself", section)
+
+    def test_claude_md_retro_line_says_seal_retro_merges(self):
+        claude = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        line = next(ln for ln in claude.splitlines() if ln.startswith("- `skills/retro/`"))
+        low = self.squashed(line)
+        self.assertIn("squash-merges that pr itself", low)
+        self.assertIn("otherwise only the user merges", low)
 
 
 class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> AC5, AC6 (#27)
