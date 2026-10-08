@@ -323,10 +323,14 @@ def add_planned_label(slug: str, issue: str) -> None:
 
 def cmd_seal_plan(args) -> None:
     slug = issue_context(args)
+    info = github.issue_info(slug, args.issue)      # the one read: its `edited` is what the plan records (D6)
+    if lib.FEATURE_LABEL[0] in info["labels"]:
+        die(f"{args.repo}#{args.issue} is a feature (labelled '{lib.FEATURE_LABEL[0]}'); a feature is never "
+            "planned, only its sub-issues are")
     path, fm, body = load_plan(args.repo, args.issue)
     name = lib.PLANNED_LABEL[0]
     if fm.get("status") == "sealed":
-        if name in github.issue_info(slug, args.issue)["labels"]:
+        if name in info["labels"]:
             die(f"{lib.rel(path)} is already sealed")
         add_planned_label(slug, args.issue)     # `stage` reports this state as backlog and points here
         print(f"the plan was already sealed; added the '{name}' label to {slug}#{args.issue}")
@@ -335,8 +339,7 @@ def cmd_seal_plan(args) -> None:
     errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
     if errors:
         die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
-    add_planned_label(slug, args.issue)
-    info = github.issue_info(slug, args.issue)          # after the label: D1 ignores label changes anyway
+    add_planned_label(slug, args.issue)     # a label never changes `edited` (D1), so `info` still holds
     sha = github.head_sha(slug, github.default_branch(slug))[:7]
     update_note(path, status="sealed", issue_updated=info["edited"], base_sha=sha)
     log_event(args.repo, args.issue, "planned")
@@ -814,6 +817,10 @@ def create_with_body(cmd: list[str], body: str) -> str:
 def stage_of(slug: str, repo: str, issue: str) -> tuple[str, str]:
     """(stage, why) of an issue, derived from GitHub and the plan note (design §4)."""
     info = github.issue_info(slug, issue)
+    if info["state"] != "OPEN":
+        return "done", f"issue #{issue} is {info['state'].lower()}"
+    if lib.FEATURE_LABEL[0] in info["labels"]:
+        return "feature", f"{info['sub_total'] - info['sub_completed']} of {info['sub_total']} sub-issues open"
     pat = issue_branch_re(issue)
     prs = [p for p in github.open_prs(slug) if pat.match(p["headRefName"])]
     branches = [b for b in github.remote_branches(slug) if pat.match(b)]
@@ -823,8 +830,6 @@ def stage_of(slug: str, repo: str, issue: str) -> tuple[str, str]:
         fm, _, _ = lib.split_frontmatter(lib.read_text(plan))
         sealed = (fm or {}).get("status") == "sealed"
     label = lib.PLANNED_LABEL[0]
-    if info["state"] != "OPEN":
-        return "done", f"issue #{issue} is {info['state'].lower()}"
     if prs:
         return "in review", f"PR {prs[0]['url']} is open for {prs[0]['headRefName']}"
     if branches:
@@ -1100,9 +1105,9 @@ def cmd_repo_init(args) -> None:
     else:
         report.append("merge settings: already squash-only with delete branch on merge")
 
-    label, color, desc = lib.PLANNED_LABEL
-    made = github.ensure_label(slug, label, color, desc)
-    report.append(f"label '{label}': " + ("created" if made else "already exists"))
+    for label, color, desc in (lib.PLANNED_LABEL, lib.FEATURE_LABEL, lib.BUG_LABEL):
+        made = github.ensure_label(slug, label, color, desc)
+        report.append(f"label '{label}': " + ("created" if made else "already exists"))
 
     if state == "unset":
         github.git("config", "--local", "core.hooksPath", hooks.as_posix(), cwd=top)

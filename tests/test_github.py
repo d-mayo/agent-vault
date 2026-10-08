@@ -216,9 +216,26 @@ class SealPlanTest(GhCase):  # T1 -> AC1, AC11
         self.assertIn("planned", repo["labels"])                  # created because it was missing
         self.assertIn("planned", repo["issues"]["7"]["labels"])
         order = [c[:2] for c in self.state["calls"]]
-        self.assertLess(order.index(["issue", "edit"]), order.index(["api", "graphql"]))
+        self.assertLess(order.index(["api", "graphql"]), order.index(["issue", "edit"]))
+        self.assertEqual(order.count(["api", "graphql"]), 1)
         self.assertRegex(self.daily(), r"- \d\d:\d\d widget#7 planned\n")
         self.assert_valid()
+
+    def test_a_feature_is_never_planned(self):     # T8 -> AC7
+        self.issue()["labels"] = ["feature"]
+        self.save()
+        self.new_plan()
+        self.refused(self.cli("seal", "plan", "widget", "7"), "feature")
+        self.assertEqual(self.calls("label", "create"), [])
+        self.assertEqual(self.calls("issue", "edit"), [])
+        self.assertIn("status: draft", self.note("plan").read_text(encoding="utf-8"))
+        self.sealed_feature_refused()
+
+    def sealed_feature_refused(self):
+        self.note("plan").write_text(self.note("plan").read_text(encoding="utf-8").replace(
+            "status: draft", "status: sealed"), encoding="utf-8", newline="\n")
+        self.refused(self.cli("seal", "plan", "widget", "7"), "feature")
+        self.assertEqual(self.calls("issue", "edit"), [])
 
     def test_edit_time_is_the_latest_title_or_body_edit(self):
         self.issue()["body_edited"] = "2026-09-21T09:00:00Z"
@@ -950,6 +967,17 @@ class StageTest(GhCase):  # T5 -> AC5
         self.save()
         self.assertTrue(self.stage().startswith("planned:"))
 
+    def test_a_feature_reports_its_sub_issues(self):     # T8, T9 -> AC7
+        self.issue()["labels"] = ["feature"]
+        self.issue()["sub_summary"] = {"total": 3, "completed": 1}
+        self.state["repos"][SLUG]["branches"] = ["feat/7-x"]
+        self.state["repos"][SLUG]["prs"] = [{"number": 3, "headRefName": "feat/7-x", "url": "u/3"}]
+        self.save()
+        self.assertEqual(self.stage(), "feature: 2 of 3 sub-issues open")
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        self.assertTrue(self.stage().startswith("done:"))
+
     def test_done(self):
         self.sealed()
         self.state["repos"][SLUG]["branches"] = ["feat/7-x"]
@@ -1090,7 +1118,8 @@ class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
         repo = self.load()
         self.assertEqual(repo["settings"], {"allow_squash_merge": True, "allow_merge_commit": False,
                                             "allow_rebase_merge": False, "delete_branch_on_merge": True})
-        self.assertIn("planned", repo["labels"])
+        self.assertEqual(repo["labels"], ["bug", "planned", "feature"])      # T10 -> AC8: bug was already there
+        self.assertEqual(len(self.calls("label", "create")), 2)
         hooks = git("config", "--local", "core.hooksPath", cwd=self.clone)
         self.assertEqual(Path(hooks), CODE / "githooks")
         text = (self.clone / "CLAUDE.md").read_text(encoding="utf-8")
@@ -1104,6 +1133,14 @@ class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
         for section in ("Problem", "Desired outcome", "Constraints", "Out of scope", "Source"):
             self.assertIn(f"## {section}\n", issue)
         self.assertEqual(issue.encode("utf-8"), (REPO / lib.ISSUE_TEMPLATE_PATH).read_bytes())
+
+    def test_a_repo_with_neither_label_gets_both(self):
+        self.state["repos"][SLUG]["labels"] = []
+        self.save()
+        out = self.ok(self.init()).stdout
+        self.assertEqual(self.load()["labels"], ["planned", "feature", "bug"])
+        for label in ("planned", "feature", "bug"):
+            self.assertIn(f"label '{label}': created", out)
 
     def test_existing_issue_template_is_left_alone(self):
         path = self.clone / ".github" / "ISSUE_TEMPLATE" / "issue.md"
