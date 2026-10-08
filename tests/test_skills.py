@@ -576,10 +576,6 @@ class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#3
                             text=readme.split("## Git conventions")[1])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
     def test_plan_story_declares_it(self):
         self.assertMentions("pr: none", "Files:", "whether the issue ends in a pull request",
@@ -592,3 +588,8 @@ class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
     def test_retro_drafts_and_posts_the_closing_comment(self):
         self.assertMentions("pr: none", "Closing comment", "closes the issue", "posts it verbatim",
                             text=read("retro", "SKILL.md"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+

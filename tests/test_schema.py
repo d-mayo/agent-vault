@@ -132,6 +132,11 @@ class SchemaOutputTest(VaultCase):
         for rid in lib.RULES:
             self.assertIn(rid, text)
 
+    def test_shows_the_no_pr_rules(self):    # T1 -> AC1
+        text = self.out()
+        self.assertIn("pr, if present, is none", text)
+        self.assertIn("## Closing comment", text)
+
     def test_patching_a_constant_changes_output(self):   # T1 -> AC1
         with mock.patch.dict(lib.SIZE_CAPS, {"project": 61}), \
                 mock.patch.object(lib, "EVENTS", ["zzz-event"]), \

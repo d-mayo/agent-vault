@@ -45,8 +45,8 @@ name (e.g. `agent-vault`), never `owner/name`.
 ## No-PR issues
 
 If the sealed plan's frontmatter says `pr: none`, the issue has no branch
-and no PR: skip Preflight's `pr:` and branch checks (the issue must still
-be open, and the clone can be on any branch), run Audit and Follow-ups
+and no PR: skip Preflight's `pr:` and branch checks (the clone can be on any
+branch; an already-closed issue is only sealed), run Audit and Follow-ups
 as below (reading the impl note and plan instead of a PR diff), and see
 Seal for the closing comment. `vault.py new retro` creates the retro with
 `pr: none` and a `## Closing comment` section. Audit lines marked
