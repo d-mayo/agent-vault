@@ -16,7 +16,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   stage <repo> <issue>
   idea add "<title>" [--project <id>] [--source <source>]
   idea drop <file> --reason "..."
-  idea promote <file> --body-file <file> [--title "..."] [--repo <name>]
+  idea promote <file> --body-file <file> [--title "..."] [--repo <name>] [--parent <n>|<repo>#<n>]
   issue create <repo> --title "..." --body-file <file> [--idea <file>] [--feature <design> | --parent <n>|<repo>#<n>]
   decision add <project> "<title>" --decision "..." --why "..." --source "..." [--replaces <record>]
   decisions [--project <id>] [--all]
@@ -884,10 +884,11 @@ def checked_issue(index: lib.Index, repo: str, title: str, body_file: str) -> tu
 def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Path | None = None,
                parent: str | None = None) -> None:
     """Create an issue from a body file that matches the template; with an idea, promote it; with a
-    `parent` (the parent issue's URL), file it as that issue's sub-issue.
+    `parent` (`<n>` or `<repo>#<n>`), file it as the sub-issue of that open feature.
     Everything is checked before `gh` runs. The body is posted exactly as the file has it."""
     title, body = checked_issue(index, repo, title, body_file)
-    url = create_with_body(github.issue_create_args(index.slugs[repo], title, parent=parent), body)
+    parent_url = resolve_parent(index, repo, parent, body) if parent else None
+    url = create_with_body(github.issue_create_args(index.slugs[repo], title, parent=parent_url), body)
     if idea is not None:
         try:
             update_note(idea, status="promoted", promoted_to=url)
@@ -897,6 +898,35 @@ def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Pa
         log_idea_event("idea-promoted", title, idea)
         print(f"promoted {lib.rel(idea)} to {url}")
     print(url)
+
+
+def resolve_parent(index: lib.Index, repo: str, value: str, body: str) -> str:
+    """The URL of the open feature `value` (`<n>` or `<repo>#<n>`) names, as a parent for an issue of `repo`
+    with this body; dies, before anything is created, when it can't be one (AC4)."""
+    m = re.fullmatch(r"(?:([A-Za-z0-9._-]+)#)?([1-9][0-9]*)", value)
+    if not m:
+        die(f"--parent '{value}' must be an issue number or <repo>#<number>")
+    parent_repo, number = m.group(1) or repo, m.group(2)
+    if parent_repo not in index.slugs:
+        die(f"repo '{parent_repo}' isn't registered in any project's repos:")
+    if not set(index.repos[parent_repo]) & set(index.repos[repo]):
+        die(f"repos '{parent_repo}' and '{repo}' share no project, so {parent_repo}#{number} can't be a parent")
+    slug = index.slugs[parent_repo]
+    info = github.issue_info(slug, number)
+    if info["state"] != "OPEN":
+        die(f"{parent_repo}#{number} is {info['state'].lower()}; a parent must be an open feature")
+    if lib.FEATURE_LABEL[0] not in info["labels"]:
+        die(f"{parent_repo}#{number} isn't labelled '{lib.FEATURE_LABEL[0]}'; only a feature can be a parent")
+    source = "\n".join(source_lines({"body": body}))
+    for design in dict.fromkeys(re.findall(r"\[\[([^\]]+)\]\] S[1-9]", source)):
+        if design not in index.designs:
+            continue
+        found = feature_issues(project_issues(index, index.designs[design]["project"]), design)
+        if not any(f_slug == slug and str(f["number"]) == number for f_slug, f in found):
+            die(f"{parent_repo}#{number} isn't the feature of {design}; "
+                + (f"it is {found[0][0]}#{found[0][1]['number']}" if found else
+                   f"{design} has no feature yet: file it first with `issue create <repo> --feature {design}`"))
+    return info["url"]
 
 
 def source_lines(issue: dict) -> list[str]:
@@ -984,7 +1014,7 @@ def cmd_issue_create(args) -> None:
     if args.feature:
         return cmd_issue_create_feature(args, index)
     idea = idea_for_issue(index, args.idea, args.repo) if args.idea else None
-    file_issue(index, args.repo, args.title, args.body_file, idea)
+    file_issue(index, args.repo, args.title, args.body_file, idea, args.parent)
 
 
 def cmd_idea_promote(args) -> None:
@@ -1009,7 +1039,7 @@ def cmd_idea_promote(args) -> None:
     title = args.title or heading
     if not one_line(title):
         die("the idea has no title; pass --title")
-    file_issue(index, name, title, args.body_file, idea_for_issue(index, args.file, name))
+    file_issue(index, name, title, args.body_file, idea_for_issue(index, args.file, name), args.parent)
 
 
 def hooks_path_state(top: Path, target: Path) -> tuple[str, str]:
@@ -1641,6 +1671,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("--title")
     p.add_argument("--repo")
+    p.add_argument("--parent", metavar="N|REPO#N", help="file the issue under this open feature")
     p.add_argument("--body-file", required=True, help="the issue body, in the issue template's sections")
     p.set_defaults(fn=cmd_idea_promote)
 

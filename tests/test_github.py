@@ -1520,3 +1520,74 @@ class FeatureCreateTest(DuoCase):  # T2-T4 -> AC1-AC3
         self.assertIn(f"gh issue edit 20 --repo acme/duo-a --add-sub-issue {self.url_a}/1", r.stderr)
         self.assertIn("S2 acme/duo-b#2 attached to acme/duo-a#20", r.stdout)
         self.assertTrue(r.stdout.strip().endswith("https://github.com/acme/duo-a/issues/20"))
+
+
+class ParentTest(DuoCase):  # T5 -> AC4
+    def setUp(self):
+        super().setUp()
+        self.seal()
+
+    def feature(self, n=30, source=None, state="OPEN", slug="acme/duo-a", label=True):
+        body = self.source(source if source is not None else f"[[{self.NAME}]]")
+        self.add_issue(slug, n, state, body, labels=["feature"] if label else [])
+
+    def create(self, *parent, repo="duo-a", source="session"):
+        return self.cli("issue", "create", repo, "--title", "A story", "--body-file",
+                        self.body_file(self.source(source)), *parent)
+
+    def created(self, slug="acme/duo-a"):
+        self.load()
+        return self.state["repos"].get(slug, {}).get("created_issues", [])
+
+    def test_a_parent_in_the_same_repo_and_in_another(self):
+        self.feature()
+        self.ok(self.create("--parent", "30"))
+        self.ok(self.create("--parent", "duo-a#30", repo="duo-b"))
+        self.assertEqual(self.created()[0]["parent"], "https://github.com/acme/duo-a/issues/30")
+        self.assertEqual(self.created("acme/duo-b")[0]["parent"], "https://github.com/acme/duo-a/issues/30")
+
+    def test_no_parent_sends_no_flag(self):
+        self.ok(self.create())
+        self.assertIsNone(self.created()[0]["parent"])
+        self.assertTrue(all("--parent" not in c for c in self.calls("issue", "create")))
+
+    def test_promote_with_a_parent(self):
+        self.feature()
+        idea = self.idea("--project", "duo")
+        self.ok(self.cli("idea", "promote", idea, "--repo", "duo-a", "--parent", "30",
+                         "--body-file", self.body_file(self.source("session"))))
+        self.assertEqual(self.created()[0]["parent"], "https://github.com/acme/duo-a/issues/30")
+        self.assertIn("promoted", (self.vault / "Agent" / "Ideas" / f"{idea}").read_text(encoding="utf-8"))
+
+    def refuses(self, r, *words):
+        self.refused(r, *words)
+        self.assertEqual(self.created(), [])
+        self.assertEqual(self.created("acme/duo-b"), [])
+
+    def test_unregistered_repo_and_another_project(self):
+        self.feature()
+        self.refuses(self.create("--parent", "nope#30"), "isn't registered")
+        self.refuses(self.create("--parent", "widget#7"), "share no project")
+
+    def test_a_closed_feature_and_an_unlabelled_issue(self):
+        self.feature(30, state="CLOSED")
+        self.feature(31, label=False)
+        self.refuses(self.create("--parent", "30"), "closed")
+        self.refuses(self.create("--parent", "31"), "isn't labelled")
+
+    def test_a_malformed_parent(self):
+        self.refuses(self.create("--parent", "x"), "issue number")
+
+    def test_a_story_goes_under_its_own_feature(self):
+        self.feature(30)
+        self.feature(31, source="session")
+        self.ok(self.create("--parent", "30", source=f"[[{self.NAME}]] S1"))
+        self.assertEqual(len(self.created()), 1)
+        self.refused(self.create("--parent", "31", source=f"[[{self.NAME}]] S1"),
+                     "isn't the feature of", "acme/duo-a#30")
+        self.assertEqual(len(self.created()), 1)
+
+    def test_a_story_whose_design_has_no_feature(self):
+        self.feature(31, source="session")
+        self.refuses(self.create("--parent", "31", source=f"[[{self.NAME}]] S1"), "no feature yet",
+                     f"--feature {self.NAME}")
