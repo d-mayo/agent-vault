@@ -266,6 +266,11 @@ def squash_merge(slug: str, number: str, sha: str) -> None:
     gh("pr", "merge", str(number), "--repo", slug, "--squash", "--match-head-commit", sha)
 
 
+def close_issue(slug: str, number: str, comment: str) -> None:
+    """Close the issue as completed, with this comment; raises CmdError with GitHub's reason (#66 D4)."""
+    gh("issue", "close", str(number), "--repo", slug, "--reason", "completed", "--comment", comment)
+
+
 def label_names(slug: str) -> list[str]:
     return [x["name"] for x in gh_json("label", "list", "--repo", slug, "--limit", "500",
                                        "--json", "name")]

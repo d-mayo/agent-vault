@@ -440,7 +440,7 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 215)
+        self.assertLessEqual(len(text.splitlines()), 235)
 
 
 class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC9, AC10 (#36)
@@ -576,5 +576,20 @@ class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#3
                             text=readme.split("## Git conventions")[1])
 
 
+class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
+    def test_plan_story_declares_it(self):
+        self.assertMentions("pr: none", "Files:", "whether the issue ends in a pull request",
+                            text=read("plan-story", "SKILL.md"))
+
+    def test_implement_story_has_the_route(self):
+        self.assertMentions("pr: none", "No-PR plan", "Step <n>: done", "no diff review",
+                            "the retro", text=read("implement-story", "SKILL.md"))
+
+    def test_retro_drafts_and_posts_the_closing_comment(self):
+        self.assertMentions("pr: none", "Closing comment", "closes the issue", "posts it verbatim",
+                            text=read("retro", "SKILL.md"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

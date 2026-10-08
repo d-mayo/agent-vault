@@ -23,6 +23,7 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Which procedure applies
 
+- The sealed plan's frontmatter says `pr: none`: go to **No-PR plan**.
 - The impl note already has a `pr:`, or the request is about review comments
   or requested changes rather than implementing: go to **Address PR review**.
 - Otherwise: go to **Start** — it reads the plan regardless of whether a
@@ -139,6 +140,26 @@ Once every step is committed:
    `vault.py open-pr <repo> <issue> --body-file <file>`. `Closes #<issue>` is
    added automatically.
 7. Leave the impl note `status: open`; it's sealed later, by the retro.
+
+## No-PR plan
+
+A plan with `pr: none` changes no repo file (`seal plan` guarantees every
+step's `Files:` is `none`), so there is no branch, no commit, no diff
+review and no pull request. `branch` and `open-pr` refuse such an issue.
+
+1. Run `vault.py preflight <repo> <issue>`, as in **Start**, and read the
+   plan and impl note.
+2. Do each step's `Do:` in order (vault notes, GitHub work, anything the
+   plan describes), keeping to the plan's "Stop and ask if" lines. After
+   each step, add `- Step <n>: done` to the impl note's `## Verification`
+   straight away: with no commits, that line is the resume marker. A
+   resumed session continues from the first step with no such line.
+3. When every step is done, run the plan's `Full check:` if it names one
+   that applies, and record what you ran and what it showed under
+   `## Verification`, and anything worth the retro under `## Discoveries`.
+   Skip the diff review: there is no diff.
+4. Leave the impl note `status: open`, and tell the user the next step is
+   the retro (`retro #<issue>`), whose sealing closes the issue.
 
 ## Address PR review
 

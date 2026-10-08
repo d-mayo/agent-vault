@@ -168,6 +168,23 @@ class NewRetroTest(CliCase):
         self.assertEqual(heads, lib.SECTIONS["retro"])
         self.validate()
 
+    def test_no_pr_plan_gives_a_closing_comment_section(self):     # T4 -> AC4
+        self.cli("new", "plan", "demo", "7")
+        p = self.path("Work/demo/demo-7-plan.md")
+        p.write_text(p.read_text(encoding="utf-8").replace("status: draft", "pr: none\nstatus: draft"),
+                     encoding="utf-8", newline="\n")
+        self.cli("new", "retro", "demo", "7")                # no pr: in the impl note
+        retro = self.text("Work/demo/demo-7-retro.md")
+        self.assertRegex(retro, r"(?m)^pr: none$")
+        heads = [ln[3:] for ln in retro.splitlines() if ln.startswith("## ")]
+        self.assertEqual(heads, lib.SECTIONS["retro"] + ["Closing comment"])
+
+    def test_pr_plan_has_no_closing_comment(self):        # T4 -> AC4
+        self.cli("new", "plan", "demo", "7")
+        self.set_pr("21")
+        self.cli("new", "retro", "demo", "7")
+        self.assertNotIn("Closing comment", self.text("Work/demo/demo-7-retro.md"))
+
     def test_refusals(self):                              # T5 -> AC4
         self.refused("new", "retro", "demo", "7", why="doesn't exist")
         self.cli("new", "plan", "demo", "7")
