@@ -14,6 +14,10 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
        "issues": {"7": {"state": "OPEN", "title": "...", "created": "...Z", "body_edited": null,
                         "renamed": null, "labels": [...], "body": "..."}},   (body optional)
        "created_prs": [], "created_issues": [], "next_number": 20}},
+  An issue may also have "parent": "<url of its parent issue>" (set by `issue create --parent` and
+  `issue edit --add-sub-issue`) and "sub_summary": {"total": n, "completed": n} (else counted from the
+  issues whose parent is it). State keys: "old_gh": true makes the sub-issue flags and JSON fields fail
+  like gh before 2.94.0; "refuse_sub_issue": {"<sub-issue url>": "<GitHub's reason>"} refuses that link.
    "calls": [[...args of every call...]]}
 Unknown repos are created with defaults on first use. Tests read and edit the file directly.
 """
@@ -100,6 +104,42 @@ def merge_pr(repo, state, args):
             issue["state"] = "CLOSED"
 
 
+def find_issue(state, url):
+    """(owner/name, number, issue) for an issue URL, or None."""
+    m = re.match(r"https://github\.com/([^/]+/[^/]+)/issues/(\d+)$", url or "")
+    if not m:
+        return None
+    issue = state["repos"].get(m.group(1), {}).get("issues", {}).get(m.group(2))
+    return (m.group(1), m.group(2), issue) if issue else None
+
+
+def parent_obj(state, issue):
+    found = find_issue(state, issue.get("parent"))
+    if not found:
+        return None
+    return {"number": int(found[1]), "state": found[2]["state"], "url": issue["parent"]}
+
+
+def sub_summary(state, url, issue):
+    if "sub_summary" in issue:
+        return issue["sub_summary"]
+    subs = [i for r in state["repos"].values() for i in r["issues"].values() if i.get("parent") == url]
+    return {"total": len(subs), "completed": sum(1 for i in subs if i["state"] != "OPEN")}
+
+
+def old_gh(state, args):
+    """Fail the way gh before 2.94.0 does for a sub-issue flag or JSON field."""
+    if not state.get("old_gh"):
+        return
+    for flag in ("--parent", "--add-sub-issue"):
+        if flag in args:
+            fail(f"unknown flag: {flag}")
+    fields = (opt(args, "--json") or "").split(",")
+    for f in ("parent", "subIssuesSummary"):
+        if f in fields:
+            fail(f'Unknown JSON field: "{f}"')
+
+
 def graphql(args, state):
     fields = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in args if "=" in a and not a.startswith("query=")}
     slug = f"{fields['owner']}/{fields['name']}"
@@ -107,8 +147,11 @@ def graphql(args, state):
     if issue is None:
         fail("GraphQL: Could not resolve to an Issue")
     nodes = [{"createdAt": issue["renamed"]}] if issue.get("renamed") else []
-    data = {"state": issue["state"], "title": issue["title"], "createdAt": issue["created"],
-            "url": f"https://github.com/{slug}/issues/{fields['number']}",
+    url = f"https://github.com/{slug}/issues/{fields['number']}"
+    parent = parent_obj(state, issue)
+    data = {"state": issue["state"], "title": issue["title"], "createdAt": issue["created"], "url": url,
+            "parent": {"number": parent["number"], "url": parent["url"]} if parent else None,
+            "subIssuesSummary": sub_summary(state, url, issue),
             "lastEditedAt": issue.get("body_edited"),
             "labels": {"nodes": [{"name": n} for n in issue["labels"]]},
             "timelineItems": {"nodes": nodes}}
@@ -127,29 +170,48 @@ def main():
     slug = opt(args, "--repo")
     repo = repo_state(state, slug) if slug else None
     cmd = args[:2]
+    old_gh(state, args)
     if cmd == ["label", "list"]:
         print(json.dumps([{"name": n} for n in repo["labels"]]))
     elif cmd == ["label", "create"]:
         repo["labels"].append(args[2])
     elif cmd == ["issue", "edit"]:
-        label = opt(args, "--add-label")
-        if label not in repo["labels"]:
-            fail(f"failed to update: '{label}' not found")
         issue = repo["issues"][args[2]]
-        if label not in issue["labels"]:
-            issue["labels"].append(label)
+        label = opt(args, "--add-label")
+        if label:
+            if label not in repo["labels"]:
+                fail(f"failed to update: '{label}' not found")
+            if label not in issue["labels"]:
+                issue["labels"].append(label)
+        sub = opt(args, "--add-sub-issue")
+        if sub:
+            reason = state.get("refuse_sub_issue", {}).get(sub)
+            if reason:
+                fail(reason)
+            found = find_issue(state, sub)
+            if not found:
+                fail(f"Could not resolve to an Issue: {sub}")
+            found[2]["parent"] = f"https://github.com/{slug}/issues/{args[2]}"
     elif cmd == ["issue", "list"]:
         wanted = opt(args, "--state", "open").upper()
+        label = opt(args, "--label")
         print(json.dumps([{"number": int(n), "title": i["title"], "state": i["state"], "body": i.get("body", ""),
-                           "url": f"https://github.com/{slug}/issues/{n}"}
+                           "url": f"https://github.com/{slug}/issues/{n}",
+                           "labels": [{"name": x} for x in i["labels"]],
+                           "parent": parent_obj(state, i),
+                           "subIssuesSummary": sub_summary(state, f"https://github.com/{slug}/issues/{n}", i)}
                           for n, i in sorted(repo["issues"].items(), key=lambda kv: int(kv[0]))
-                          if wanted == "ALL" or i["state"] == wanted]))
+                          if (wanted == "ALL" or i["state"] == wanted) and (not label or label in i["labels"])]))
     elif cmd == ["issue", "create"]:
         n = repo["next_number"]
         repo["next_number"] += 1
         url = f"https://github.com/{slug}/issues/{n}"
+        label = opt(args, "--label")
+        if label and label not in repo["labels"]:
+            fail(f"could not add label: '{label}' not found")
         repo["created_issues"].append({"number": n, "title": opt(args, "--title"), "url": url,
-                                       "body": Path(opt(args, "--body-file")).read_text(encoding="utf-8")})
+                                       "body": Path(opt(args, "--body-file")).read_text(encoding="utf-8"),
+                                       "parent": opt(args, "--parent"), "label": label})
         print(url)
     elif cmd == ["repo", "view"]:
         repo = repo_state(state, args[2])

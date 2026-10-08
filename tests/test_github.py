@@ -1222,6 +1222,80 @@ class GhHelperTest(GhCase):  # T10 -> AC10
         with self.assertRaises(github.CmdError):
             github.origin_slug(self.clone)
 
+    def add_pair(self):
+        """Issue 30 (a feature) with issue 31 filed under it, in SLUG."""
+        issues = self.state["repos"][SLUG]["issues"]
+        issues["30"] = {"state": "OPEN", "title": "F", "created": CREATED, "body_edited": None,
+                        "renamed": None, "labels": ["feature"]}
+        issues["31"] = {"state": "OPEN", "title": "S", "created": CREATED, "body_edited": None,
+                        "renamed": None, "labels": [], "parent": f"https://github.com/{SLUG}/issues/30"}
+        self.state["repos"][SLUG]["labels"].append("feature")
+        self.save()
+
+    def test_issue_info_reads_the_parent_and_sub_issue_counts(self):    # T1 -> AC9
+        self.add_pair()
+        child = github.issue_info(SLUG, "31")
+        self.assertEqual(child["parent"], {"number": 30, "url": f"https://github.com/{SLUG}/issues/30"})
+        parent = github.issue_info(SLUG, "30")
+        self.assertIsNone(parent["parent"])
+        self.assertEqual((parent["sub_total"], parent["sub_completed"]), (1, 0))
+        self.assertEqual(len(self.calls("api", "graphql")), 2)
+
+    def test_repo_issues_return_labels_and_parent(self):
+        self.add_pair()
+        by_number = {i["number"]: i for i in github.repo_issues(SLUG)}
+        self.assertEqual(by_number[30]["labels"], ["feature"])
+        self.assertIsNone(by_number[30]["parent"])
+        self.assertEqual(by_number[31]["parent"]["number"], 30)
+
+    def test_open_features_lists_only_the_labelled_open_ones(self):
+        self.add_pair()
+        self.state["repos"][SLUG]["issues"]["32"] = {
+            "state": "CLOSED", "title": "G", "created": CREATED, "body_edited": None, "renamed": None,
+            "labels": ["feature"]}
+        self.save()
+        found = github.open_features(SLUG, "feature")
+        self.assertEqual([(f["number"], f["total"], f["completed"]) for f in found], [(30, 1, 0)])
+        self.assertIn(["issue", "list", "--repo", SLUG, "--state", "open", "--label", "feature", "--limit",
+                       "5000", "--json", "number,title,url,body,subIssuesSummary"], self.calls("issue", "list"))
+
+    def test_creating_with_a_parent_and_a_label_sends_both(self):
+        self.add_pair()
+        args = github.issue_create_args(SLUG, "T", parent=f"https://github.com/{SLUG}/issues/30", label="feature")
+        self.assertEqual(args, ["issue", "create", "--repo", SLUG, "--title", "T", "--parent",
+                                f"https://github.com/{SLUG}/issues/30", "--label", "feature"])
+        self.assertNotIn("--parent", github.issue_create_args(SLUG, "T"))
+        github.gh(*args, "--body-file", self.body_file())
+        made = self.load()["created_issues"][-1]
+        self.assertEqual((made["parent"], made["label"]), (f"https://github.com/{SLUG}/issues/30", "feature"))
+
+    def test_add_sub_issue_sets_the_parent_and_reports_a_refusal(self):
+        self.add_pair()
+        issues = self.state["repos"][SLUG]["issues"]
+        issues["33"] = {"state": "OPEN", "title": "H", "created": CREATED, "body_edited": None,
+                        "renamed": None, "labels": []}
+        self.state["refuse_sub_issue"] = {f"https://github.com/{SLUG}/issues/34": "already has a parent"}
+        self.save()
+        github.add_sub_issue(SLUG, "30", f"https://github.com/{SLUG}/issues/33")
+        self.assertEqual(github.issue_info(SLUG, "30")["sub_total"], 2)
+        with self.assertRaises(github.CmdError) as cm:
+            github.add_sub_issue(SLUG, "30", f"https://github.com/{SLUG}/issues/34")
+        self.assertIn("already has a parent", str(cm.exception))
+
+    def test_an_old_gh_is_told_to_update(self):
+        self.add_pair()
+        self.state["old_gh"] = True
+        self.save()
+        url = f"https://github.com/{SLUG}/issues/30"
+        for call in (lambda: github.gh(*github.issue_create_args(SLUG, "T", parent=url), "--body-file", "x"),
+                     lambda: github.add_sub_issue(SLUG, "30", url),
+                     lambda: github.repo_issues(SLUG),
+                     lambda: github.open_features(SLUG, "feature")):
+            with self.assertRaises(github.CmdError) as cm:
+                call()
+            self.assertIn("update gh to 2.94.0 or later", str(cm.exception))
+            self.assertNotIn("unknown flag", str(cm.exception).lower())
+
     def test_pr_closing_reports_state_and_closing_references(self):    # T1 -> AC6
         body = self.body_file("Closes #7\n\nmore\n")
         gh_url = github.gh("pr", "create", "--repo", SLUG, "--head", "feat/7-x", "--base", "main",
