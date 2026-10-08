@@ -10,6 +10,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   seal retro <repo> <issue>
   seal design <design>
   design stories <design>
+  features [--project <id>]
   preflight <repo> <issue>
   branch <repo> <issue> [--type feat] [--slug <slug>]
   open-pr <repo> <issue> [--body-file <file>]
@@ -949,6 +950,17 @@ def feature_issues(issues: list[tuple[str, dict]], design: str) -> list[tuple[st
     return [(slug, i) for slug, i in issues if is_feature_of(i, design)]
 
 
+def filed_stories(issues: list[tuple[str, dict]], design: str) -> list[tuple[int, str, dict]]:
+    """(story number, owner/name, issue) for each issue whose Source section names '[[<design>]] S<n>'.
+    Only the Source section counts: a mention anywhere else is not a filing."""
+    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
+    out = []
+    for slug, issue in issues:
+        found = {int(m.group(1)) for ln in source_lines(issue) for m in link.finditer(ln)}
+        out += [(n, slug, issue) for n in sorted(found)]
+    return sorted(out, key=lambda x: (x[0], x[1], x[2]["number"]))
+
+
 def feature_design(index: lib.Index, repo: str, name: str) -> tuple[Path, str]:
     """(design path, project) of a sealed design whose project owns the repo, or die."""
     path = find_design(name)
@@ -978,12 +990,7 @@ def cmd_issue_create_feature(args, index: lib.Index) -> None:
         slug, issue = existing[0]
         die(f"{design} already has a feature: {slug}#{issue['number']} ({issue['state'].lower()}); "
             "change it on GitHub by hand")
-    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
-    stories = []                      # (story number, owner/name, issue) for every filed story
-    for story_slug, issue in issues:
-        found = {int(m.group(1)) for ln in source_lines(issue) for m in link.finditer(ln)}
-        stories += [(n, story_slug, issue) for n in sorted(found)]
-    stories.sort(key=lambda x: (x[0], x[1], x[2]["number"]))
+    stories = filed_stories(issues, design)
     slug = index.slugs[args.repo]
     name, color, desc = lib.FEATURE_LABEL
     github.ensure_label(slug, name, color, desc)
@@ -1435,18 +1442,6 @@ def cmd_seal_design(args) -> None:
           f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
 
 
-def story_issues(slug: str, design: str) -> dict[int, list[tuple[str, dict]]]:
-    """Story number -> (owner/name, issue) for each issue of the repo whose Source section names
-    '[[<design>]] S<n>'. Only the Source section counts: a mention anywhere else is not a filing."""
-    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
-    found: dict[int, list[tuple[str, dict]]] = {}
-    for issue in github.repo_issues(slug):
-        source = dict(lib.split_sections(lib.blank_code_blocks(issue.get("body") or ""))).get("Source", [])
-        for n in sorted({int(m.group(1)) for ln in source for m in link.finditer(ln)}):
-            found.setdefault(n, []).append((slug, issue))
-    return found
-
-
 def cmd_design_stories(args) -> None:
     path = find_design(args.design)
     fm, body, _ = lib.split_frontmatter(lib.read_text(path))
@@ -1455,20 +1450,43 @@ def cmd_design_stories(args) -> None:
     index = lib.Index()
     project = fm["project"]
     repos = sorted(n for n, pids in index.repos.items() if project in pids)
+    issues = project_issues(index, project)
+    features = feature_issues(issues, path.stem)
     filed: dict[int, list[tuple[str, dict]]] = {}
-    for name in repos:
-        for n, issues in story_issues(index.slugs[name], path.stem).items():
-            filed.setdefault(n, []).extend(issues)
+    for n, slug, issue in filed_stories(issues, path.stem):
+        filed.setdefault(n, []).append((slug, issue))
+    feature_url = features[0][1]["url"] if features else None
     stories = lib.design_stories(body)
+    if features:
+        slug, issue = features[0]
+        print(f"feature: {slug}#{issue['number']} ({issue['state'].lower()})")
+    else:
+        print("no feature yet")
     for s in stories:
-        issues = filed.get(s["n"])
+        found = filed.get(s["n"])
         print(f"S{s['n']}. {s['title']}: "
-              + (", ".join(f"{slug}#{i['number']} ({i['state'].lower()})" for slug, i in issues)
-                 if issues else "not filed"))
+              + (", ".join(f"{slug}#{i['number']} ({i['state'].lower()})"
+                           + ("" if feature_url is None or (i.get("parent") or {}).get("url") == feature_url
+                              else " [not under the feature]") for slug, i in found)
+                 if found else "not filed"))
     if not repos:
         print(f"project '{project}' has no repos yet, so nothing can be filed; register one first")
     unfiled = [s for s in stories if s["n"] not in filed]
     print(f"{len(stories) - len(unfiled)} of {len(stories)} stories filed" if stories else "no stories")
+
+
+def cmd_features(args) -> None:
+    index = lib.Index()
+    require_project(index, args.project)
+    names = sorted(n for n, pids in index.repos.items() if not args.project or args.project in pids)
+    rows = []
+    for name in names:
+        for f in github.open_features(index.slugs[name], lib.FEATURE_LABEL[0]):
+            designs = [d for ln in source_lines(f) for d in re.findall(r"\[\[([^\]]+)\]\]", ln)]
+            link = f" [[{designs[0]}]]" if designs else ""
+            rows.append(f"{name}#{f['number']} {one_line(f['title'])}{link} "
+                        f"({f['total'] - f['completed']} of {f['total']} open)")
+    print("\n".join(rows) if rows else "no open features")
 
 
 def cmd_decisions(args) -> None:
@@ -1709,6 +1727,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = des.add_parser("stories", help="each story with the issues whose Source names it, or 'not filed'")
     p.add_argument("design")
     p.set_defaults(fn=cmd_design_stories)
+    p = sub.add_parser("features", help="the open feature issues, with how many sub-issues are open")
+    p.add_argument("--project")
+    p.set_defaults(fn=cmd_features)
     p = sub.add_parser("decisions", help="list active decision records (--all: superseded too)")
     p.add_argument("--project")
     p.add_argument("--all", action="store_true")

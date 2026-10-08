@@ -1591,3 +1591,50 @@ class ParentTest(DuoCase):  # T5 -> AC4
         self.feature(31, source="session")
         self.refuses(self.create("--parent", "31", source=f"[[{self.NAME}]] S1"), "no feature yet",
                      f"--feature {self.NAME}")
+
+
+class FeaturesTest(DuoCase):  # T6, T7 -> AC5, AC6
+    def feature(self, slug, n, state="OPEN", summary=None, design=None):
+        self.add_issue(slug, n, state, self.source(f"[[{design or self.NAME}]]"), labels=["feature"])
+        if summary:
+            self.state["repos"][slug]["issues"][str(n)]["sub_summary"] = summary
+            self.save()
+
+    def test_lists_the_open_features_of_a_project(self):    # T6
+        self.feature("acme/duo-a", 30, summary={"total": 3, "completed": 2})
+        self.feature("acme/duo-b", 31, summary={"total": 0, "completed": 0})
+        self.feature("acme/duo-b", 32, state="CLOSED")
+        self.add_issue("acme/duo-b", 33, "OPEN", ISSUE_BODY)
+        out = self.ok(self.cli("features", "--project", "duo")).stdout.splitlines()
+        self.assertEqual(out, [f"duo-a#30 t [[{self.NAME}]] (1 of 3 open)",
+                               f"duo-b#31 t [[{self.NAME}]] (0 of 0 open)"])
+
+    def test_without_a_project_every_repo_is_listed(self):
+        self.feature("acme/duo-a", 30)
+        self.feature(SLUG, 8)
+        out = self.ok(self.cli("features")).stdout
+        self.assertIn("duo-a#30", out)
+        self.assertIn("widget#8", out)
+
+    def test_none_and_an_unknown_project(self):
+        self.assertEqual(self.ok(self.cli("features", "--project", "duo")).stdout.strip(), "no open features")
+        self.refused(self.cli("features", "--project", "nope"), "does not exist")
+
+    def test_design_stories_shows_the_feature_and_marks_strays(self):    # T7
+        self.seal()
+        self.feature("acme/duo-a", 30)
+        url = "https://github.com/acme/duo-a/issues/30"
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"), parent=url)
+        self.add_issue("acme/duo-b", 2, "OPEN", self.source(f"[[{self.NAME}]] S2"),
+                       parent="https://github.com/acme/duo-b/issues/9")
+        self.add_issue("acme/duo-b", 9, "OPEN", ISSUE_BODY)
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("feature: acme/duo-a#30 (open)", out)
+        self.assertIn("S1. Build it: acme/duo-a#1 (open)\n", out)
+        self.assertIn("S2. Ship it: acme/duo-b#2 (open) [not under the feature]", out)
+
+    def test_design_stories_without_a_feature(self):
+        self.seal()
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("no feature yet", out)
+        self.assertNotIn("not under", out)
