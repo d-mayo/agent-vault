@@ -14,7 +14,7 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
        "issues": {"7": {"state": "OPEN", "title": "...", "created": "...Z", "body_edited": null,
                         "renamed": null, "labels": [...], "body": "..."}},   (body optional)
        "created_prs": [], "created_issues": [], "next_number": 20}},
-  An issue may also have "parent": "<url of its parent issue>" (set by `issue create --parent` and
+  `issue create` also adds the new issue to "issues". An issue may also have "parent": "<url of its parent issue>" (set by `issue create --parent` and
   `issue edit --add-sub-issue`) and "sub_summary": {"total": n, "completed": n} (else counted from the
   issues whose parent is it). State keys: "old_gh": true makes the sub-issue flags and JSON fields fail
   like gh before 2.94.0; "refuse_sub_issue": {"<sub-issue url>": "<GitHub's reason>"} refuses that link.
