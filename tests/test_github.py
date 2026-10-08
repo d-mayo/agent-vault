@@ -348,143 +348,6 @@ class OpenPrTest(GhCase):  # T4 -> AC4, AC11
         git("add", ".", cwd=self.clone)
         git("commit", "-q", "-m", "feat: x", cwd=self.clone)
 
-    # --- the merge (#51) ---
-    def bare_rev(self, ref):
-        return git("--git-dir", str(self.bare), "rev-parse", ref, cwd=self.root)
-
-    def bump_subjects(self, ref):
-        log = git("--git-dir", str(self.bare), "log", "--format=%s", f"main..{ref}", cwd=self.root)
-        return [s for s in log.splitlines() if s == "docs(claude): verify audited sections (#7)"]
-
-    def test_merges_the_pr_and_leaves_the_clone_on_main(self):    # T1 -> AC1, AC9
-        self.filled_prep()
-        checks = [{"__typename": "CheckRun", "name": c, "status": "COMPLETED", "conclusion": c.upper()}
-                  for c in ("success", "neutral", "skipped")]
-        checks.append({"__typename": "StatusContext", "context": "legacy", "state": "SUCCESS"})
-        n = self.edit_pr(checks=checks)
-        self.assertEqual(git("rev-parse", "--abbrev-ref", "main@{u}", cwd=self.clone, check=False), "")
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        sha = git("rev-parse", f"origin/{self.name}", cwd=self.clone)
-        self.assertEqual(self.calls("pr", "merge"),
-                         [["pr", "merge", str(n), "--repo", SLUG, "--squash", "--match-head-commit", sha]])
-        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
-        self.assertEqual(self.fm(self.retro)["status"], "sealed")
-        self.assertRegex(self.daily(), r"widget#7 retro-done\n")
-        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
-        self.assertEqual(git("rev-parse", "main", cwd=self.clone), self.bare_rev("main"))
-        self.assertIn(f"verified: {dt.date.today().isoformat()}",
-                      (self.clone / "CLAUDE.md").read_text(encoding="utf-8"))
-        self.assertIn(self.name, git("branch", "--list", self.name, cwd=self.clone))
-        self.assert_valid()
-
-    def test_pulls_main_in_the_worktree_that_has_it(self):    # T1 -> AC1
-        self.filled_prep()
-        wt = self.root / "wt"
-        git("worktree", "add", "-q", str(wt), "main", cwd=self.clone)
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        self.assertEqual(git("branch", "--show-current", cwd=self.clone), self.name)
-        self.assertEqual(git("rev-parse", "main", cwd=wt), self.bare_rev("main"))
-        self.assertEqual(self.fm(self.retro)["status"], "sealed")
-
-    def test_a_failed_pull_in_that_worktree_keeps_the_seal_and_says_how_to_fix_it(self):    # T1 -> AC1
-        self.filled_prep()
-        wt = self.root / "wt"
-        git("worktree", "add", "-q", str(wt), "main", cwd=self.clone)
-        (wt / "README.md").write_text("mine\n", encoding="utf-8", newline="\n")   # a file the merge touches
-        r = self.cli("seal", "retro", "widget", "7")
-        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("merged", r.stderr)
-        self.assertIn(str(wt), r.stderr)
-        self.assertIn("pull --ff-only origin main", r.stderr)
-        self.assertEqual(self.fm(self.retro)["status"], "sealed")
-        self.assertRegex(self.daily(), r"widget#7 retro-done\n")
-
-    def test_refuses_checks_that_have_not_passed(self):    # T2 -> AC2
-        head = self.filled_prep()
-        for check, word in (
-                ({"__typename": "CheckRun", "name": "build", "status": "IN_PROGRESS", "conclusion": ""}, "build"),
-                ({"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"}, "lint"),
-                ({"__typename": "StatusContext", "context": "deploy", "state": "PENDING"}, "deploy")):
-            self.edit_pr(checks=[check])
-            self.refused(self.cli("seal", "retro", "widget", "7"), word)
-            self.assert_nothing_sealed(head)
-            self.assertEqual(self.bare_rev(self.name), head)
-            self.assertEqual(self.calls("pr", "merge"), [])
-
-    def test_refuses_a_pr_head_that_is_not_the_local_head(self):    # T2 -> AC2
-        head = self.filled_prep()
-        (self.clone / "extra.txt").write_text("x\n", encoding="utf-8")
-        git("add", ".", cwd=self.clone)
-        git("commit", "-q", "-m", "feat: unpushed", cwd=self.clone)
-        local = git("rev-parse", "HEAD", cwd=self.clone)
-        self.refused(self.cli("seal", "retro", "widget", "7"), head[:12], local[:12])
-        self.assertEqual(git("rev-parse", "HEAD", cwd=self.clone), local)
-        self.assertEqual(self.bare_rev(self.name), head)
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assertEqual(self.fm(self.retro)["status"], "open")
-
-    def test_a_refused_merge_seals_nothing_and_the_rerun_adds_no_second_bump(self):    # T3 -> AC3
-        self.filled_prep()
-        self.load()
-        self.state["repos"][SLUG]["refuse_merge"] = "Pull request is not mergeable: a required check is missing"
-        self.save()
-        self.refused(self.cli("seal", "retro", "widget", "7"), "required check is missing", "run this again")
-        self.assertEqual(self.fm(self.note("impl"))["status"], "open")
-        self.assertEqual(self.fm(self.retro)["status"], "open")
-        self.assertNotIn("retro-done", self.daily())
-        self.assertEqual(git("branch", "--show-current", cwd=self.clone), self.name)
-        self.assertEqual(len(self.bump_subjects(self.name)), 1)
-        self.load()
-        self.state["repos"][SLUG]["refuse_merge"] = ""
-        self.save()
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        self.assertEqual(len(self.bump_subjects(self.name)), 1)
-        self.assertEqual(self.fm(self.retro)["status"], "sealed")
-        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
-
-    def test_a_branch_already_ending_in_the_bump_commit_gets_no_new_commit(self):    # T3 -> AC3
-        self.filled_prep()
-        git("commit", "-q", "--allow-empty", "-m", "docs(claude): verify audited sections (#7)", cwd=self.clone)
-        git("push", "-q", cwd=self.clone)
-        tip = git("rev-parse", "HEAD", cwd=self.clone)
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        self.assertEqual(self.bare_rev(self.name), tip)
-        self.assertEqual(self.calls("pr", "merge")[0][-1], tip)
-
-    def test_an_unpushed_bump_commit_is_pushed_as_is_and_merged(self):    # T3 -> AC3
-        parent = self.filled_prep()
-        git("commit", "-q", "--allow-empty", "-m", "docs(claude): verify audited sections (#7)", cwd=self.clone)
-        tip = git("rev-parse", "HEAD", cwd=self.clone)
-        self.assertEqual(self.bare_rev(self.name), parent)
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        self.assertEqual(self.bare_rev(self.name), tip)
-        self.assertEqual(len(self.bump_subjects(self.name)), 1)
-        self.assertEqual(self.calls("pr", "merge")[0][-1], tip)
-
-    def test_a_closed_issue_never_merges(self):    # T4 -> AC4
-        self.filled_prep()
-        self.issue()["state"] = "CLOSED"
-        self.save()
-        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "feat/9-other")
-
-    def test_a_pr_that_is_already_merged_is_not_merged_again(self):    # T5 -> AC5
-        self.filled_prep()
-        self.edit_pr(state="MERGED")
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assertEqual(git("branch", "--show-current", cwd=self.clone), self.name)
-        self.assertEqual(self.fm(self.retro)["status"], "sealed")
-
-    def test_a_pr_that_is_closed_is_not_merged(self):    # T5 -> AC5
-        self.filled_prep()
-        self.edit_pr(state="CLOSED")
-        self.ok(self.cli("seal", "retro", "widget", "7"))
-        self.assertEqual(self.calls("pr", "merge"), [])
-        self.assertEqual(self.fm(self.retro)["status"], "sealed")
-
     def test_refuses_wrong_branch_and_dirty_tree(self):
         self.started()
         git("switch", "-q", "-c", "chore/9-other", cwd=self.clone)
@@ -829,6 +692,143 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.filled_prep()
         self.ok(self.cli("seal", "retro", "widget", "7"))
         self.assertEqual(len(self.calls("pr", "view")), 1)
+
+    # --- the merge (#51) ---
+    def bare_rev(self, ref):
+        return git("--git-dir", str(self.bare), "rev-parse", ref, cwd=self.root)
+
+    def bump_subjects(self, ref):
+        log = git("--git-dir", str(self.bare), "log", "--format=%s", f"main..{ref}", cwd=self.root)
+        return [s for s in log.splitlines() if s == "docs(claude): verify audited sections (#7)"]
+
+    def test_merges_the_pr_and_leaves_the_clone_on_main(self):    # T1 -> AC1, AC9
+        self.filled_prep()
+        checks = [{"__typename": "CheckRun", "name": c, "status": "COMPLETED", "conclusion": c.upper()}
+                  for c in ("success", "neutral", "skipped")]
+        checks.append({"__typename": "StatusContext", "context": "legacy", "state": "SUCCESS"})
+        n = self.edit_pr(checks=checks)
+        self.assertEqual(git("rev-parse", "--abbrev-ref", "main@{u}", cwd=self.clone, check=False), "")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        sha = git("rev-parse", f"origin/{self.name}", cwd=self.clone)
+        self.assertEqual(self.calls("pr", "merge"),
+                         [["pr", "merge", str(n), "--repo", SLUG, "--squash", "--match-head-commit", sha]])
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertRegex(self.daily(), r"widget#7 retro-done\n")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.assertEqual(git("rev-parse", "main", cwd=self.clone), self.bare_rev("main"))
+        self.assertIn(f"verified: {dt.date.today().isoformat()}",
+                      (self.clone / "CLAUDE.md").read_text(encoding="utf-8"))
+        self.assertIn(self.name, git("branch", "--list", self.name, cwd=self.clone))
+        self.assert_valid()
+
+    def test_pulls_main_in_the_worktree_that_has_it(self):    # T1 -> AC1
+        self.filled_prep()
+        wt = self.root / "wt"
+        git("worktree", "add", "-q", str(wt), "main", cwd=self.clone)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), self.name)
+        self.assertEqual(git("rev-parse", "main", cwd=wt), self.bare_rev("main"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_a_failed_pull_in_that_worktree_keeps_the_seal_and_says_how_to_fix_it(self):    # T1 -> AC1
+        self.filled_prep()
+        wt = self.root / "wt"
+        git("worktree", "add", "-q", str(wt), "main", cwd=self.clone)
+        (wt / "README.md").write_text("mine\n", encoding="utf-8", newline="\n")   # a file the merge touches
+        r = self.cli("seal", "retro", "widget", "7")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("merged", r.stderr)
+        self.assertIn(str(wt), r.stderr)
+        self.assertIn("pull --ff-only origin main", r.stderr)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertRegex(self.daily(), r"widget#7 retro-done\n")
+
+    def test_refuses_checks_that_have_not_passed(self):    # T2 -> AC2
+        head = self.filled_prep()
+        for check, word in (
+                ({"__typename": "CheckRun", "name": "build", "status": "IN_PROGRESS", "conclusion": ""}, "build"),
+                ({"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"}, "lint"),
+                ({"__typename": "StatusContext", "context": "deploy", "state": "PENDING"}, "deploy")):
+            self.edit_pr(checks=[check])
+            self.refused(self.cli("seal", "retro", "widget", "7"), word)
+            self.assert_nothing_sealed(head)
+            self.assertEqual(self.bare_rev(self.name), head)
+            self.assertEqual(self.calls("pr", "merge"), [])
+
+    def test_refuses_a_pr_head_that_is_not_the_local_head(self):    # T2 -> AC2
+        head = self.filled_prep()
+        (self.clone / "extra.txt").write_text("x\n", encoding="utf-8")
+        git("add", ".", cwd=self.clone)
+        git("commit", "-q", "-m", "feat: unpushed", cwd=self.clone)
+        local = git("rev-parse", "HEAD", cwd=self.clone)
+        self.refused(self.cli("seal", "retro", "widget", "7"), head[:12], local[:12])
+        self.assertEqual(git("rev-parse", "HEAD", cwd=self.clone), local)
+        self.assertEqual(self.bare_rev(self.name), head)
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+
+    def test_a_refused_merge_seals_nothing_and_the_rerun_adds_no_second_bump(self):    # T3 -> AC3
+        self.filled_prep()
+        self.load()
+        self.state["repos"][SLUG]["refuse_merge"] = "Pull request is not mergeable: a required check is missing"
+        self.save()
+        self.refused(self.cli("seal", "retro", "widget", "7"), "required check is missing", "run this again")
+        self.assertEqual(self.fm(self.note("impl"))["status"], "open")
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+        self.assertNotIn("retro-done", self.daily())
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), self.name)
+        self.assertEqual(len(self.bump_subjects(self.name)), 1)
+        self.load()
+        self.state["repos"][SLUG]["refuse_merge"] = ""
+        self.save()
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(len(self.bump_subjects(self.name)), 1)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+
+    def test_a_branch_already_ending_in_the_bump_commit_gets_no_new_commit(self):    # T3 -> AC3
+        self.filled_prep()
+        git("commit", "-q", "--allow-empty", "-m", "docs(claude): verify audited sections (#7)", cwd=self.clone)
+        git("push", "-q", cwd=self.clone)
+        tip = git("rev-parse", "HEAD", cwd=self.clone)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.bare_rev(self.name), tip)
+        self.assertEqual(self.calls("pr", "merge")[0][-1], tip)
+
+    def test_an_unpushed_bump_commit_is_pushed_as_is_and_merged(self):    # T3 -> AC3
+        parent = self.filled_prep()
+        git("commit", "-q", "--allow-empty", "-m", "docs(claude): verify audited sections (#7)", cwd=self.clone)
+        tip = git("rev-parse", "HEAD", cwd=self.clone)
+        self.assertEqual(self.bare_rev(self.name), parent)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.bare_rev(self.name), tip)
+        self.assertEqual(len(self.bump_subjects(self.name)), 1)
+        self.assertEqual(self.calls("pr", "merge")[0][-1], tip)
+
+    def test_a_closed_issue_never_merges(self):    # T4 -> AC4
+        self.filled_prep()
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "feat/9-other")
+
+    def test_a_pr_that_is_already_merged_is_not_merged_again(self):    # T5 -> AC5
+        self.filled_prep()
+        self.edit_pr(state="MERGED")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), self.name)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_a_pr_that_is_closed_is_not_merged(self):    # T5 -> AC5
+        self.filled_prep()
+        self.edit_pr(state="CLOSED")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
 
     def test_refuses_wrong_branch_and_dirty_tree(self):
         self.prep()
