@@ -219,6 +219,8 @@ class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
             ("gh api --method DELETE repos/acme/widget/issues/5/labels/feature", e),
             ("gh api --method=DELETE repos/acme/widget/labels/feature", e),
             ("bash -c 'gh issue edit 5 --remove-parent'", c),
+            ("gh api -X DELETE repos/{owner}/{repo}/issues/5/sub_issue", c),
+            ("gh api --method DELETE repos/{owner}/{repo}/issues/5/labels/feature", c),
         ]:
             with self.subTest(cmd=cmd):
                 r = self.run_guard(cmd, cwd)

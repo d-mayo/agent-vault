@@ -274,7 +274,7 @@ def feature_link_removal(seg: list[str]) -> tuple[bool, str | None]:
             hit = re.search(r"(^|/)sub_issues?(/|$)", path) or re.search(r"(^|/)labels/feature$", path)
             if hit:
                 m = re.match(r"(?:repos/)([^/]+/[^/]+)/", path)
-                return True, repo or (m.group(1) if m else None)
+                return True, repo or (m.group(1) if m and "{" not in m.group(1) else None)   # {owner}/{repo} is gh's own placeholder: the clone
     return False, repo
 
 
