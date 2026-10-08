@@ -1090,14 +1090,54 @@ class GhHelperTest(GhCase):  # T10 -> AC10
         gh_url = github.gh("pr", "create", "--repo", SLUG, "--head", "feat/7-x", "--base", "main",
                            "--title", "t", "--body-file", body).strip()
         n = gh_url.rsplit("/", 1)[1]
-        self.assertEqual(github.pr_closing(SLUG, n), {"state": "OPEN", "closes": [("7", SLUG)]})
+        self.assertEqual(github.pr_closing(SLUG, n),
+                         {"state": "OPEN", "closes": [("7", SLUG)], "head": "", "unpassed": []})
         self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
         pr = self.state["repos"][SLUG]["prs"][0]
         pr.update(state="MERGED", closes=[])
         self.save()
-        self.assertEqual(github.pr_closing(SLUG, n), {"state": "MERGED", "closes": []})
-        self.assertIn(["pr", "view", n, "--repo", SLUG, "--json", "state,closingIssuesReferences"],
+        self.assertEqual(github.pr_closing(SLUG, n),
+                         {"state": "MERGED", "closes": [], "head": "", "unpassed": []})
+        self.assertIn(["pr", "view", n, "--repo", SLUG, "--json",
+                       "state,headRefOid,statusCheckRollup,closingIssuesReferences"],
                       self.calls("pr", "view"))
+
+    def test_pr_closing_reports_the_head_and_the_checks_that_have_not_passed(self):    # T2 -> AC2
+        body = self.body_file("Closes #7\n")
+        n = github.gh("pr", "create", "--repo", SLUG, "--head", "feat/7-x", "--base", "main",
+                      "--title", "t", "--body-file", body).strip().rsplit("/", 1)[1]
+        passed = [{"__typename": "CheckRun", "name": c, "status": "COMPLETED", "conclusion": c.upper()}
+                  for c in ("success", "neutral", "skipped")]
+        passed.append({"__typename": "StatusContext", "context": "legacy", "state": "SUCCESS"})
+        unpassed = [{"__typename": "CheckRun", "name": "build", "status": "IN_PROGRESS", "conclusion": ""},
+                    {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE"},
+                    {"__typename": "StatusContext", "context": "deploy", "state": "PENDING"}]
+        self.load()
+        self.state["repos"][SLUG]["prs"][0]["checks"] = passed
+        self.save()
+        self.assertEqual(github.pr_closing(SLUG, n)["unpassed"], [])
+        self.state["repos"][SLUG]["prs"][0]["checks"] = passed + unpassed
+        self.save()
+        self.assertEqual(github.pr_closing(SLUG, n)["unpassed"],
+                         ["build (in_progress)", "lint (failure)", "deploy (pending)"])
+
+    def test_squash_merge_asks_for_the_head_it_was_given(self):    # T1 -> AC1
+        n = github.gh("pr", "create", "--repo", SLUG, "--head", "feat/7-x", "--base", "main",
+                      "--title", "t", "--body-file", self.body_file("Closes #7\n")).strip().rsplit("/", 1)[1]
+        git("switch", "-q", "-c", "feat/7-x", cwd=self.clone)
+        (self.clone / "a.txt").write_text("a\n", encoding="utf-8")
+        git("add", ".", cwd=self.clone)
+        git("commit", "-q", "-m", "feat: a", cwd=self.clone)
+        git("push", "-q", "origin", "feat/7-x", cwd=self.clone)
+        sha = git("rev-parse", "HEAD", cwd=self.clone)
+        with self.assertRaises(github.CmdError) as ctx:
+            github.squash_merge(SLUG, n, "0" * 40)
+        self.assertIn("Head branch was modified", str(ctx.exception))
+        github.squash_merge(SLUG, n, sha)
+        self.assertEqual(self.calls("pr", "merge")[-1],
+                         ["pr", "merge", n, "--repo", SLUG, "--squash", "--match-head-commit", sha])
+        git("fetch", "-q", "origin", cwd=self.clone)
+        self.assertEqual(git("show", "origin/main:a.txt", cwd=self.clone), "a")
 
 
 if __name__ == "__main__":
