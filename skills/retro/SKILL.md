@@ -1,6 +1,6 @@
 ---
 name: retro
-description: 'Close out a GitHub issue before merge: audit the repo CLAUDE.md, its README and the project overview one heading at a time, sort every discovery and open point into an issue, an idea, or dropped, then seal the retro. Use for requests like "retro #9", "retro issue 9", or "write the retro for #9".'
+description: 'Close out a GitHub issue before merge: audit the repo CLAUDE.md, its README and the project overview one heading at a time, sort every discovery and open point into an issue, an idea, or dropped, then seal the retro, which squash-merges the PR. Use for requests like "retro #9", "retro issue 9", or "write the retro for #9".'
 ---
 
 # retro
@@ -8,9 +8,10 @@ description: 'Close out a GitHub issue before merge: audit the repo CLAUDE.md, i
 Runs last in the pipeline, before merge (design §5 step 4). Audits the repo's
 living docs against what the PR actually did, replaces restated facts with
 pointers to their real home, sorts what's left into an issue, an idea, or
-dropped, then seals the impl note and the retro. There is no reviewer
-subagent here: a retro has no code to review, only docs and judgment calls,
-which this skill's own approval steps already put in front of the user.
+dropped, then seals the impl note and the retro (`seal retro` squash-merges
+an open issue's PR first). There is no reviewer subagent here: a retro has
+no code to review, only docs and judgment calls, which this skill's own
+approval steps already put in front of the user.
 
 Every `vault.py <command>` below means the exact CLI string in the current
 vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
@@ -20,7 +21,8 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Never
 
-- Never merge a PR, and never push to `main`.
+- Merging is `seal retro`'s job alone: never `gh pr merge`, never GitHub's
+  merge button. Never push to `main`.
 - Never edit a sealed note. If a plan, impl note or retro turns out to be
   wrong, stop and ask.
 - Never run `install.py`.
@@ -166,12 +168,13 @@ references) before creating it.
 
 ## Seal
 
-1. `vault.py validate` must pass with no errors before moving on; fix
-   whatever it flags and re-run.
+1. `vault.py validate` must pass with no errors; fix whatever it flags.
 2. Present a plain-language summary of the retro in chat — what got
    audited and how, and the follow-ups and their disposition — and get the
-   user's explicit approval before sealing anything.
-3. `vault.py seal retro <repo> <issue>`.
+   user's explicit approval before sealing anything. For an open issue it
+   names the PR sealing merges; approving the summary approves that merge.
+3. `vault.py seal retro <repo> <issue>`: it merges the PR (checks passed,
+   head matching) and leaves the clone on the default branch, up to date.
 
 ## Backfill (a closed issue with no retro yet)
 
@@ -183,7 +186,8 @@ Audit step 5's push is a plain `git push`; if it turns out not to, that
 step's own `-u origin HEAD` fallback covers it. `seal retro` for a closed
 issue needs no `branch:` in the impl note; it still refuses a dirty tree,
 and it commits and pushes its own `verified:` bump to the current branch,
-giving that branch an upstream itself if it somehow doesn't have one yet.
+giving that branch an upstream itself if it somehow doesn't have one yet. A
+backfill's approval merges nothing: `seal retro` never merges a closed issue.
 
 ## Stop and ask if
 
@@ -207,3 +211,5 @@ giving that branch an upstream itself if it somehow doesn't have one yet.
   either restoring the `Closes #<n>` line in the PR description or closing
   the issue by hand once the PR has merged. Never edit the description or
   close the issue yourself; act only on the user's go-ahead.
+- `seal retro` refuses over the PR's checks or head, or GitHub refuses the
+  merge: report the reason; never merge any other way.
