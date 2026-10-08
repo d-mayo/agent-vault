@@ -10,14 +10,15 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   seal retro <repo> <issue>
   seal design <design>
   design stories <design>
+  features [--project <id>]
   preflight <repo> <issue>
   branch <repo> <issue> [--type feat] [--slug <slug>]
   open-pr <repo> <issue> [--body-file <file>]
   stage <repo> <issue>
   idea add "<title>" [--project <id>] [--source <source>]
   idea drop <file> --reason "..."
-  idea promote <file> --body-file <file> [--title "..."] [--repo <name>]
-  issue create <repo> --title "..." --body-file <file> [--idea <file>]
+  idea promote <file> --body-file <file> [--title "..."] [--repo <name>] [--parent <n>|<repo>#<n>]
+  issue create <repo> --title "..." --body-file <file> [--idea <file>] [--feature <design> | --parent <n>|<repo>#<n>]
   decision add <project> "<title>" --decision "..." --why "..." --source "..." [--replaces <record>]
   decisions [--project <id>] [--all]
   ideas [--project <id>] [--status open|promoted|dropped]
@@ -322,10 +323,14 @@ def add_planned_label(slug: str, issue: str) -> None:
 
 def cmd_seal_plan(args) -> None:
     slug = issue_context(args)
+    info = github.issue_info(slug, args.issue)      # the one read: its `edited` is what the plan records (D6)
+    if lib.FEATURE_LABEL[0] in info["labels"]:
+        die(f"{args.repo}#{args.issue} is a feature (labelled '{lib.FEATURE_LABEL[0]}'); a feature is never "
+            "planned, only its sub-issues are")
     path, fm, body = load_plan(args.repo, args.issue)
     name = lib.PLANNED_LABEL[0]
     if fm.get("status") == "sealed":
-        if name in github.issue_info(slug, args.issue)["labels"]:
+        if name in info["labels"]:
             die(f"{lib.rel(path)} is already sealed")
         add_planned_label(slug, args.issue)     # `stage` reports this state as backlog and points here
         print(f"the plan was already sealed; added the '{name}' label to {slug}#{args.issue}")
@@ -334,8 +339,7 @@ def cmd_seal_plan(args) -> None:
     errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
     if errors:
         die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
-    add_planned_label(slug, args.issue)
-    info = github.issue_info(slug, args.issue)          # after the label: D1 ignores label changes anyway
+    add_planned_label(slug, args.issue)     # a label never changes `edited` (D1), so `info` still holds
     sha = github.head_sha(slug, github.default_branch(slug))[:7]
     update_note(path, status="sealed", issue_updated=info["edited"], base_sha=sha)
     log_event(args.repo, args.issue, "planned")
@@ -813,6 +817,10 @@ def create_with_body(cmd: list[str], body: str) -> str:
 def stage_of(slug: str, repo: str, issue: str) -> tuple[str, str]:
     """(stage, why) of an issue, derived from GitHub and the plan note (design §4)."""
     info = github.issue_info(slug, issue)
+    if info["state"] != "OPEN":
+        return "done", f"issue #{issue} is {info['state'].lower()}"
+    if lib.FEATURE_LABEL[0] in info["labels"]:
+        return "feature", f"{info['sub_total'] - info['sub_completed']} of {info['sub_total']} sub-issues open"
     pat = issue_branch_re(issue)
     prs = [p for p in github.open_prs(slug) if pat.match(p["headRefName"])]
     branches = [b for b in github.remote_branches(slug) if pat.match(b)]
@@ -822,8 +830,6 @@ def stage_of(slug: str, repo: str, issue: str) -> tuple[str, str]:
         fm, _, _ = lib.split_frontmatter(lib.read_text(plan))
         sealed = (fm or {}).get("status") == "sealed"
     label = lib.PLANNED_LABEL[0]
-    if info["state"] != "OPEN":
-        return "done", f"issue #{issue} is {info['state'].lower()}"
     if prs:
         return "in review", f"PR {prs[0]['url']} is open for {prs[0]['headRefName']}"
     if branches:
@@ -865,9 +871,8 @@ def idea_for_issue(index: lib.Index, idea_file: str, repo: str) -> Path:
     return path
 
 
-def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Path | None = None) -> None:
-    """Create an issue from a body file that matches the template; with an idea, promote it.
-    Everything is checked before `gh` runs. The body is posted exactly as the file has it."""
+def checked_issue(index: lib.Index, repo: str, title: str, body_file: str) -> tuple[str, str]:
+    """(title, body) of an issue to create, after the repo, title and the template are checked."""
     require_repo(index, repo)
     title = one_line(title)
     if not title:
@@ -879,7 +884,17 @@ def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Pa
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         sys.exit(1)
-    url = create_with_body(["issue", "create", "--repo", index.slugs[repo], "--title", title], body)
+    return title, body
+
+
+def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Path | None = None,
+               parent: str | None = None) -> None:
+    """Create an issue from a body file that matches the template; with an idea, promote it; with a
+    `parent` (`<n>` or `<repo>#<n>`), file it as the sub-issue of that open feature.
+    Everything is checked before `gh` runs. The body is posted exactly as the file has it."""
+    title, body = checked_issue(index, repo, title, body_file)
+    parent_url = resolve_parent(index, repo, parent, body) if parent else None
+    url = create_with_body(github.issue_create_args(index.slugs[repo], title, parent=parent_url), body)
     if idea is not None:
         try:
             update_note(idea, status="promoted", promoted_to=url)
@@ -891,11 +906,127 @@ def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Pa
     print(url)
 
 
+def resolve_parent(index: lib.Index, repo: str, value: str, body: str) -> str:
+    """The URL of the open feature `value` (`<n>` or `<repo>#<n>`) names, as a parent for an issue of `repo`
+    with this body; dies, before anything is created, when it can't be one (AC4)."""
+    m = re.fullmatch(r"(?:([A-Za-z0-9._-]+)#)?([1-9][0-9]*)", value)
+    if not m:
+        die(f"--parent '{value}' must be an issue number or <repo>#<number>")
+    parent_repo, number = m.group(1) or repo, m.group(2)
+    if parent_repo not in index.slugs:
+        die(f"repo '{parent_repo}' isn't registered in any project's repos:")
+    if not set(index.repos[parent_repo]) & set(index.repos[repo]):
+        die(f"repos '{parent_repo}' and '{repo}' share no project, so {parent_repo}#{number} can't be a parent")
+    slug = index.slugs[parent_repo]
+    info = github.issue_info(slug, number)
+    if info["state"] != "OPEN":
+        die(f"{parent_repo}#{number} is {info['state'].lower()}; a parent must be an open feature")
+    if lib.FEATURE_LABEL[0] not in info["labels"]:
+        die(f"{parent_repo}#{number} isn't labelled '{lib.FEATURE_LABEL[0]}'; only a feature can be a parent")
+    source = "\n".join(source_lines({"body": body}))
+    for design in dict.fromkeys(re.findall(r"\[\[([^\]]+)\]\] S[1-9]", source)):
+        if design not in index.designs:
+            continue
+        found = feature_issues(project_issues(index, index.designs[design]["project"]), design)
+        if not any(f_slug == slug and str(f["number"]) == number for f_slug, f in found):
+            die(f"{parent_repo}#{number} isn't the feature of {design}; "
+                + (f"it is {found[0][0]}#{found[0][1]['number']}" if found else
+                   f"{design} has no feature yet: file it first with `issue create <repo> --feature {design}`"))
+    return info["url"]
+
+
+def source_lines(issue: dict) -> list[str]:
+    return dict(lib.split_sections(lib.blank_code_blocks(issue.get("body") or ""))).get("Source", [])
+
+
+def is_feature_of(issue: dict, design: str) -> bool:
+    """Whether the issue's Source section links the design with no story number (D3)."""
+    source = "\n".join(source_lines(issue))
+    return f"[[{design}]]" in source and not re.search(rf"\[\[{re.escape(design)}\]\] S[1-9]", source)
+
+
+def project_issues(index: lib.Index, project: str) -> list[tuple[str, dict]]:
+    """(owner/name, issue) for every issue, open or closed, of the project's repos."""
+    return [(index.slugs[name], issue) for name in sorted(n for n, pids in index.repos.items() if project in pids)
+            for issue in github.repo_issues(index.slugs[name])]
+
+
+def feature_issues(issues: list[tuple[str, dict]], design: str) -> list[tuple[str, dict]]:
+    return [(slug, i) for slug, i in issues if is_feature_of(i, design)]
+
+
+def filed_stories(issues: list[tuple[str, dict]], design: str) -> list[tuple[int, str, dict]]:
+    """(story number, owner/name, issue) for each issue whose Source section names '[[<design>]] S<n>'.
+    Only the Source section counts: a mention anywhere else is not a filing."""
+    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
+    out = []
+    for slug, issue in issues:
+        found = {int(m.group(1)) for ln in source_lines(issue) for m in link.finditer(ln)}
+        out += [(n, slug, issue) for n in sorted(found)]
+    return sorted(out, key=lambda x: (x[0], x[1], x[2]["number"]))
+
+
+def feature_design(index: lib.Index, repo: str, name: str) -> tuple[Path, str]:
+    """(design path, project) of a sealed design whose project owns the repo, or die."""
+    path = find_design(name)
+    fm, _, _ = lib.split_frontmatter(lib.read_text(path))
+    if (fm or {}).get("status") != "sealed":
+        die(f"{lib.rel(path)} is a draft; a feature is filed for a sealed design (`seal design {path.stem}`)")
+    if fm["project"] not in index.repos.get(repo, []):
+        die(f"repo '{repo}' doesn't belong to the design's project '{fm['project']}'")
+    return path, fm["project"]
+
+
+def cmd_issue_create_feature(args, index: lib.Index) -> None:
+    """File the design's feature issue and attach every filed story that has no parent (AC1-AC3)."""
+    if args.idea:
+        die("--feature can't be combined with --idea")
+    path, project = feature_design(index, args.repo, args.feature)
+    design = path.stem
+    title, body = checked_issue(index, args.repo, args.title, args.body_file)
+    source = "\n".join(source_lines({"body": body}))
+    if f"[[{design}]]" not in source:
+        die(f"the body's Source section must link [[{design}]]")
+    if re.search(r"\[\[[^\]]+\]\] S[1-9]", source):
+        die("a feature's Source names no story: remove the 'S<n>' after the design link")
+    issues = project_issues(index, project)
+    existing = feature_issues(issues, design)
+    if existing:
+        slug, issue = existing[0]
+        die(f"{design} already has a feature: {slug}#{issue['number']} ({issue['state'].lower()}); "
+            "change it on GitHub by hand")
+    stories = filed_stories(issues, design)
+    slug = index.slugs[args.repo]
+    name, color, desc = lib.FEATURE_LABEL
+    github.ensure_label(slug, name, color, desc)
+    url = create_with_body(github.issue_create_args(slug, title, label=name), body)
+    number = url.rstrip("/").rsplit("/", 1)[1]
+    failed = []
+    for n, story_slug, issue in stories:
+        ref = f"{story_slug}#{issue['number']}"
+        if issue.get("parent"):
+            print(f"S{n} {ref} is already under {issue['parent']['url']}; left where it is")
+            continue
+        try:
+            github.add_sub_issue(slug, number, issue["url"])
+        except github.CmdError as e:
+            failed.append(ref)
+            print(f"S{n} {ref} could not be attached: {e.stderr or e}\n  run: gh issue edit {number} "
+                  f"--repo {slug} --add-sub-issue {issue['url']}", file=sys.stderr)
+            continue
+        print(f"S{n} {ref} attached to {slug}#{number}")
+    print(url)
+    if failed:
+        sys.exit(1)
+
+
 def cmd_issue_create(args) -> None:
     index = lib.Index()
     require_repo(index, args.repo)
+    if args.feature:
+        return cmd_issue_create_feature(args, index)
     idea = idea_for_issue(index, args.idea, args.repo) if args.idea else None
-    file_issue(index, args.repo, args.title, args.body_file, idea)
+    file_issue(index, args.repo, args.title, args.body_file, idea, args.parent)
 
 
 def cmd_idea_promote(args) -> None:
@@ -920,7 +1051,7 @@ def cmd_idea_promote(args) -> None:
     title = args.title or heading
     if not one_line(title):
         die("the idea has no title; pass --title")
-    file_issue(index, name, title, args.body_file, idea_for_issue(index, args.file, name))
+    file_issue(index, name, title, args.body_file, idea_for_issue(index, args.file, name), args.parent)
 
 
 def hooks_path_state(top: Path, target: Path) -> tuple[str, str]:
@@ -974,9 +1105,9 @@ def cmd_repo_init(args) -> None:
     else:
         report.append("merge settings: already squash-only with delete branch on merge")
 
-    label, color, desc = lib.PLANNED_LABEL
-    made = github.ensure_label(slug, label, color, desc)
-    report.append(f"label '{label}': " + ("created" if made else "already exists"))
+    for label, color, desc in (lib.PLANNED_LABEL, lib.FEATURE_LABEL, lib.BUG_LABEL):
+        made = github.ensure_label(slug, label, color, desc)
+        report.append(f"label '{label}': " + ("created" if made else "already exists"))
 
     if state == "unset":
         github.git("config", "--local", "core.hooksPath", hooks.as_posix(), cwd=top)
@@ -1316,18 +1447,6 @@ def cmd_seal_design(args) -> None:
           f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
 
 
-def story_issues(slug: str, design: str) -> dict[int, list[tuple[str, dict]]]:
-    """Story number -> (owner/name, issue) for each issue of the repo whose Source section names
-    '[[<design>]] S<n>'. Only the Source section counts: a mention anywhere else is not a filing."""
-    link = re.compile(rf"\[\[{re.escape(design)}\]\] S([1-9]\d*)\b")
-    found: dict[int, list[tuple[str, dict]]] = {}
-    for issue in github.repo_issues(slug):
-        source = dict(lib.split_sections(lib.blank_code_blocks(issue.get("body") or ""))).get("Source", [])
-        for n in sorted({int(m.group(1)) for ln in source for m in link.finditer(ln)}):
-            found.setdefault(n, []).append((slug, issue))
-    return found
-
-
 def cmd_design_stories(args) -> None:
     path = find_design(args.design)
     fm, body, _ = lib.split_frontmatter(lib.read_text(path))
@@ -1336,20 +1455,43 @@ def cmd_design_stories(args) -> None:
     index = lib.Index()
     project = fm["project"]
     repos = sorted(n for n, pids in index.repos.items() if project in pids)
+    issues = project_issues(index, project)
+    features = feature_issues(issues, path.stem)
     filed: dict[int, list[tuple[str, dict]]] = {}
-    for name in repos:
-        for n, issues in story_issues(index.slugs[name], path.stem).items():
-            filed.setdefault(n, []).extend(issues)
+    for n, slug, issue in filed_stories(issues, path.stem):
+        filed.setdefault(n, []).append((slug, issue))
+    feature_url = features[0][1]["url"] if features else None
     stories = lib.design_stories(body)
+    if features:
+        slug, issue = features[0]
+        print(f"feature: {slug}#{issue['number']} ({issue['state'].lower()})")
+    else:
+        print("no feature yet")
     for s in stories:
-        issues = filed.get(s["n"])
+        found = filed.get(s["n"])
         print(f"S{s['n']}. {s['title']}: "
-              + (", ".join(f"{slug}#{i['number']} ({i['state'].lower()})" for slug, i in issues)
-                 if issues else "not filed"))
+              + (", ".join(f"{slug}#{i['number']} ({i['state'].lower()})"
+                           + ("" if feature_url is None or (i.get("parent") or {}).get("url") == feature_url
+                              else " [not under the feature]") for slug, i in found)
+                 if found else "not filed"))
     if not repos:
         print(f"project '{project}' has no repos yet, so nothing can be filed; register one first")
     unfiled = [s for s in stories if s["n"] not in filed]
     print(f"{len(stories) - len(unfiled)} of {len(stories)} stories filed" if stories else "no stories")
+
+
+def cmd_features(args) -> None:
+    index = lib.Index()
+    require_project(index, args.project)
+    names = sorted(n for n, pids in index.repos.items() if not args.project or args.project in pids)
+    rows = []
+    for name in names:
+        for f in github.open_features(index.slugs[name], lib.FEATURE_LABEL[0]):
+            designs = [d for ln in source_lines(f) for d in re.findall(r"\[\[([^\]]+)\]\]", ln)]
+            link = f" [[{designs[0]}]]" if designs else ""
+            rows.append(f"{name}#{f['number']} {one_line(f['title'])}{link} "
+                        f"({f['total'] - f['completed']} of {f['total']} open)")
+    print("\n".join(rows) if rows else "no open features")
 
 
 def cmd_decisions(args) -> None:
@@ -1552,6 +1694,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("file")
     p.add_argument("--title")
     p.add_argument("--repo")
+    p.add_argument("--parent", metavar="N|REPO#N", help="file the issue under this open feature")
     p.add_argument("--body-file", required=True, help="the issue body, in the issue template's sections")
     p.set_defaults(fn=cmd_idea_promote)
 
@@ -1562,6 +1705,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", required=True)
     p.add_argument("--body-file", required=True)
     p.add_argument("--idea", help="an open idea to mark promoted")
+    where = p.add_mutually_exclusive_group()
+    where.add_argument("--feature", metavar="DESIGN", help="file the sealed design's feature issue")
+    where.add_argument("--parent", metavar="N|REPO#N", help="file the issue under this open feature")
     p.set_defaults(fn=cmd_issue_create)
 
     p = sub.add_parser("ideas", help="list ideas, or `ideas review` for old open ones")
@@ -1586,6 +1732,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = des.add_parser("stories", help="each story with the issues whose Source names it, or 'not filed'")
     p.add_argument("design")
     p.set_defaults(fn=cmd_design_stories)
+    p = sub.add_parser("features", help="the open feature issues, with how many sub-issues are open")
+    p.add_argument("--project")
+    p.set_defaults(fn=cmd_features)
     p = sub.add_parser("decisions", help="list active decision records (--all: superseded too)")
     p.add_argument("--project")
     p.add_argument("--all", action="store_true")

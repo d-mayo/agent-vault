@@ -6,6 +6,11 @@ Blocks (exit 2, reason on stderr):
     else the clone it runs in): issues go through `vault.py issue create`;
   - `git push` whose destination is main: an explicit refspec, `--all`/`--mirror`,
     or no refspec while the repo it runs in is on main;
+  - in a registered repo, removing what makes a design's feature: `gh issue edit` with
+    `--remove-parent`, `--remove-sub-issue` or `--remove-label` naming `feature`,
+    `gh label delete feature`, and `gh api` calls that remove a sub-issue (`removeSubIssue`,
+    or a DELETE on a `sub_issue` path) or delete the `feature` label (a DELETE on
+    `…/labels/feature`): only the user changes those, by hand on GitHub;
   - skipping git's own hooks: `--no-verify`, `git commit -n`, `-c core.hooksPath=…`.
 The command is tokenized quote-aware, heredoc bodies are treated as data,
 `cd`/`pushd` (and PowerShell's `Set-Location`/`Push-Location`/`sl`) change the
@@ -214,6 +219,65 @@ def gh_issue_create(seg: list[str]) -> tuple[bool, str | None]:
     return words[:1] == ["issue"] and words[1:2] in (["create"], ["new"]), repo
 
 
+def gh_words_and_repo(seg: list[str]) -> tuple[list[str], str | None]:
+    """The words of a gh command (every token that isn't an option, the `-R`/`--repo` value dropped)
+    and its --repo/-R value."""
+    words, repo, i = [], None, 1
+    while i < len(seg):
+        a = seg[i]
+        if a in ("-R", "--repo") and i + 1 < len(seg):
+            repo = seg[i + 1]
+            i += 1
+        elif a.startswith("--repo="):
+            repo = a[len("--repo="):]
+        elif a.startswith("-R") and not a.startswith("--") and len(a) > 2:
+            repo = a[2:].lstrip("=")
+        elif not a.startswith("-"):
+            words.append(a)
+        i += 1
+    return words, repo
+
+
+def feature_link_removal(seg: list[str]) -> tuple[bool, str | None]:
+    """(removes a feature's label or a sub-issue link, the repo it names if any). A command it can't
+    read is not a match (d14)."""
+    words, repo = gh_words_and_repo(seg)
+    opts = seg[1:]
+    if words[:2] == ["issue", "edit"]:
+        for k, a in enumerate(opts):
+            if a in ("--remove-parent", "--remove-sub-issue") or a.startswith(("--remove-parent=", "--remove-sub-issue=")):
+                return True, repo
+            if a == "--remove-label" or a.startswith("--remove-label="):
+                value = a.split("=", 1)[1] if "=" in a else (opts[k + 1] if k + 1 < len(opts) else "")
+                if "feature" in [v.strip().lower() for v in value.split(",")]:
+                    return True, repo
+        return False, repo
+    if [w.lower() for w in words[:3]] == ["label", "delete", "feature"]:
+        return True, repo
+    if words[:1] == ["api"]:
+        if any("removesubissue" in t.lower() for t in opts):
+            return True, repo
+        method = ""
+        for k, a in enumerate(opts):
+            if a in ("-X", "--method") and k + 1 < len(opts):
+                method = opts[k + 1]
+            elif a.startswith("--method="):
+                method = a.split("=", 1)[1]
+            elif a.startswith("-X") and len(a) > 2:
+                method = a[2:]
+        if method.upper() != "DELETE":
+            return False, repo
+        for t in opts:
+            path = t.strip("/").lower()
+            if t.startswith("-") or "/" not in path:
+                continue
+            hit = re.search(r"(^|/)sub_issues?(/|$)", path) or re.search(r"(^|/)labels/feature$", path)
+            if hit:
+                m = re.match(r"(?:repos/)([^/]+/[^/]+)/", path)
+                return True, repo or (m.group(1) if m and "{" not in m.group(1) else None)   # {owner}/{repo} is gh's own placeholder: the clone
+    return False, repo
+
+
 def issue_target_registered(repo: str | None, env_repo: str | None, cwd: str | None) -> bool:
     """Whether the issue would land in a registered repo. Imports lib only now, and any
     failure means "not registered": the guard never blocks on its own bugs."""
@@ -267,6 +331,10 @@ def check_command(command: str, cwd: str | None, depth: int = 0) -> None:
                 block("create issues with the issue template, not `gh issue create`: "
                       f"{lib.CLI} issue create <repo> --title \"...\" --body-file <file> "
                       "(the `issue` skill drafts it).")
+            removes, repo = feature_link_removal(seg)
+            if removes and issue_target_registered(repo, env_repo, cwd):
+                block("a feature's label and sub-issue links are never removed by a session. The user "
+                      "changes them by hand on GitHub.")
 
 
 def main() -> None:

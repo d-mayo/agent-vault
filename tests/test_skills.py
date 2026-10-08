@@ -532,6 +532,22 @@ class DesignSkillTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC10-AC1
                             "vault.py issue create", "never run `gh issue create`", "vault.py design stories",
                             "not filed", "a project with no repo yet waits", "filing later", "file the stories of")
 
+    def test_feature_before_stories(self):                            # T11 -> AC10 (#56)
+        filing = self.skill.split("## File the stories")[1].split("## Filing later")[0]
+        self.assertLess(filing.index("--feature <design>"), filing.index("--parent <n>"))
+        self.assertMentions("the design's feature", "no story number", "the repo the user names",
+                            "--parent <feature repo>#<n>", "neither the feature nor its stories",
+                            text=filing)
+        later = self.skill.split("## Filing later")[1].split("## Stop and ask if")[0]
+        self.assertMentions("no feature yet", "create the feature first", "even when every story is already filed",
+                            text=later)
+
+    def test_plan_story_stops_on_a_feature(self):                     # T11 -> AC10 (#56)
+        plan = read("plan-story", "SKILL.md")
+        research = plan.split("## Research")[1].split("## Interview")[0]
+        self.assertMentions("--json title,body,comments,labels", "labelled `feature`", text=research)
+        self.assertMentions("the issue is labelled `feature`", text=plan.split("## Stop and ask if")[1])
+
 
 class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#37)
     def test_plan_story_reads_the_design(self):
@@ -548,6 +564,16 @@ class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#3
     def test_repo_claude_md_names_the_skill(self):
         self.assertMentions("`skills/design/`", "`skills/design/design-reviewer.md`",
                             text=(REPO / "CLAUDE.md").read_text(encoding="utf-8"))
+
+    def test_docs_name_features(self):                                # T12 -> AC11 (#56)
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertMentions("--feature", "--parent <n>|<repo>#<n>]` (creates", "{{CLI}} features", "no feature yet",
+                            "the `planned`, `feature` and `bug` labels", text=guide)
+        self.assertMentions("--feature", "--parent", "vault.py features", text=(REPO / "CLAUDE.md").read_text(encoding="utf-8"))
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertMentions("2.94.0", text=readme.split("## Install")[1].split("## Git conventions")[0])
+        self.assertMentions("--feature", "--parent", "under its feature issue",
+                            text=readme.split("## Git conventions")[1])
 
 
 if __name__ == "__main__":

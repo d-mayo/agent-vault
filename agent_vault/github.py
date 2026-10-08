@@ -19,6 +19,7 @@ sys.dont_write_bytecode = True
 GH_ENV = "AGENT_VAULT_GH"
 INSTALL_URL = "https://cli.github.com"
 DEADLINE: float | None = None      # time.monotonic() value after which every call fails (hooks set it)
+MIN_GH = "2.94.0"      # the first gh with issue create --parent, issue edit --add-sub-issue and the parent/subIssuesSummary JSON fields (D4)
 SIGNED_OUT_HINTS = ("gh auth login", "not logged in", "authentication required", "bad credentials")
 
 
@@ -56,6 +57,15 @@ def gh_command() -> list[str]:
     return [found]
 
 
+def _sub_issue_unsupported(low: str) -> bool:
+    """gh's own error for a flag or JSON field that gh before MIN_GH doesn't have."""
+    if "unknown flag" in low:
+        return "--parent" in low or "--add-sub-issue" in low
+    if "unknown json field" in low:
+        return "parent" in low or "subissuessummary" in low
+    return False
+
+
 def run(argv: list[str], cwd: Path | str | None = None, check: bool = True) -> subprocess.CompletedProcess:
     """Run a command; raise CmdError on failure when `check`. argv[0] is 'gh' or 'git'."""
     tool = argv[0]
@@ -84,6 +94,9 @@ def run(argv: list[str], cwd: Path | str | None = None, check: bool = True) -> s
         if tool == "gh" and (proc.returncode == 4 or any(h in low for h in SIGNED_OUT_HINTS)):
             raise CmdError("gh is not signed in to GitHub; run `gh auth login` and retry",
                            "signed-out", err)
+        if tool == "gh" and _sub_issue_unsupported(low):
+            raise CmdError(f"this gh doesn't support sub-issues; update gh to {MIN_GH} or later "
+                           f"({INSTALL_URL})", "failed", err)
         shown = " ".join((argv[len(gh_command()):] if tool == "gh" else argv[1:])[:4])
         raise CmdError(f"`{tool} {shown}` failed: {err}", "failed", err)
     return proc
@@ -133,12 +146,13 @@ def default_branch(slug: str) -> str:
 
 ISSUE_QUERY = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
 issue(number:$number){state title url createdAt lastEditedAt labels(first:100){nodes{name}}
+parent{number url} subIssuesSummary{total completed}
 timelineItems(itemTypes:[RENAMED_TITLE_EVENT],last:1){nodes{... on RenamedTitleEvent{createdAt}}}}}}"""
 
 
 def issue_info(slug: str, number: str) -> dict:
-    """state, title, url, labels and `edited`: the last title or body edit (D1), never
-    `updatedAt`, which comments, labels and cross-references also bump."""
+    """state, title, url, labels, `parent` ({number, url} or None), `sub_total`, `sub_completed` and `edited`:
+    the last title or body edit (D1), never `updatedAt`, which comments, labels and cross-references also bump."""
     owner, name = slug.split("/")
     data = gh_json("api", "graphql", "-f", f"query={ISSUE_QUERY}", "-F", f"owner={owner}",
                    "-F", f"name={name}", "-F", f"number={number}")
@@ -149,6 +163,9 @@ def issue_info(slug: str, number: str) -> dict:
     stamps += [n["createdAt"] for n in issue["timelineItems"]["nodes"] if n]
     return {"state": issue["state"], "title": issue["title"], "url": issue["url"],
             "labels": [n["name"] for n in issue["labels"]["nodes"]],
+            "parent": issue.get("parent"),
+            "sub_total": (issue.get("subIssuesSummary") or {}).get("total", 0),
+            "sub_completed": (issue.get("subIssuesSummary") or {}).get("completed", 0),
             "edited": max(s for s in stamps if s)}
 
 
@@ -156,13 +173,41 @@ ISSUE_LIMIT = 5000
 
 
 def repo_issues(slug: str) -> list[dict]:
-    """Every issue of a repo, open and closed, as {number, title, state, url, body}. Read straight from
+    """Every issue of a repo, open and closed, as {number, title, state, url, body, labels (names), parent
+    ({number, state, url} or None)}. Read straight from
     GitHub, never from its search index, which lags behind a just-filed issue (#37 D8)."""
     found = gh_json("issue", "list", "--repo", slug, "--state", "all", "--limit", str(ISSUE_LIMIT),
-                    "--json", "number,title,state,url,body")
+                    "--json", "number,title,state,url,body,labels,parent")
     if len(found) >= ISSUE_LIMIT:
         raise CmdError(f"{slug} has {ISSUE_LIMIT} or more issues; more than `design stories` can list")
+    for issue in found:
+        issue["labels"] = [x["name"] for x in issue.get("labels") or []]
     return found
+
+
+def open_features(slug: str, label: str) -> list[dict]:
+    """The open issues of a repo with the feature `label`, as {number, title, url, body, total, completed}; the
+    counts are the issue's sub-issues."""
+    found = gh_json("issue", "list", "--repo", slug, "--state", "open", "--label", label, "--limit",
+                    str(ISSUE_LIMIT), "--json", "number,title,url,body,subIssuesSummary")
+    return [{**{k: i[k] for k in ("number", "title", "url", "body")},
+             "total": (i.get("subIssuesSummary") or {}).get("total", 0),
+             "completed": (i.get("subIssuesSummary") or {}).get("completed", 0)} for i in found]
+
+
+def issue_create_args(slug: str, title: str, parent: str | None = None, label: str | None = None) -> list[str]:
+    """The `gh issue create` arguments (minus the body); `parent` is the parent issue's URL."""
+    cmd = ["issue", "create", "--repo", slug, "--title", title]
+    if parent:
+        cmd += ["--parent", parent]
+    if label:
+        cmd += ["--label", label]
+    return cmd
+
+
+def add_sub_issue(slug: str, number: str, url: str) -> None:
+    """Make the issue at `url` a sub-issue of `slug`#`number`; raises CmdError with GitHub's reason."""
+    gh("issue", "edit", str(number), "--repo", slug, "--add-sub-issue", url)
 
 
 def head_sha(slug: str, branch: str) -> str:

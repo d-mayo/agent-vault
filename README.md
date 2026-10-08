@@ -6,7 +6,7 @@ working memory between sessions. Design: [`docs/design-v1.md`](docs/design-v1.md
 
 ## Install
 
-Requires Python 3.9+ and git. On Windows, run these in Git Bash or PowerShell.
+Requires Python 3.9+, git and gh 2.94.0 or later (the first release with sub-issues). On Windows, run these in Git Bash or PowerShell.
 
 ```bash
 git clone https://github.com/d-mayo/agent-vault
@@ -44,7 +44,8 @@ into Claude's context.)
   `pre-push` hook (`agent_vault/githooks/`, which also runs the lint), and a Claude Code hook that blocks pushes to `main`
   and `--no-verify` in every session. The same hook blocks `gh issue create` in registered
   repos: issues go through `vault.py issue create` (the `issue` skill), which checks the body
-  against one template.
+  against one template. A design's stories are filed under its feature issue (`issue create --feature`,
+  then `--parent`), so GitHub shows them as its sub-issues.
 
 ## Lint and tests
 

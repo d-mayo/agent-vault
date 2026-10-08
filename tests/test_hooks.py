@@ -264,6 +264,14 @@ class SessionStartTest(HookCase):
         self.assertIn("Open ideas for demo: 1", out)
         self.assertNotIn("Other idea", out)
 
+    def test_a_feature_branch_shows_the_feature_stage(self):     # T9 -> AC7
+        self.set_gh({"issues": {"7": {"state": "OPEN", "title": "T", "created": "2026-09-01T00:00:00Z",
+                                      "body_edited": None, "renamed": None, "labels": ["feature"],
+                                      "sub_summary": {"total": 2, "completed": 0}}},
+                     "branches": ["feat/7-thing"],
+                     "prs": [{"number": 3, "headRefName": "feat/7-thing", "url": "u/3"}]})
+        self.assertIn("Stage: feature (2 of 2 sub-issues open).", self.start(self.repo))
+
     def test_repo_session_last_five_lines_only(self):
         for i in range(7):
             self.cli("log", f"line number {i}", "--project", "demo")

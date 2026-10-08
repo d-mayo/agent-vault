@@ -165,9 +165,24 @@ design:
 
 ## File the stories
 
-1. For each story of the sealed design, draft an issue in the issue template
-   (`vault.py schema` prints it: `Problem`, `Desired outcome`, `Constraints`,
-   `Out of scope`, `Source`):
+1. First the design's feature: one issue on GitHub, labelled `feature`, that
+   the design's stories become sub-issues of. Draft it in the issue template:
+   - `Problem`: the design's Problem;
+   - `Desired outcome`: the design's Goals;
+   - `Constraints`: the design's decisions, each by `D<n>` and title;
+   - `Out of scope`: the design's Non-goals;
+   - `Source`: `[[<design>]]` with no story number (this link is how
+     `design stories` and `features` find it).
+   It goes in the project's only repo or, with several, the repo the user
+   names. A project with no repo yet files neither the feature nor its
+   stories: say so. Show the user the title and body exactly as they will be
+   posted and, after they approve that wording, write the body to a temporary
+   file outside the clone and the vault and run `vault.py issue create <repo>
+   --title "<title>" --body-file <file> --feature <design>`. It attaches the
+   stories already filed that have no parent; if it exits non-zero, some
+   attach failed: it printed the `gh issue edit` command for each, so run
+   those, or tell the user which stories to attach by hand.
+2. For each story of the sealed design, draft an issue in the same template:
    - `Problem`: why this story exists, from the design's Problem and Goals;
    - `Desired outcome`: the story's `Outcome:`;
    - `Constraints`: the story's dependencies as `Depends on: S<n> (<title>)`
@@ -176,25 +191,31 @@ design:
    - `Out of scope`: what belongs to other stories or the design's Non-goals;
    - `Source`: `[[<design>]] S<n>` (this link is how `design stories` finds
      the issue, so write it exactly like that, under Source).
-2. The repo is the story's `Repo:` line, or the project's only repo. A
+3. The repo is the story's `Repo:` line, or the project's only repo. A
    story of a project with no repo yet waits: say so, and don't file it.
-3. Show the user every title and body, exactly as they will be posted, and
+4. Show the user every title and body, exactly as they will be posted, and
    file each only after they approve that wording. Write each body to a
    temporary file outside the clone and the vault, then run `vault.py issue
-   create <repo> --title "<title>" --body-file <file>`. Never run `gh issue
-   create`. If the CLI refuses a body, fix what it names, show the user the
-   changed wording and get approval again.
-4. Finish with `vault.py design stories <design>`: it should show every
-   story filed. Report any story still "not filed" and why (a new project
-   with no repo yet, or one the user chose to hold back).
+   create <repo> --title "<title>" --body-file <file> --parent <n>`, where
+   `<n>` is the feature's number; for a story whose repo isn't the feature's,
+   `--parent <feature repo>#<n>`. Never run `gh issue create`. If the CLI
+   refuses a body, fix what it names, show the user the changed wording and
+   get approval again.
+5. Finish with `vault.py design stories <design>`: it should show the feature
+   and every story filed under it. Report any story still "not filed" and why
+   (a new project with no repo yet, or one the user chose to hold back), and
+   any story marked as not under the feature.
 
 ## Filing later
 
 Asked to file a sealed design's stories later ("file the stories of
-<design>"): run `vault.py design stories <design>`, and for each story it
+<design>"): run `vault.py design stories <design>`. When it says `no feature
+yet`, create the feature first, exactly as in File the stories step 1, even
+when every story is already filed (it attaches them). Then, for each story it
 shows as "not filed", draft, show, get approval for and create the issue
-exactly as in File the stories, then run the command again. Nothing refuses
-to continue while stories are unfiled; this skill is how they get filed.
+exactly as in File the stories, with `--parent`, then run the command again.
+Nothing refuses to continue while stories are unfiled; this skill is how they
+get filed.
 
 ## Stop and ask if
 
