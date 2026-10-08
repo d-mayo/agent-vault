@@ -40,9 +40,11 @@ there is expanded to it at install time); it always ends in `vault.py`, so
 
 Before asking the user anything:
 
-1. Read the issue: `gh issue view <issue> --json title,body,comments`. Only
-   the title and body are requirements; comments give background but don't
-   count as requirements on their own.
+1. Read the issue: `gh issue view <issue> --json title,body,comments,labels`.
+   Only the title and body are requirements; comments give background but
+   don't count as requirements on their own. An issue labelled `feature` is a
+   design's feature, not a story: stop (see Stop and ask if) and plan one of
+   its sub-issues instead.
 2. Read the repo's other open issues (`gh issue list --state open --limit
    200`), reading the body of any that look related, to fix the scope
    boundary against work that's already planned or in flight.
@@ -153,6 +155,8 @@ already on another issue's branch), then "implement #<issue>" (the
 
 ## Stop and ask if
 
+- The issue is labelled `feature`: a feature is never planned; only its
+  sub-issues are.
 - Research turns up something the issue doesn't cover, or a contradiction
   with the spec, the code, or another issue's scope.
 - The reviewer can't be run on Opus — don't silently fall back to

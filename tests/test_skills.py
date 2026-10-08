@@ -532,6 +532,22 @@ class DesignSkillTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC10-AC1
                             "vault.py issue create", "never run `gh issue create`", "vault.py design stories",
                             "not filed", "a project with no repo yet waits", "filing later", "file the stories of")
 
+    def test_feature_before_stories(self):                            # T11 -> AC10 (#56)
+        filing = self.skill.split("## File the stories")[1].split("## Filing later")[0]
+        self.assertLess(filing.index("--feature <design>"), filing.index("--parent <n>"))
+        self.assertMentions("the design's feature", "no story number", "the repo the user names",
+                            "--parent <feature repo>#<n>", "neither the feature nor its stories",
+                            text=filing)
+        later = self.skill.split("## Filing later")[1].split("## Stop and ask if")[0]
+        self.assertMentions("no feature yet", "create the feature first", "even when every story is already filed",
+                            text=later)
+
+    def test_plan_story_stops_on_a_feature(self):                     # T11 -> AC10 (#56)
+        plan = read("plan-story", "SKILL.md")
+        research = plan.split("## Research")[1].split("## Interview")[0]
+        self.assertMentions("--json title,body,comments,labels", "labelled `feature`", text=research)
+        self.assertMentions("the issue is labelled `feature`", text=plan.split("## Stop and ask if")[1])
+
 
 class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#37)
     def test_plan_story_reads_the_design(self):
