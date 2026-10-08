@@ -117,7 +117,7 @@ class GhCase(unittest.TestCase):
             "default_branch": "main", "head_sha": git("rev-parse", "HEAD", cwd=self.clone), "labels": ["bug"],
             "settings": {"allow_squash_merge": True, "allow_merge_commit": True,
                          "allow_rebase_merge": True, "delete_branch_on_merge": False},
-            "refuse_settings": False, "branches": [], "prs": [],
+            "refuse_settings": False, "branches": [], "prs": [], "bare": str(self.bare),
             "compare": {"total_commits": 0, "files": []},
             "issues": {"7": {"state": "OPEN", "title": TITLE, "created": CREATED, "body_edited": None,
                              "renamed": None, "labels": []}},

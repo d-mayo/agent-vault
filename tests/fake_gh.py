@@ -5,7 +5,11 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
    "repos": {"owner/name": {"default_branch": "main", "head_sha": "<40 hex>", "labels": [...],
        "settings": {...}, "refuse_settings": false, "branches": ["feat/1-x"],
        "prs": [{"number": 1, "headRefName": "feat/1-x", "url": "...", "state": "OPEN",
-                "closes": [{"number": 7, "repo": "owner/name"}]}],  (state/closes optional)
+                "closes": [{"number": 7, "repo": "owner/name"}],
+                "checks": [{"__typename": "CheckRun", "name": "ci", "status": "COMPLETED",
+                            "conclusion": "SUCCESS"}]}],  (state/closes/checks optional)
+       "bare": "<path of the repo's bare remote>", "refuse_merge": "<GitHub's reason to refuse a merge>",
+         (both optional: `pr view` reports a PR's head and `pr merge` squashes it from that remote),
        "compare": {"total_commits": 0, "files": [{"filename": "a.py"}]},
        "issues": {"7": {"state": "OPEN", "title": "...", "created": "...Z", "body_edited": null,
                         "renamed": null, "labels": [...], "body": "..."}},   (body optional)
@@ -16,7 +20,10 @@ Unknown repos are created with defaults on first use. Tests read and edit the fi
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -39,6 +46,58 @@ def repo_state(state, slug):
         "default_branch": "main", "head_sha": "a" * 40, "labels": [], "settings": dict(DEFAULT_SETTINGS),
         "refuse_settings": False, "branches": [], "prs": [], "compare": {"total_commits": 0, "files": []},
         "issues": {}, "created_prs": [], "created_issues": [], "next_number": 20})
+
+
+def git(*args, cwd=None):
+    proc = subprocess.run(["git", "-c", "user.name=fake-gh", "-c", "user.email=fake@example.com",
+                           "-c", "commit.gpgsign=false", *args], cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8")
+    if proc.returncode != 0:
+        fail(f"fake gh: git {' '.join(args[:3])} failed: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def pr_head(repo, pr):
+    """The PR branch's commit on the bare remote ('' when the repo has no bare remote)."""
+    if not repo.get("bare"):
+        return ""
+    proc = subprocess.run(["git", "--git-dir", repo["bare"], "rev-parse", "--verify", "-q",
+                           f"refs/heads/{pr['headRefName']}"], capture_output=True, text=True)
+    return proc.stdout.strip()
+
+
+def merge_pr(repo, state, args):
+    """Squash-merge a PR on the bare remote the way GitHub would, then close what it closes."""
+    pr = next((p for p in repo["prs"] if str(p["number"]) == args[2]), None)
+    if pr is None:
+        fail(f"Could not resolve to a PullRequest with the number of {args[2]}")
+    if "--squash" not in args:
+        fail("fake gh: only --squash merges are supported")
+    for banned in ("--delete-branch", "--admin", "--auto"):
+        if banned in args:
+            fail(f"fake gh: {banned} is not supported")
+    if repo.get("refuse_merge"):
+        fail(repo["refuse_merge"])
+    if pr.get("state", "OPEN") != "OPEN":
+        fail(f"Pull request #{pr['number']} is not mergeable: it is {pr['state'].lower()}.")
+    head = pr_head(repo, pr)
+    wanted = opt(args, "--match-head-commit")
+    if wanted and wanted != head:
+        fail("Head branch was modified. Review and try the merge again.")
+    work = tempfile.mkdtemp(prefix="fake-gh-")
+    try:
+        git("clone", "-q", "--branch", repo["default_branch"], repo["bare"], work)
+        git("fetch", "-q", "origin", pr["headRefName"], cwd=work)
+        git("merge", "--squash", "FETCH_HEAD", cwd=work)
+        git("commit", "-q", "--allow-empty", "-m", f"{pr['headRefName']} (#{pr['number']})", cwd=work)
+        git("push", "-q", "origin", repo["default_branch"], cwd=work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    pr["state"] = "MERGED"
+    for c in pr.get("closes", []):
+        issue = state["repos"].get(c["repo"], {}).get("issues", {}).get(str(c["number"]))
+        if issue:
+            issue["state"] = "CLOSED"
 
 
 def graphql(args, state):
@@ -115,7 +174,10 @@ def main():
         refs = [{"number": c["number"], "repository": {"name": c["repo"].split("/")[1],
                                                        "owner": {"login": c["repo"].split("/")[0]}}}
                 for c in pr.get("closes", [])]
-        print(json.dumps({"state": pr.get("state", "OPEN"), "closingIssuesReferences": refs}))
+        print(json.dumps({"state": pr.get("state", "OPEN"), "closingIssuesReferences": refs,
+                          "headRefOid": pr_head(repo, pr), "statusCheckRollup": pr.get("checks", [])}))
+    elif cmd == ["pr", "merge"]:
+        merge_pr(repo, state, args)
     elif cmd[0] == "api":
         rest = [a for a in args[1:] if a != "--paginate"]
         if rest[0] == "graphql":
