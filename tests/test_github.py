@@ -60,6 +60,10 @@ Full check: make test
 """
 
 
+NO_PR_PLAN = SEALED_PLAN.replace("status: draft", "pr: none\nstatus: draft").replace(
+    "Files: `src/a.py`, `src/b.py` (new)", "Files: none")
+
+
 ISSUE_BODY = """## Problem
 Widgets don't frob.
 
@@ -259,6 +263,36 @@ class SealPlanTest(GhCase):  # T1 -> AC1, AC11
         self.ok(self.cli("seal", "plan", "widget", "7"))
         self.assertIn("planned", self.load()["issues"]["7"]["labels"])
         self.assertEqual(before, self.note("plan").read_bytes())
+
+
+class NoPrPlanTest(GhCase):  # T2, T3 -> AC2, AC3
+    def test_seal_refuses_a_file_path(self):
+        self.new_plan(SEALED_PLAN.replace("status: draft", "pr: none\nstatus: draft"))
+        self.refused(self.cli("seal", "plan", "widget", "7"), "pr: none", "src/a.py", "src/b.py")
+        self.assertIn("status: draft", self.note("plan").read_text(encoding="utf-8"))
+        self.assertEqual(self.calls("issue", "edit"), [])
+
+    def test_seal_accepts_files_none(self):
+        self.sealed(NO_PR_PLAN)
+        self.assertEqual(self.fm(self.note("plan"))["status"], "sealed")
+        self.assertEqual(self.fm(self.note("plan"))["pr"], "none")
+        self.assert_valid()
+
+    def test_a_normal_plan_still_names_files(self):
+        self.sealed()
+        self.assertNotIn("pr", self.fm(self.note("plan")))
+
+    def test_branch_and_open_pr_refuse(self):
+        self.sealed(NO_PR_PLAN)
+        self.refused(self.branch(), "pr: none")
+        self.refused(self.cli("open-pr", "widget", "7"), "pr: none")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.assertFalse(self.note("impl").exists() and "branch:" in self.note("impl").read_text(encoding="utf-8"))
+
+    def test_preflight_and_stage_still_work(self):
+        self.sealed(NO_PR_PLAN)
+        self.ok(self.cli("preflight", "widget", "7"))
+        self.assertTrue(self.ok(self.cli("stage", "widget", "7")).stdout.startswith("planned:"))
 
 
 class PreflightTest(GhCase):  # T2 -> AC2

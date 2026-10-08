@@ -295,6 +295,20 @@ def load_plan(repo: str, issue: str) -> tuple[Path, dict, str]:
     return path, fm or {}, body
 
 
+def plan_is_no_pr(repo: str, issue: str) -> bool:
+    """True when the issue's plan declares `pr: none` (no plan: False)."""
+    path = work_path(repo, issue, "plan")
+    if not path.is_file():
+        return False
+    fm, _, _ = lib.split_frontmatter(lib.read_text(path))
+    return (fm or {}).get("pr") == lib.NO_PR
+
+
+def refuse_no_pr(repo: str, issue: str, what: str) -> None:
+    if plan_is_no_pr(repo, issue):
+        die(f"{repo}#{issue}'s plan declares pr: none, so it has no branch or pull request; {what}")
+
+
 def load_impl(repo: str, issue: str) -> tuple[Path, dict]:
     path = work_path(repo, issue, "impl")
     if not path.is_file():
@@ -335,6 +349,11 @@ def cmd_seal_plan(args) -> None:
         add_planned_label(slug, args.issue)     # `stage` reports this state as backlog and points here
         print(f"the plan was already sealed; added the '{name}' label to {slug}#{args.issue}")
         return
+    if fm.get("pr") == lib.NO_PR:
+        paths = [f for f in plan_files(body) if f != "none"]
+        if paths:
+            die(f"{lib.rel(path)} declares pr: none, so no step may name a file; a step with nothing to edit "
+                "says 'Files: none' (describe vault and GitHub work in Do:). Named: " + ", ".join(paths))
     trial = {**fm, "status": "sealed", "issue_updated": "2000-01-01T00:00:00Z", "base_sha": "0000000"}
     errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
     if errors:
@@ -742,6 +761,7 @@ def default_slug(title: str) -> str:
 
 def cmd_branch(args) -> None:
     slug = issue_context(args)
+    refuse_no_pr(args.repo, args.issue, "there is nothing to branch")
     info, warnings = check_preflight(args.repo, args.issue, slug)
     for w in warnings:
         print(f"warning: {w}")
@@ -767,6 +787,7 @@ def cmd_branch(args) -> None:
 
 def cmd_open_pr(args) -> None:
     slug = issue_context(args)
+    refuse_no_pr(args.repo, args.issue, "there is nothing to open")
     impl, fm = load_impl(args.repo, args.issue)
     branch = fm.get("branch")
     if not branch:
