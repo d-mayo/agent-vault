@@ -73,6 +73,14 @@ until nothing that would change the plan is still ambiguous.
 
 ## Draft
 
+0. Ask whether the issue ends in a pull request, unless the issue already
+   says (data or vault work, or work spread over several repos, has none).
+   If it doesn't, add `pr: none` to the draft plan's frontmatter, below
+   `issue:` (the only value allowed there), and write every step's `Files:`
+   as `none`: `seal plan` refuses a `pr: none` plan whose steps name any
+   path, so describe the vault and GitHub work in `Do:`. The plan is then
+   implemented with no branch and no PR, and `seal retro` closes the issue.
+   Leave the field out for an issue that ends in a PR.
 1. `vault.py new plan <repo> <issue>` scaffolds the draft plan and an open
    impl note.
 2. Fill in the plan format: `Goal` · `Acceptance criteria` (`- AC<n>: …`) ·

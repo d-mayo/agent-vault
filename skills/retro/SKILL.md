@@ -42,6 +42,17 @@ name (e.g. `agent-vault`), never `owner/name`.
   `<type>/<n>-<slug>` (`git branch --show-current`).
 - If neither gives a number, or the clone has no GitHub `origin`, stop and ask.
 
+## No-PR issues
+
+If the sealed plan's frontmatter says `pr: none`, the issue has no branch
+and no PR: skip Preflight's `pr:` and branch checks (the issue must still
+be open, and the clone can be on any branch), run Audit and Follow-ups
+as below (reading the impl note and plan instead of a PR diff), and see
+Seal for the closing comment. `vault.py new retro` creates the retro with
+`pr: none` and a `## Closing comment` section. Audit lines marked
+`confirmed` are not bumped (nothing is committed), so they stay stale
+until a later PR issue's retro confirms them.
+
 ## Preflight
 
 1. Read the impl note (`Agent/Work/<repo>/<repo>-<issue>-impl.md`) in the
@@ -173,7 +184,15 @@ references) before creating it.
    audited and how, and the follow-ups and their disposition — and get the
    user's explicit approval before sealing anything. For an open issue it
    names the PR sealing merges; approving the summary approves that merge.
-3. `vault.py seal retro <repo> <issue>`: it merges the PR (checks passed,
+   For a `pr: none` issue, first write the comment the issue will be closed
+   with under the retro's `## Closing comment` (what was done and where the
+   result lives; it may span lines), and include its exact text in the
+   summary: approving the summary approves that comment, and sealing posts
+   it verbatim and closes the issue as completed. Nothing is sealed if the
+   close fails.
+3. `vault.py seal retro <repo> <issue>`: for a `pr: none` issue it closes
+   the issue with the closing comment and seals, committing nothing. For
+   any other it merges the PR (checks passed,
    head matching) and leaves the clone on the default branch, up to date.
 
 ## Backfill (a closed issue with no retro yet)
