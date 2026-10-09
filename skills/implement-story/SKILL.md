@@ -64,9 +64,11 @@ name (e.g. `agent-vault`), never `owner/name`.
    (`git branch --list` and `git ls-remote --heads origin`) — a branch can
    exist without being checked out, or only on GitHub in a fresh clone.
    - None found: make sure the working tree is clean, then run
-     `vault.py branch <repo> <issue> [--type <type>] [--slug <slug>]`
-     (`--type` if the plan's steps clearly call for something other than
-     `feat`, `--slug` to override the default slug). This checks out the new
+     `vault.py branch <repo> <issue> [--type <type>] [--slug <slug>]`.
+     The type comes from the issue's `bug` label: a bug gets `fix/`, so
+     leave `--type` out; pass `--type` only for a non-bug whose plan
+     clearly calls for something other than `feat`, and never `fix` or
+     `hotfix`. `--slug` overrides the default slug. This checks out the new
      branch and records it in the impl note.
    - Found: fetch and check it out (`git switch <branch>`, or
      `git switch -c <branch> origin/<branch>` if it isn't local yet). If the
