@@ -404,6 +404,13 @@ class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> 
     def test_never_runs_gh_issue_create_or_edits_an_issue(self):  # AC5
         self.assertMentions("## never", "never run `gh issue create`", "never edit an existing issue")
 
+    def test_retro_and_plan_story_place_follow_ups(self):  # T5 -> AC5 (#57)
+        self.assertMentions("the retro'd issue's feature", "clearly continues", "`--bug`",
+                            "vault.py features --project <id>", "`--standalone`", "another project's repo",
+                            "<placement>", text=read("retro", "SKILL.md"))
+        self.assertMentions("the `issue` skill does this and decides the placement",
+                            text=read("plan-story", "SKILL.md"))
+
     def test_retro_and_plan_story_create_issues_only_through_the_command(self):  # AC6
         for name in ("retro", "plan-story"):
             text = read(name, "SKILL.md")
