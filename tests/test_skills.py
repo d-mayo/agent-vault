@@ -382,6 +382,25 @@ class SealRetroMergeDocsTest(unittest.TestCase):  # T7 -> AC7 (#51)
         self.assertIn("otherwise only the user merges", low)
 
 
+class ClosesFeatureDocsTest(unittest.TestCase):  # T7 -> AC4, AC5 (#59)
+    def squashed(self, text):
+        return " ".join(text.lower().split())
+
+    def test_retro_skill_runs_the_check_and_names_the_feature(self):
+        text = (SKILLS_DIR / "retro" / "SKILL.md").read_text(encoding="utf-8")
+        seal = self.squashed(re.search(r"^## Seal\n(.*?)^## ", text, re.S | re.M).group(1))
+        self.assertIn("vault.py closes-feature <repo> <issue>", seal)
+        self.assertIn("summary names it too", seal)
+        stop = self.squashed(text.split("## Stop and ask if")[1])
+        self.assertIn("feature-close warning", stop)
+
+    def test_guides_mention_the_command(self):
+        self.assertIn("closes-feature", (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8"))
+        claude = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        line = next(ln for ln in claude.splitlines() if ln.startswith("- `skills/retro/`"))
+        self.assertIn("closes-feature", line)
+
+
 class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> AC5, AC6 (#27)
     def setUp(self):
         self.skill = read("issue", "SKILL.md")
@@ -452,7 +471,7 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 235)
+        self.assertLessEqual(len(text.splitlines()), 245)
 
 
 class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC9, AC10 (#36)

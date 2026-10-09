@@ -560,6 +560,41 @@ class OpenPrTest(GhCase):  # T4 -> AC4, AC11
         self.assertEqual(self.daily().count("pr-opened"), 1)
 
 
+FEATURE_DESIGN = "widgets-design-1-gadgets"
+FEATURE_URL = f"https://github.com/{SLUG}/issues/40"
+D6 = ("Closed by the retro of #7: every story of this feature's design is filed, "
+      "and none of its sub-issues is open.")
+
+
+def add_feature(self, other_open=False):
+    """A sealed design of project `widgets` with the one story S1 filed as issue 7, under the open feature
+    widget#40; with `other_open`, a second open sub-issue (widget#41) keeps the feature open."""
+    design = self.vault / "Agent" / "Designs" / "widgets" / f"{FEATURE_DESIGN}.md"
+    design.parent.mkdir(parents=True, exist_ok=True)
+    design.write_text("---\ntype: design\nproject: widgets\nstatus: sealed\ncreated: 2026-09-26\n---\n"
+                      "# Gadgets\n\n## Stories\n### S1. Build it\nOutcome: x.\nDepends on: None\n",
+                      encoding="utf-8", newline="\n")
+
+    def source(text):
+        return ISSUE_BODY.replace("## Source\nsession", f"## Source\n{text}")
+
+    self.load()
+    issues = self.state["repos"][SLUG]["issues"]
+    issues["7"].update(body=source(f"[[{FEATURE_DESIGN}]] S1"), parent=FEATURE_URL)
+    issues["40"] = {"state": "OPEN", "title": "Gadgets", "created": CREATED, "body_edited": None, "renamed": None,
+                    "labels": ["feature"], "body": source(f"[[{FEATURE_DESIGN}]]")}
+    if other_open:
+        issues["41"] = {"state": "OPEN", "title": "x", "created": CREATED, "body_edited": None, "renamed": None,
+                        "labels": [], "body": ISSUE_BODY, "parent": FEATURE_URL}
+    self.save()
+
+
+def assert_feature_closed(self):
+    feature = self.load()["issues"]["40"]
+    self.assertEqual((feature["state"], feature.get("closed_reason"), feature.get("closed_comment")),
+                     ("CLOSED", "completed", D6))
+
+
 CLAUDE_MD = ("# widget\n\n## Purpose\nThe widget repo.\n\n"
             "## Commands\n<!-- covers: README.md -->\n- Build: `python -m unittest`\n")
 FULL_CLAUDE_AUDIT = "- Purpose: confirmed — still true\n- Commands: confirmed — still true\n"
@@ -570,6 +605,9 @@ FULL_README_AUDIT = "- Overview: confirmed — still true\n- Usage: confirmed �
 
 
 class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
+    add_feature = add_feature
+    assert_feature_closed = assert_feature_closed
+
     def prep(self, plan=SEALED_PLAN):
         self.name = "feat/7-add-widget-frobbing"
         self.snapshot(("retro", plan), lambda: self.build_prep(plan))
@@ -879,6 +917,61 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         self.ok(self.cli("seal", "retro", "widget", "7"))
         self.assertEqual(len(self.calls("pr", "view")), 1)
 
+    # --- the feature (#59) ---
+    def test_closes_the_finished_feature_after_a_merge(self):    # T4 -> AC2
+        self.filled_prep()
+        self.add_feature()
+        out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
+        self.assertIn(f"closed feature {SLUG}#40: Gadgets", out)
+        self.assert_feature_closed()
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_closes_the_finished_feature_of_a_closed_backfill(self):    # T4 -> AC2
+        self.filled_prep()
+        self.add_feature()
+        self.edit_pr(closes=[], state="MERGED")
+        self.issue()["state"] = "CLOSED"
+        self.save()
+        git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
+        self.assertIn("closed feature", self.ok(self.cli("seal", "retro", "widget", "7")).stdout)
+        self.assert_feature_closed()
+
+    def test_another_open_sub_issue_keeps_the_feature_open(self):    # T5 -> AC2
+        self.filled_prep()
+        self.add_feature(other_open=True)
+        out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
+        self.assertNotIn("closed feature", out)
+        self.assertEqual(self.calls("issue", "close"), [])
+        self.assertEqual(len(self.calls("pr", "merge")), 1)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_a_refused_feature_close_warns_and_still_merges(self):    # T6 -> AC3
+        self.filled_prep()
+        self.add_feature()
+        self.load()
+        self.state["refuse_close"] = "HTTP 500"
+        self.save()
+        r = self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+        self.assertEqual(len(self.calls("pr", "merge")), 1)
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.assertIn(f"gh issue close 40 --repo {SLUG} --reason completed", r.stderr)
+        self.assertIn(D6, r.stderr)
+        self.assertNotIn("closed feature", r.stdout)
+
+    def test_a_failed_sub_issue_query_warns_and_still_merges(self):    # T6 -> AC3
+        self.filled_prep()
+        self.add_feature()
+        self.load()
+        self.state["fail_sub_query"] = "HTTP 502"
+        self.save()
+        r = self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertIn("closes-feature widget 7", r.stderr)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.assertEqual(self.calls("issue", "close"), [])
+
     # --- the merge (#51) ---
     def bare_rev(self, ref):
         return git("--git-dir", str(self.bare), "rev-parse", ref, cwd=self.root)
@@ -1099,6 +1192,8 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
 
 
 class NoPrRetroTest(GhCase):  # T6, T7 -> AC6, AC7
+    add_feature = add_feature
+    assert_feature_closed = assert_feature_closed
     fill_retro = SealRetroTest.fill_retro
     add_findings = SealRetroTest.add_findings
     set_follow_ups = SealRetroTest.set_follow_ups
@@ -1147,6 +1242,15 @@ class NoPrRetroTest(GhCase):  # T6, T7 -> AC6, AC7
         self.assertNotIn("verified:", (self.clone / "CLAUDE.md").read_text(encoding="utf-8"))
         self.assertEqual(self.calls("pr"), [])
         self.assert_valid()
+
+    def test_closes_the_finished_feature_after_its_own_close(self):    # T4 -> AC2
+        self.prep()
+        self.add_feature()
+        out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
+        self.assertIn("closed issue #7", out)
+        self.assertIn(f"closed feature {SLUG}#40", out)
+        self.assertEqual(self.load()["issues"]["7"]["closed_comment"], self.COMMENT)
+        self.assert_feature_closed()
 
     def test_works_from_any_branch_with_a_dirty_tree(self):
         self.prep()
@@ -2031,6 +2135,97 @@ class FeaturesTest(DuoCase):  # T6, T7 -> AC5, AC6
         out = self.ok(self.cli("design", "stories", self.NAME)).stdout
         self.assertIn("no feature yet", out)
         self.assertNotIn("not under", out)
+
+
+class ClosesFeatureTest(DuoCase):  # T1-T3 -> AC1, AC5
+    FEATURE = "https://github.com/acme/duo-a/issues/30"
+
+    def finished(self):
+        """A sealed design, its feature duo-a#30, S1 (duo-a#1, open) and S2 (duo-b#2, closed) under it."""
+        self.seal()
+        self.add_issue("acme/duo-a", 30, "OPEN", self.source(f"[[{self.NAME}]]"), labels=["feature"])
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"), parent=self.FEATURE)
+        self.add_issue("acme/duo-b", 2, "CLOSED", self.source(f"[[{self.NAME}]] S2"), parent=self.FEATURE)
+
+    def says(self, n="1", repo="duo-a"):
+        r = self.ok(self.cli("closes-feature", repo, n))
+        return r.stdout.strip()
+
+    def vault_files(self):
+        return {p: p.read_bytes() for p in self.vault.rglob("*") if p.is_file()}
+
+    def edit(self, slug, n, **changes):
+        self.load()
+        self.state["repos"][slug]["issues"][str(n)].update(changes)
+        self.save()
+
+    def test_names_the_feature_the_last_story_finishes(self):
+        self.finished()
+        before = self.vault_files()
+        want = "sealing closes feature acme/duo-a#30: t"
+        self.assertEqual(self.says(), want)
+        self.edit("acme/duo-a", 1, state="CLOSED")
+        self.assertEqual(self.says(), want)
+        self.assertEqual(self.vault_files(), before)
+        self.assertEqual(self.calls("issue", "close"), [])
+        self.assertEqual(self.calls("issue", "edit"), [])
+
+    def refusal(self, *words):
+        out = self.says()
+        self.assertTrue(out.startswith("sealing closes no feature:"), out)
+        for w in words:
+            self.assertIn(w, out)
+
+    def test_an_unfiled_story(self):
+        self.finished()
+        self.edit("acme/duo-b", 2, body=ISSUE_BODY)
+        self.refusal("S2")
+
+    def test_another_open_sub_issue(self):
+        self.finished()
+        self.add_issue("acme/duo-b", 5, "OPEN", ISSUE_BODY, parent=self.FEATURE)
+        self.refusal("acme/duo-b#5")
+
+    def test_an_open_sub_issue_outside_the_project(self):
+        self.finished()
+        self.add_issue("acme/other", 6, "OPEN", ISSUE_BODY, parent=self.FEATURE)
+        self.refusal("acme/other#6")
+
+    def test_no_parent(self):
+        self.finished()
+        self.edit("acme/duo-a", 1, parent=None)
+        self.refusal("no parent")
+
+    def test_a_parent_that_is_not_a_feature(self):
+        self.finished()
+        self.edit("acme/duo-a", 30, labels=[])
+        self.refusal("isn't labelled")
+
+    def test_a_closed_feature(self):
+        self.finished()
+        self.edit("acme/duo-a", 30, state="CLOSED")
+        self.refusal("closed")
+
+    def test_a_design_not_in_the_vault(self):
+        self.finished()
+        self.edit("acme/duo-a", 30, body=self.source("[[duo-design-9-gone]]"))
+        self.refusal("duo-design-9-gone", "isn't in the vault")
+
+    def test_a_draft_design(self):
+        self.seal()
+        self.add_issue("acme/duo-a", 30, "OPEN", self.source(f"[[{self.NAME}]]"), labels=["feature"])
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"), parent=self.FEATURE)
+        text = self.path.read_text(encoding="utf-8").replace("status: sealed", "status: draft")
+        self.path.write_text(text, encoding="utf-8", newline="\n")
+        self.refusal("isn't sealed")
+
+    def test_unknown_repo_and_bad_issue_are_refused(self):
+        self.refused(self.cli("closes-feature", "nope", "1"), "nope")
+        self.refused(self.cli("closes-feature", "duo-a", "abc"), "abc")
+
+    def test_listed_in_help_and_the_docstring(self):
+        self.assertIn("closes-feature", self.ok(self.cli("--help")).stdout)
+        self.assertIn("closes-feature <repo> <issue>", (REPO / "agent_vault" / "vault.py").read_text(encoding="utf-8"))
 
 
 class ScenarioCopyTest(GhCase):  # T1 -> AC3

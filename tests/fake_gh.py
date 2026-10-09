@@ -18,6 +18,7 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
   `issue edit --add-sub-issue`) and "sub_summary": {"total": n, "completed": n} (else counted from the
   issues whose parent is it). State keys: "old_gh": true makes the sub-issue flags and JSON fields fail
   like gh before 2.94.0; "refuse_sub_issue": {"<sub-issue url>": "<GitHub's reason>"} refuses that link.
+  "fail_sub_query": "<error text>" fails only the sub-issues GraphQL query (`feature_view`).
    "calls": [[...args of every call...]]}
 Unknown repos are created with defaults on first use. Tests read and edit the file directly.
 """
@@ -146,6 +147,17 @@ def graphql(args, state):
     issue = repo_state(state, slug)["issues"].get(fields["number"])
     if issue is None:
         fail("GraphQL: Could not resolve to an Issue")
+    if any("subIssues(" in a for a in args):
+        if state.get("fail_sub_query"):
+            fail(state["fail_sub_query"])
+        url = f"https://github.com/{slug}/issues/{fields['number']}"
+        subs = [(s, n, i) for s, r in state["repos"].items() for n, i in r["issues"].items() if i.get("parent") == url]
+        print(json.dumps({"data": {"repository": {"issue": {
+            "state": issue["state"], "title": issue["title"], "body": issue.get("body", ""),
+            "labels": {"nodes": [{"name": n} for n in issue["labels"]]},
+            "subIssues": {"totalCount": len(subs), "nodes": [
+                {"number": int(n), "state": i["state"], "repository": {"nameWithOwner": s}} for s, n, i in subs]}}}}}))
+        return
     nodes = [{"createdAt": issue["renamed"]}] if issue.get("renamed") else []
     url = f"https://github.com/{slug}/issues/{fields['number']}"
     parent = parent_obj(state, issue)

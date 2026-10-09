@@ -11,6 +11,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   seal design <design>
   design stories <design>
   features [--project <id>]
+  closes-feature <repo> <issue>
   preflight <repo> <issue>
   branch <repo> <issue> [--type <type>] [--slug <slug>]   (type: fix for a bug-labelled issue, else feat)
   open-pr <repo> <issue> [--body-file <file>]
@@ -671,8 +672,39 @@ def cmd_seal_retro(args) -> None:
           f"on {lib.rel(project_path)}" + (f"; bumped verified on: {', '.join(bumped)}" if bumped else "")
           + (f"; merged PR #{pr}" if merging else "")
           + (f"; closed issue #{args.issue}" if no_pr and not closed else ""))
+    close_finished_feature(index, args.repo, slug, args.issue, info)
     if merging:
         sync_default_branch(top, default, pr)
+
+
+def feature_close_comment(feature: dict, slug: str, issue: str) -> str:
+    ref = f"#{issue}" if slug.lower() == feature["slug"].lower() else f"{slug}#{issue}"
+    return (f"Closed by the retro of {ref}: every story of this feature's design is filed, "
+            "and none of its sub-issues is open.")
+
+
+def close_finished_feature(index: lib.Index, repo: str, slug: str, issue: str, info: dict) -> None:
+    """After `seal retro` has sealed the notes: close the issue's parent feature if it is finished (#59 D2, D3).
+    Never dies: whatever fails is a warning with the command to run by hand."""
+    try:
+        feature, _ = feature_to_close(index, slug, issue, info)
+    except github.CmdError as e:
+        print(f"warning: couldn't check whether the feature is finished: {e.stderr or e}\n"
+              f"  run `vault.py closes-feature {repo} {issue}` to see whether it should be closed",
+              file=sys.stderr)
+        return
+    if not feature:
+        return
+    comment = feature_close_comment(feature, slug, issue)
+    try:
+        github.close_issue(feature["slug"], feature["number"], comment)
+    except github.CmdError as e:
+        print(f"warning: feature {feature['slug']}#{feature['number']} is finished but was not closed: "
+              f"{e.stderr or e}\n  close it by hand:\n"
+              f"  gh issue close {feature['number']} --repo {feature['slug']} --reason completed "
+              f'--comment "{comment}"', file=sys.stderr)
+        return
+    print(f"closed feature {feature['slug']}#{feature['number']}: {feature['title']}")
 
 
 def cmd_claudemd_lint(args) -> None:
@@ -1545,6 +1577,55 @@ def cmd_design_stories(args) -> None:
     print(f"{len(stories) - len(unfiled)} of {len(stories)} stories filed" if stories else "no stories")
 
 
+def feature_to_close(index: lib.Index, slug: str, issue: str, info: dict) -> tuple[dict | None, str]:
+    """(feature, reason): the open feature that sealing `slug`#`issue` finishes, as {slug, number, title}, else
+    None and why not (#59 D1). Never dies; a GitHub failure raises github.CmdError."""
+    if not info.get("parent"):
+        return None, "the issue has no parent"
+    m = re.match(r"https://github\.com/([^/]+/[^/]+)/issues/(\d+)$", info["parent"]["url"])
+    if not m:
+        return None, f"the parent {info['parent']['url']} isn't a GitHub issue URL"
+    fslug, fnum = m.group(1), m.group(2)
+    ref = f"{fslug}#{fnum}"
+    feat = github.feature_view(fslug, fnum)
+    if feat["state"] != "OPEN":
+        return None, f"the parent {ref} is {feat['state'].lower()}"
+    if lib.FEATURE_LABEL[0] not in feat["labels"]:
+        return None, f"the parent {ref} isn't labelled '{lib.FEATURE_LABEL[0]}'"
+    links = [d for ln in source_lines(feat) for d in re.findall(r"\[\[([^\]|#]+)", ln)]
+    design = next((d for d in links if is_feature_of(feat, d)), None)
+    if design is None:
+        return None, f"the feature {ref} has no design in its Source section"
+    found = index.designs.get(design)
+    if found is None:
+        return None, f"the feature's design {design} isn't in the vault"
+    if (found["fm"] or {}).get("status") != "sealed":
+        return None, f"the feature's design {design} isn't sealed"
+    _, design_body, _ = lib.split_frontmatter(lib.read_text(found["path"]))
+    filed = {n for n, _, _ in filed_stories(project_issues(index, found["project"]), design)}
+    unfiled = [f"S{s['n']}" for s in lib.design_stories(design_body) if s["n"] not in filed]
+    if unfiled:
+        return None, f"{', '.join(unfiled)} of {design} not filed yet"
+    me = (slug.lower(), str(issue))
+    open_subs = [f"{s['slug']}#{s['number']}" for s in feat["subs"]
+                 if s["state"] == "OPEN" and (s["slug"].lower(), s["number"]) != me]
+    if open_subs:
+        return None, f"still open: {', '.join(open_subs)}"
+    return {"slug": fslug, "number": fnum, "title": feat["title"]}, ""
+
+
+def cmd_closes_feature(args) -> None:
+    slug = issue_context(args)
+    try:
+        feature, reason = feature_to_close(lib.Index(), slug, args.issue, github.issue_info(slug, args.issue))
+    except github.CmdError as e:
+        die(f"couldn't check: {e.stderr or e}")
+    if feature:
+        print(f"sealing closes feature {feature['slug']}#{feature['number']}: {feature['title']}")
+    else:
+        print(f"sealing closes no feature: {reason}")
+
+
 def cmd_features(args) -> None:
     index = lib.Index()
     require_project(index, args.project)
@@ -1803,6 +1884,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = des.add_parser("stories", help="each story with the issues whose Source names it, or 'not filed'")
     p.add_argument("design")
     p.set_defaults(fn=cmd_design_stories)
+    p = sub.add_parser("closes-feature", help="whether sealing this issue's retro closes its finished feature")
+    p.add_argument("repo")
+    p.add_argument("issue")
+    p.set_defaults(fn=cmd_closes_feature)
     p = sub.add_parser("features", help="the open feature issues, with how many sub-issues are open")
     p.add_argument("--project")
     p.set_defaults(fn=cmd_features)
