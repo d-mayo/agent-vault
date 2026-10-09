@@ -183,6 +183,8 @@ class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
                 self.assertEqual(r.returncode, 2, r.stderr)
                 self.assertIn("vault.py", r.stderr)
                 self.assertIn("issue create", r.stderr)
+                self.assertIn("--standalone", r.stderr)
+                self.assertIn("--bug", r.stderr)
 
     def test_allows(self):
         c, o, e = self.clone, self.other, self.elsewhere

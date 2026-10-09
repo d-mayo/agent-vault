@@ -43,7 +43,7 @@ into Claude's context.)
 - Two local guards enforce this without depending on GitHub settings: the
   `pre-push` hook (`agent_vault/githooks/`, which also runs the lint), and a Claude Code hook that blocks pushes to `main`
   and `--no-verify` in every session. The same hook blocks `gh issue create` in registered
-  repos: issues go through `vault.py issue create` (the `issue` skill), which checks the body
+  repos: issues go through `vault.py issue create` with a placement flag (`--parent`, `--standalone` or `--bug`; the `issue` skill), which checks the body
   against one template. A design's stories are filed under its feature issue (`issue create --feature`,
   then `--parent`), so GitHub shows them as its sub-issues.
 
