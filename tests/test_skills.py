@@ -396,6 +396,11 @@ class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> 
                             "the exact title and the exact body", "explicit approval",
                              "vault.py issue create", "--idea", "## stop and ask if")
 
+    def test_places_the_issue_before_drafting(self):  # T4 -> AC4 (#57)
+        self.assertMentions("vault.py features --project <id>", "gh issue list", "whether it is a bug",
+                            "--standalone", "--bug", "--parent", "name the placement",
+                            "design skill", "never filed here")
+
     def test_never_runs_gh_issue_create_or_edits_an_issue(self):  # AC5
         self.assertMentions("## never", "never run `gh issue create`", "never edit an existing issue")
 
