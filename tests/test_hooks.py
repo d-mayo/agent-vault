@@ -11,7 +11,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from tests.helpers import CODE, REPO, make_vault, run_py, tmpdir, write_config
+from tests.helpers import CODE, REPO, make_vault, restore_or_build, run_py, tmpdir, write_config
 
 HOOKS = CODE / "hooks"
 CLI = CODE / "vault.py"
@@ -42,12 +42,17 @@ class HookCase(unittest.TestCase):
         self.env = {"HOME": str(self.home), "USERPROFILE": str(self.home), "GIT_CONFIG_GLOBAL": str(empty),
                     "GIT_CONFIG_NOSYSTEM": "1", "AGENT_VAULT_GH": str(FAKE_GH),
                     "FAKE_GH_STATE": str(self.gh_state)}
+        self.sid = uuid.uuid4().hex
+        self.repo = self.root / "widget"
+        self.other = self.root / "other"
+        restore_or_build("hook-case", self.root, self.build)
+
+    def build(self):
         self.set_gh({"issues": {"7": {"state": "OPEN", "title": "T", "created": "2026-09-01T00:00:00Z",
                                       "body_edited": None, "renamed": None, "labels": []}}})
-        self.sid = uuid.uuid4().hex
-        self.repo = self.make_clone("widget", SLUG)
+        self.make_clone("widget", SLUG)
         git("checkout", "-q", "-b", "feat/7-thing", cwd=self.repo)
-        self.other = self.make_clone("other", "me/other")
+        self.make_clone("other", "me/other")
         self.cli("new", "project", "demo", "--repo", SLUG, "--purpose", "Build widgets.")
         self.cli("new", "plan", "widget", "7")
 

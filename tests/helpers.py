@@ -2,6 +2,7 @@
 on PATH, because a test runs `ruff check .` over the repo."""
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -61,3 +62,21 @@ def copy_scenario(src: Path, dst: Path) -> None:
             out = out.replace(old, new)
         if out != data:
             path.write_bytes(out)
+
+
+_SNAPSHOTS: dict = {}
+
+
+def restore_or_build(key, root: Path, build) -> None:
+    """Build a test's scenario in `root` with `build()` the first time `key` is seen in this
+    process and keep a copy; later calls copy that scenario over `root` instead, with every
+    absolute path rewritten. `root` must hold only what `build()` starts from (same each time)."""
+    saved = _SNAPSHOTS.get(key)
+    if saved is None:
+        build()
+        keep = tempfile.TemporaryDirectory()
+        atexit.register(keep.cleanup)
+        copy_scenario(root, Path(keep.name))
+        _SNAPSHOTS[key] = keep
+    else:
+        copy_scenario(Path(saved.name), root)
