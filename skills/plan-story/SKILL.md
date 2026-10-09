@@ -23,6 +23,32 @@ there is expanded to it at install time); it always ends in `vault.py`, so
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
 - Never post a GitHub edit before the user approves its exact wording.
 
+## Approvals, pings and the closing summary
+
+- Every yes/no approval this skill asks for is one `AskUserQuestion` prompt
+  (below, "the approval prompt") with exactly three options: `Yes`, `No` and
+  `Hold on`. Only `Yes` proceeds.
+  - `Hold on`: stop, take up what the user wants to discuss first, and ask the
+    same prompt again once that's settled.
+  - `No`: change nothing, ask in prose why, and work through the reason before
+    asking again.
+  - A free-text answer (the prompt's own "Other" choice) that starts with a
+    clear yes counts as `Yes`, unless it also asks for a change: then make the
+    change and ask again, since what is approved must be what was shown. Any
+    other free-text answer counts as `Hold on`.
+  - Without `AskUserQuestion`, ask in prose with the same three answers; only
+    an explicit Yes counts.
+  - Questions that aren't approvals (interviews, clarifying questions, a
+    summary's closing question) stay open-ended prose.
+- When this skill's stage is finished and the next stage is the user's to
+  start, send one push notification (the `PushNotification` tool): a single
+  line under 200 characters naming what finished and what the user starts
+  next. Send none for anything else. If the tool isn't available or doesn't
+  send, carry on.
+- The final response of a finished stage ends with at most three bullets, each
+  one short sentence: the facts the user most needs to know, with nothing after
+  them.
+
 ## Resolve the repo and issue
 
 - Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
@@ -133,7 +159,8 @@ the raw plan:
 ## Approval
 
 Run `vault.py seal plan <repo> <issue>` only after the user has answered
-the summary's closing question and explicitly approved it, and only after
+the summary's closing question and explicitly approved it (ask with the
+approval prompt, after the open-ended closing question), and only after
 any approved issue-hygiene edits to the planned issue (see below) are posted — sealing records the issue's
 current edit time, so an edit made afterwards would make `preflight` reject
 the sealed plan later. For requested changes: edit the draft, running
@@ -146,7 +173,8 @@ against a draft the user hasn't approved.
 - Discoveries that belong to a different, unplanned issue; acceptance
   criteria that turned out impossible; needed edits to the issue being
   planned: propose the exact wording to the user before doing anything.
-- Post GitHub edits only after the user approves that wording.
+- Post GitHub edits only after the user approves that wording, asked with
+  the approval prompt.
 - A new issue is created only through `vault.py issue create` with a
   placement flag (`--parent`, `--standalone` or `--bug`), after the
   user approves its exact title and body, written in the template that
@@ -161,7 +189,8 @@ against a draft the user hasn't approved.
 Once sealed, tell the user how to start implementation: a fresh session on
 Sonnet inside the repo clone (a new git worktree instead, if the clone is
 already on another issue's branch), then "implement #<issue>" (the
-`implement-story` skill). This skill never creates the branch itself.
+`implement-story` skill). This skill never creates the branch itself. Send
+the push notification here, naming `implement #<issue>` as the next stage.
 
 ## Stop and ask if
 

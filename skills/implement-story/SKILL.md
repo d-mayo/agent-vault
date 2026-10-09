@@ -21,6 +21,32 @@ name (e.g. `agent-vault`), never `owner/name`.
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
 - Never run `install.py`.
 
+## Approvals, pings and the closing summary
+
+- Every yes/no approval this skill asks for is one `AskUserQuestion` prompt
+  (below, "the approval prompt") with exactly three options: `Yes`, `No` and
+  `Hold on`. Only `Yes` proceeds.
+  - `Hold on`: stop, take up what the user wants to discuss first, and ask the
+    same prompt again once that's settled.
+  - `No`: change nothing, ask in prose why, and work through the reason before
+    asking again.
+  - A free-text answer (the prompt's own "Other" choice) that starts with a
+    clear yes counts as `Yes`, unless it also asks for a change: then make the
+    change and ask again, since what is approved must be what was shown. Any
+    other free-text answer counts as `Hold on`.
+  - Without `AskUserQuestion`, ask in prose with the same three answers; only
+    an explicit Yes counts.
+  - Questions that aren't approvals (interviews, clarifying questions, a
+    summary's closing question) stay open-ended prose.
+- When this skill's stage is finished and the next stage is the user's to
+  start, send one push notification (the `PushNotification` tool): a single
+  line under 200 characters naming what finished and what the user starts
+  next. Send none for anything else. If the tool isn't available or doesn't
+  send, carry on.
+- The final response of a finished stage ends with at most three bullets, each
+  one short sentence: the facts the user most needs to know, with nothing after
+  them.
+
 ## Which procedure applies
 
 - The sealed plan's frontmatter says `pr: none`: go to **No-PR plan**.
@@ -140,7 +166,8 @@ Once every step is committed:
    next command's clean-tree check fail. End it with a "Left open" list of
    the minor findings still open, for the user to decide. Open the PR:
    `vault.py open-pr <repo> <issue> --body-file <file>`. `Closes #<issue>` is
-   added automatically.
+   added automatically. Then send the push notification: the user reviews the
+   PR and runs `retro #<issue>` next.
 7. Leave the impl note `status: open`; it's sealed later, by the retro.
 
 ## No-PR plan
@@ -161,7 +188,8 @@ review and no pull request. `branch` and `open-pr` refuse such an issue.
    `## Verification`, and anything worth the retro under `## Discoveries`.
    Skip the diff review: there is no diff.
 4. Leave the impl note `status: open`, and tell the user the next step is
-   the retro (`retro #<issue>`), whose sealing closes the issue.
+   the retro (`retro #<issue>`), whose sealing closes the issue, and send the
+   push notification naming `retro #<issue>` as the next stage.
 
 ## Address PR review
 
@@ -190,7 +218,8 @@ Asked to act on review comments for an issue that already has an open PR
    `## Verification` (`- PR review <k>: R<n>-R<n2>` or `- PR review <k>: no
    findings`); its rounds are counted separately from **Finish**'s, starting
    again at 1.
-4. Push the branch.
+4. Push the branch, then send the push notification: the user should
+   re-review the PR next.
 5. Leave the impl note open; don't reseal or reopen anything else.
 
 ## Stop and ask if

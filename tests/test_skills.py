@@ -471,7 +471,7 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 245)
+        self.assertLessEqual(len(text.splitlines()), 273)
 
 
 class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC9, AC10 (#36)
@@ -686,6 +686,101 @@ class BranchTypeDocsTest(AssertMentionsMixin, unittest.TestCase):  # T4 -> AC4 (
         branch = line[line.index("branch <repo> <issue>"):].split("creates and pushes")[0]
         self.assertNotIn("--type feat", branch)
         self.assertIn("bug", branch)
+
+
+class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
+    HEADING = "Approvals, pings and the closing summary"
+
+    @staticmethod
+    def collapse(text):
+        return " ".join(text.split())
+
+    def section(self, skill, heading):
+        text = read(skill, "SKILL.md")
+        m = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+        self.assertIsNotNone(m, f"{skill} has no '## {heading}' section")
+        return m.group(1)
+
+    def step(self, section, n):
+        m = re.search(rf"^{n}\. (.*?)(?=^\d+\. |\Z)", section, re.S | re.M)
+        self.assertIsNotNone(m, f"no step {n}")
+        return m.group(1)
+
+    def item(self, section, prefix, indent=""):
+        m = re.search(rf"^{indent}- ({re.escape(prefix)}.*?)(?=^{indent}- |\Z)", section, re.S | re.M)
+        self.assertIsNotNone(m, f"no item starting {prefix!r}")
+        return m.group(1)
+
+    def test_section_identical_and_right_after_never(self):               # T1
+        sections = {s: self.collapse(self.section(s, self.HEADING)) for s in SKILLS}
+        self.assertEqual(len(set(sections.values())), 1, "the five copies differ")
+        for skill in SKILLS:
+            headings = re.findall(r"^## (.*)$", read(skill, "SKILL.md"), re.M)
+            self.assertEqual(headings[headings.index("Never") + 1], self.HEADING, skill)
+
+    def test_section_says_the_three_rules(self):                          # T1
+        low = self.collapse(self.section("issue", self.HEADING)).lower()
+        for phrase in ("askuserquestion", "`yes`", "`no`", "`hold on`", "only `yes` proceeds",
+                       "ask in prose why", "starts with a clear yes", "asks for a change",
+                       "counts as `hold on`", "open-ended prose", "`pushnotification`",
+                       "under 200 characters", "at most three bullets", "nothing after them"):
+            self.assertIn(phrase, low)
+
+    def test_every_approval_step_uses_the_prompt(self):                   # T2
+        need = "the approval prompt"
+        checks = {
+            "plan-story": [("Approval", None), ("Issue hygiene", "- Post GitHub edits")],
+            "design": [("Approval", 1), ("File the stories", 4)],
+            "retro": [("Follow-ups", 1), ("Follow-ups", 2), ("Decisions", None), ("Seal", 2),
+                      ("Stop and ask if", "- `seal retro` prints a feature-close"),
+                      ("Stop and ask if", "- `seal retro` refuses because the PR")],
+            "issue": [("Approval", None), ("Create", 3)],
+        }
+        for skill, items in checks.items():
+            for heading, which in items:
+                body = self.section(skill, heading)
+                if isinstance(which, int):
+                    body = self.step(body, which)
+                elif which:
+                    body = self.item(body, which[2:])
+                self.assertIn(need, self.collapse(body), f"{skill}: {heading} {which}")
+        follow = self.step(self.section("retro", "Follow-ups"), 1)
+        for prefix in ("`- issue #<n> created`", "`- issue #<n> amended`"):
+            self.assertIn(need, self.collapse(self.item(follow, prefix, "   ")), prefix)
+        for skill in ("design", "plan-story", "retro", "issue"):
+            self.assertIn(need, self.collapse(self.section(skill, self.HEADING)))
+
+    def test_implement_story_asks_no_approval(self):                      # T2
+        text = read("implement-story", "SKILL.md")
+        shared = self.section("implement-story", self.HEADING)
+        self.assertNotIn("the approval prompt", text.replace(shared, ""))
+
+    def sentences(self, text):
+        return re.split(r"(?<=\.)\s+", self.collapse(text))
+
+    def test_ping_points_name_the_next_stage(self):                       # T3
+        points = [
+            ("plan-story", "Handoff", None, "implement #<issue>"),
+            ("design", "File the stories", 5, "plan"),
+            ("design", "Filing later", None, "plan"),
+            ("implement-story", "Finish", 6, "retro #<issue>"),
+            ("implement-story", "No-PR plan", 4, "retro #<issue>"),
+            ("implement-story", "Address PR review", 4, "re-review"),
+            ("retro", "Seal", 3, "next issue"),
+            ("issue", "Create", 4, "plan"),
+        ]
+        for skill, heading, n, next_stage in points:
+            body = self.section(skill, heading)
+            if n:
+                body = self.step(body, n)
+            hits = [s for s in self.sentences(body) if "push notification" in s]
+            self.assertTrue(hits, f"{skill}: {heading} has no push notification")
+            self.assertTrue(any(next_stage in s.lower() for s in hits), f"{skill}: {heading} {hits}")
+
+    def test_repo_claude_md_mentions_the_section(self):                   # T4
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        bullet = re.search(r"^- `skills/`:.*$", text, re.M).group(0)
+        self.assertIn("## Approvals, pings and the closing summary", bullet)
 
 
 if __name__ == "__main__":

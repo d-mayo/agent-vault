@@ -33,6 +33,32 @@ design's file name without `.md`.
   issue before the user has approved its exact title and body.
 - Never write a risk or an unknown up as a decision; it is an open question.
 
+## Approvals, pings and the closing summary
+
+- Every yes/no approval this skill asks for is one `AskUserQuestion` prompt
+  (below, "the approval prompt") with exactly three options: `Yes`, `No` and
+  `Hold on`. Only `Yes` proceeds.
+  - `Hold on`: stop, take up what the user wants to discuss first, and ask the
+    same prompt again once that's settled.
+  - `No`: change nothing, ask in prose why, and work through the reason before
+    asking again.
+  - A free-text answer (the prompt's own "Other" choice) that starts with a
+    clear yes counts as `Yes`, unless it also asks for a change: then make the
+    change and ask again, since what is approved must be what was shown. Any
+    other free-text answer counts as `Hold on`.
+  - Without `AskUserQuestion`, ask in prose with the same three answers; only
+    an explicit Yes counts.
+  - Questions that aren't approvals (interviews, clarifying questions, a
+    summary's closing question) stay open-ended prose.
+- When this skill's stage is finished and the next stage is the user's to
+  start, send one push notification (the `PushNotification` tool): a single
+  line under 200 characters naming what finished and what the user starts
+  next. Send none for anything else. If the tool isn't available or doesn't
+  send, carry on.
+- The final response of a finished stage ends with at most three bullets, each
+  one short sentence: the facts the user most needs to know, with nothing after
+  them.
+
 ## Resolve the vault, CLI and project
 
 - Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
@@ -149,7 +175,7 @@ design:
 ## Approval
 
 1. Seal only after the user has answered the closing question and explicitly
-   approved. For requested changes: edit the draft, run another review if
+   approved, asked with the approval prompt. For requested changes: edit the draft, run another review if
    the change is substantial, re-run `vault.py validate`, summarise the
    change, and ask again.
 2. For a new project, create its note now, after approval and before
@@ -194,17 +220,19 @@ design:
 3. The repo is the story's `Repo:` line, or the project's only repo. A
    story of a project with no repo yet waits: say so, and don't file it.
 4. Show the user every title and body, exactly as they will be posted, and
-   file each only after they approve that wording. Write each body to a
+   file each only after they approve that wording (the approval prompt). Write each body to a
    temporary file outside the clone and the vault, then run `vault.py issue
    create <repo> --title "<title>" --body-file <file> --parent <n>`, where
    `<n>` is the feature's number; for a story whose repo isn't the feature's,
    `--parent <feature repo>#<n>`. Never run `gh issue create`. If the CLI
    refuses a body, fix what it names, show the user the changed wording and
-   get approval again.
+   ask the approval prompt again.
 5. Finish with `vault.py design stories <design>`: it should show the feature
    and every story filed under it. Report any story still "not filed" and why
    (a new project with no repo yet, or one the user chose to hold back), and
-   any story marked as not under the feature.
+   any story marked as not under the feature. Then send the push notification:
+   the next stage is to plan a story (or, when no story was filed, which
+   stories wait and why).
 
 ## Filing later
 
@@ -215,7 +243,8 @@ when every story is already filed (it attaches them). Then, for each story it
 shows as "not filed", draft, show, get approval for and create the issue
 exactly as in File the stories, with `--parent`, then run the command again.
 Nothing refuses to continue while stories are unfiled; this skill is how they
-get filed.
+get filed. When the command shows the stories filed, send the push
+notification, naming a story to plan next (or which stories wait and why).
 
 ## Stop and ask if
 
