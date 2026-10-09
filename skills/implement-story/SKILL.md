@@ -21,6 +21,32 @@ name (e.g. `agent-vault`), never `owner/name`.
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
 - Never run `install.py`.
 
+## Approvals, pings and the closing summary
+
+- Every yes/no approval this skill asks for is one `AskUserQuestion` prompt
+  (below, "the approval prompt") with exactly three options: `Yes`, `No` and
+  `Hold on`. Only `Yes` proceeds.
+  - `Hold on`: stop, take up what the user wants to discuss first, and ask the
+    same prompt again once that's settled.
+  - `No`: change nothing, ask in prose why, and work through the reason before
+    asking again.
+  - A free-text answer (the prompt's own "Other" choice) that starts with a
+    clear yes counts as `Yes`, unless it also asks for a change: then make the
+    change and ask again, since what is approved must be what was shown. Any
+    other free-text answer counts as `Hold on`.
+  - Without `AskUserQuestion`, ask in prose with the same three answers; only
+    an explicit Yes counts.
+  - Questions that aren't approvals (interviews, clarifying questions, a
+    summary's closing question) stay open-ended prose.
+- When this skill's stage is finished and the next stage is the user's to
+  start, send one push notification (the `PushNotification` tool): a single
+  line under 200 characters naming what finished and what the user starts
+  next. Send none for anything else. If the tool isn't available or doesn't
+  send, carry on.
+- The final response of a finished stage ends with at most three bullets, each
+  one short sentence: the facts the user most needs to know, with nothing after
+  them.
+
 ## Which procedure applies
 
 - The sealed plan's frontmatter says `pr: none`: go to **No-PR plan**.

@@ -28,6 +28,32 @@ name (e.g. `agent-vault`), never `owner/name`.
 - Never run `install.py`.
 - Never post a GitHub issue edit before the user approves its exact wording.
 
+## Approvals, pings and the closing summary
+
+- Every yes/no approval this skill asks for is one `AskUserQuestion` prompt
+  (below, "the approval prompt") with exactly three options: `Yes`, `No` and
+  `Hold on`. Only `Yes` proceeds.
+  - `Hold on`: stop, take up what the user wants to discuss first, and ask the
+    same prompt again once that's settled.
+  - `No`: change nothing, ask in prose why, and work through the reason before
+    asking again.
+  - A free-text answer (the prompt's own "Other" choice) that starts with a
+    clear yes counts as `Yes`, unless it also asks for a change: then make the
+    change and ask again, since what is approved must be what was shown. Any
+    other free-text answer counts as `Hold on`.
+  - Without `AskUserQuestion`, ask in prose with the same three answers; only
+    an explicit Yes counts.
+  - Questions that aren't approvals (interviews, clarifying questions, a
+    summary's closing question) stay open-ended prose.
+- When this skill's stage is finished and the next stage is the user's to
+  start, send one push notification (the `PushNotification` tool): a single
+  line under 200 characters naming what finished and what the user starts
+  next. Send none for anything else. If the tool isn't available or doesn't
+  send, carry on.
+- The final response of a finished stage ends with at most three bullets, each
+  one short sentence: the facts the user most needs to know, with nothing after
+  them.
+
 ## Resolve the repo and issue
 
 - Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
@@ -136,15 +162,15 @@ until a later PR issue's retro confirms them.
      when it clearly continues that feature's work; a bug always `--bug`; else a match from `vault.py
      features --project <id>`, or `--standalone`; another project's repo is never filed under this
      feature. Show the exact title and body and the placement (under feature `<repo>#<n>`, standalone,
-     or standalone bug); once approved, write the body to a temp file outside the clone and vault, run
+     or standalone bug) and ask the approval prompt; once approved, write the body to a temp file outside the clone and vault, run
      `vault.py issue create <repo> --title "<title>" --body-file <file> <placement>` (`--parent <ref>`,
-     `--standalone` or `--bug`), and if it refuses the body, fix that and get the new wording approved.
+     `--standalone` or `--bug`), and if it refuses the body, fix that and put the new wording to the approval prompt.
    - `- issue #<n> amended`: an existing issue with no sealed plan for
      it — check `Agent/Work/<repo>/<repo>-<n>-plan.md`'s `status:` in the
      vault (missing file, or `status: draft`, both count); an issue with a
      sealed plan is never amended this way, since that would invalidate the
      plan at `preflight`. Propose the exact wording; edit it only after
-     approval.
+     the approval prompt is answered Yes.
    - `- idea [[<idea>]]`: `vault.py idea add "<title>" --project <id>
      --source "retro <repo>#<issue>"`, `<id>` the project whose `repos:`
      lists this repo.
@@ -158,14 +184,15 @@ until a later PR issue's retro confirms them.
    finding, one line. `seal retro` refuses while one is unsorted.
 2. Check the project's open ideas (`vault.py ideas --project <id>`, same
    `<id>`) and propose dropping, with `vault.py idea drop <file> --reason
-   "..."`, the ones this issue resolved.
+   "..."`, the ones this issue resolved, each
+   drop confirmed with the approval prompt.
 3. Write the sorted lines under the retro's `## Follow-ups`.
 
 ## Decisions
 
 A decision record is never edited, so show the user each one's exact title,
 decision and why (written to stand alone, without D numbers or AC
-references) before creating it.
+references) before creating it, and ask the approval prompt for each.
 
 1. For every line of the sealed plan's `## Decisions` ending in " (lasting)",
    run `vault.py decision add <id> "<title>" --decision "..." --why "..."
@@ -186,7 +213,7 @@ references) before creating it.
    design filed, no other sub-issue open). Then present a plain-language
    summary of the retro in chat — what got
    audited and how, and the follow-ups and their disposition — and get the
-   user's explicit approval before sealing anything. For an open issue it
+   user's explicit approval (the approval prompt) before sealing anything. For an open issue it
    names the PR sealing merges; approving the summary approves that merge.
    For a `pr: none` issue, first write the comment the issue will be closed
    with under the retro's `## Closing comment` (what was done and where the
@@ -218,7 +245,7 @@ backfill's approval merges nothing: `seal retro` never merges a closed issue.
 
 - `seal retro` prints a feature-close warning (the check failed, or GitHub
   refused the close): everything else is sealed; report the command it
-  printed and run it only on the user's go-ahead.
+  printed and run it only after the approval prompt is answered Yes.
 - The impl note has no `pr:` yet.
 - A retro note for the issue already exists and is `status: sealed`.
 - `vault.py claudemd-lint` reports a failure that needs a decision rather
@@ -238,6 +265,6 @@ backfill's approval merges nothing: `seal retro` never merges a closed issue.
   if the PR already merged or closed, never did): put the fix to the user,
   either restoring the `Closes #<n>` line in the PR description or closing
   the issue by hand once the PR has merged. Never edit the description or
-  close the issue yourself; act only on the user's go-ahead.
+  close the issue yourself; act only after the approval prompt is answered Yes.
 - `seal retro` refuses over the PR's checks or head, or GitHub refuses the
   merge: report the reason; never merge any other way.

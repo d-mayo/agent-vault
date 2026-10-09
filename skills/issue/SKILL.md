@@ -27,6 +27,32 @@ never `owner/name`.
 - Never change the body after it was approved: what is posted is what the
   user read.
 
+## Approvals, pings and the closing summary
+
+- Every yes/no approval this skill asks for is one `AskUserQuestion` prompt
+  (below, "the approval prompt") with exactly three options: `Yes`, `No` and
+  `Hold on`. Only `Yes` proceeds.
+  - `Hold on`: stop, take up what the user wants to discuss first, and ask the
+    same prompt again once that's settled.
+  - `No`: change nothing, ask in prose why, and work through the reason before
+    asking again.
+  - A free-text answer (the prompt's own "Other" choice) that starts with a
+    clear yes counts as `Yes`, unless it also asks for a change: then make the
+    change and ask again, since what is approved must be what was shown. Any
+    other free-text answer counts as `Hold on`.
+  - Without `AskUserQuestion`, ask in prose with the same three answers; only
+    an explicit Yes counts.
+  - Questions that aren't approvals (interviews, clarifying questions, a
+    summary's closing question) stay open-ended prose.
+- When this skill's stage is finished and the next stage is the user's to
+  start, send one push notification (the `PushNotification` tool): a single
+  line under 200 characters naming what finished and what the user starts
+  next. Send none for anything else. If the tool isn't available or doesn't
+  send, carry on.
+- The final response of a finished stage ends with at most three bullets, each
+  one short sentence: the facts the user most needs to know, with nothing after
+  them.
+
 ## Resolve the vault, CLI and repo
 
 - Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
@@ -71,7 +97,7 @@ Before drafting, decide where the issue belongs.
 
 1. Show the exact title and the exact body, as they will be posted, and
    name the placement: under feature `<repo>#<n>`, standalone, or
-   standalone bug. Ask for approval of that wording and placement.
+   standalone bug. Ask for approval of that wording and placement with the approval prompt.
 2. Change nothing until the user answers; if they ask for edits, redraft
    and show it again. Only an explicit approval of the shown wording counts.
 
@@ -86,7 +112,7 @@ Before drafting, decide where the issue belongs.
    has a `project:`, that project must list the repo (an idea with none
    goes into the repo you name).
 3. If it refuses the body, it names each problem: fix those, show the user
-   the changed wording again, and get approval again before retrying.
+   the changed wording again, and put it to the approval prompt again before retrying.
 4. Report the issue URL, the last line the command prints.
 
 ## Stop and ask if
