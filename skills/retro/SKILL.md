@@ -181,7 +181,10 @@ references) before creating it.
 ## Seal
 
 1. `vault.py validate` must pass with no errors; fix whatever it flags.
-2. Present a plain-language summary of the retro in chat — what got
+2. Run `vault.py closes-feature <repo> <issue>`: it says whether sealing
+   will also close the issue's parent feature (every story of the feature's
+   design filed, no other sub-issue open). Then present a plain-language
+   summary of the retro in chat — what got
    audited and how, and the follow-ups and their disposition — and get the
    user's explicit approval before sealing anything. For an open issue it
    names the PR sealing merges; approving the summary approves that merge.
@@ -190,11 +193,13 @@ references) before creating it.
    result lives; it may span lines), and include its exact text in the
    summary: approving the summary approves that comment, and sealing posts
    it verbatim and closes the issue as completed. Nothing is sealed if the
-   close fails.
+   close fails. If `closes-feature` named a feature, the summary names it
+   too: approving the summary approves closing that feature.
 3. `vault.py seal retro <repo> <issue>`: for a `pr: none` issue it closes
    the issue with the closing comment and seals, committing nothing. For
    any other it merges the PR (checks passed,
    head matching) and leaves the clone on the default branch, up to date.
+   Once sealed it closes a finished feature, as `closes-feature` said.
 
 ## Backfill (a closed issue with no retro yet)
 
@@ -211,6 +216,9 @@ backfill's approval merges nothing: `seal retro` never merges a closed issue.
 
 ## Stop and ask if
 
+- `seal retro` prints a feature-close warning (the check failed, or GitHub
+  refused the close): everything else is sealed; report the command it
+  printed and run it only on the user's go-ahead.
 - The impl note has no `pr:` yet.
 - A retro note for the issue already exists and is `status: sealed`.
 - `vault.py claudemd-lint` reports a failure that needs a decision rather
