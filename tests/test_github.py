@@ -2033,6 +2033,97 @@ class FeaturesTest(DuoCase):  # T6, T7 -> AC5, AC6
         self.assertNotIn("not under", out)
 
 
+class ClosesFeatureTest(DuoCase):  # T1-T3 -> AC1, AC5
+    FEATURE = "https://github.com/acme/duo-a/issues/30"
+
+    def finished(self):
+        """A sealed design, its feature duo-a#30, S1 (duo-a#1, open) and S2 (duo-b#2, closed) under it."""
+        self.seal()
+        self.add_issue("acme/duo-a", 30, "OPEN", self.source(f"[[{self.NAME}]]"), labels=["feature"])
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"), parent=self.FEATURE)
+        self.add_issue("acme/duo-b", 2, "CLOSED", self.source(f"[[{self.NAME}]] S2"), parent=self.FEATURE)
+
+    def says(self, n="1", repo="duo-a"):
+        r = self.ok(self.cli("closes-feature", repo, n))
+        return r.stdout.strip()
+
+    def vault_files(self):
+        return {p: p.read_bytes() for p in self.vault.rglob("*") if p.is_file()}
+
+    def edit(self, slug, n, **changes):
+        self.load()
+        self.state["repos"][slug]["issues"][str(n)].update(changes)
+        self.save()
+
+    def test_names_the_feature_the_last_story_finishes(self):
+        self.finished()
+        before = self.vault_files()
+        want = "sealing closes feature acme/duo-a#30: t"
+        self.assertEqual(self.says(), want)
+        self.edit("acme/duo-a", 1, state="CLOSED")
+        self.assertEqual(self.says(), want)
+        self.assertEqual(self.vault_files(), before)
+        self.assertEqual(self.calls("issue", "close"), [])
+        self.assertEqual(self.calls("issue", "edit"), [])
+
+    def refusal(self, *words):
+        out = self.says()
+        self.assertTrue(out.startswith("sealing closes no feature:"), out)
+        for w in words:
+            self.assertIn(w, out)
+
+    def test_an_unfiled_story(self):
+        self.finished()
+        self.edit("acme/duo-b", 2, body=ISSUE_BODY)
+        self.refusal("S2")
+
+    def test_another_open_sub_issue(self):
+        self.finished()
+        self.add_issue("acme/duo-b", 5, "OPEN", ISSUE_BODY, parent=self.FEATURE)
+        self.refusal("acme/duo-b#5")
+
+    def test_an_open_sub_issue_outside_the_project(self):
+        self.finished()
+        self.add_issue("acme/other", 6, "OPEN", ISSUE_BODY, parent=self.FEATURE)
+        self.refusal("acme/other#6")
+
+    def test_no_parent(self):
+        self.finished()
+        self.edit("acme/duo-a", 1, parent=None)
+        self.refusal("no parent")
+
+    def test_a_parent_that_is_not_a_feature(self):
+        self.finished()
+        self.edit("acme/duo-a", 30, labels=[])
+        self.refusal("isn't labelled")
+
+    def test_a_closed_feature(self):
+        self.finished()
+        self.edit("acme/duo-a", 30, state="CLOSED")
+        self.refusal("closed")
+
+    def test_a_design_not_in_the_vault(self):
+        self.finished()
+        self.edit("acme/duo-a", 30, body=self.source("[[duo-design-9-gone]]"))
+        self.refusal("duo-design-9-gone", "isn't in the vault")
+
+    def test_a_draft_design(self):
+        self.seal()
+        self.add_issue("acme/duo-a", 30, "OPEN", self.source(f"[[{self.NAME}]]"), labels=["feature"])
+        self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"), parent=self.FEATURE)
+        text = self.path.read_text(encoding="utf-8").replace("status: sealed", "status: draft")
+        self.path.write_text(text, encoding="utf-8", newline="\n")
+        self.refusal("isn't sealed")
+
+    def test_unknown_repo_and_bad_issue_are_refused(self):
+        self.refused(self.cli("closes-feature", "nope", "1"), "nope")
+        self.refused(self.cli("closes-feature", "duo-a", "abc"), "abc")
+
+    def test_listed_in_help_and_the_docstring(self):
+        self.assertIn("closes-feature", self.ok(self.cli("--help")).stdout)
+        self.assertIn("closes-feature <repo> <issue>", (REPO / "agent_vault" / "vault.py").read_text(encoding="utf-8"))
+
+
 class ScenarioCopyTest(GhCase):  # T1 -> AC3
     prep = SealRetroTest.prep
     build_prep = SealRetroTest.build_prep

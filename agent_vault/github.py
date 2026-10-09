@@ -169,6 +169,28 @@ def issue_info(slug: str, number: str) -> dict:
             "edited": max(s for s in stamps if s)}
 
 
+FEATURE_QUERY = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
+issue(number:$number){state title body labels(first:100){nodes{name}}
+subIssues(first:100){totalCount nodes{number state repository{nameWithOwner}}}}}}"""
+
+
+def feature_view(slug: str, number: str) -> dict:
+    """state, title, body, labels and `subs` (a {slug, number, state} for each sub-issue, in any repo) of an issue."""
+    owner, name = slug.split("/")
+    data = gh_json("api", "graphql", "-f", f"query={FEATURE_QUERY}", "-F", f"owner={owner}",
+                   "-F", f"name={name}", "-F", f"number={number}")
+    issue = ((data.get("data") or {}).get("repository") or {}).get("issue")
+    if not issue:
+        raise CmdError(f"issue #{number} was not found in {slug}")
+    subs = issue["subIssues"]
+    if subs["totalCount"] > len(subs["nodes"]):
+        raise CmdError(f"{slug}#{number} has {subs['totalCount']} sub-issues; more than can be read at once")
+    return {"state": issue["state"], "title": issue["title"], "body": issue.get("body") or "",
+            "labels": [n["name"] for n in issue["labels"]["nodes"]],
+            "subs": [{"slug": s["repository"]["nameWithOwner"], "number": str(s["number"]), "state": s["state"]}
+                     for s in subs["nodes"]]}
+
+
 ISSUE_LIMIT = 5000
 
 
