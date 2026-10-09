@@ -38,7 +38,8 @@ into Claude's context.)
 - Never commit to `main`. Use a branch named `<type>/<issue>-<slug>`, for example
   `feat/12-note-schema`, and open a PR. Only the owner merges, with **Squash and merge**;
   the one exception is `vault.py seal retro`, which squash-merges the PR itself once the
-  owner has approved the retro and the PR's checks have passed.
+  owner has approved the retro and the PR's checks have passed. It also closes the issue's parent feature when every story of the feature's
+  design is filed and no other sub-issue is open (`vault.py closes-feature` shows whether it will).
 - Commit messages follow `<type>(<scope>): <subject>`.
 - Two local guards enforce this without depending on GitHub settings: the
   `pre-push` hook (`agent_vault/githooks/`, which also runs the lint), and a Claude Code hook that blocks pushes to `main`
