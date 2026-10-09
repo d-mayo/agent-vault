@@ -656,6 +656,19 @@ class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
                             text=read("retro", "SKILL.md"))
 
 
+class BranchTypeDocsTest(AssertMentionsMixin, unittest.TestCase):  # T4 -> AC4 (#58)
+    def test_implement_story_says_the_type_comes_from_the_bug_label(self):
+        self.assertMentions("`bug` label", "`fix/`", "never `fix` or `hotfix`",
+                            text=read("implement-story", "SKILL.md"))
+
+    def test_guide_branch_line(self):
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        line = next(ln for ln in guide.splitlines() if "branch <repo> <issue>" in ln)
+        branch = line[line.index("branch <repo> <issue>"):].split("creates and pushes")[0]
+        self.assertNotIn("--type feat", branch)
+        self.assertIn("bug", branch)
+
+
 if __name__ == "__main__":
     unittest.main()
 

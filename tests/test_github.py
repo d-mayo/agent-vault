@@ -433,8 +433,54 @@ class BranchTest(GhCase):  # T3 -> AC3, AC11
 
     def test_type_and_slug_options(self):
         self.sealed()
-        self.ok(self.branch("--type", "fix", "--slug", "frob-fix"))
-        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-frob-fix")
+        self.ok(self.branch("--type", "chore", "--slug", "frob-fix"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "chore/7-frob-fix")
+
+    def no_branch_made(self):
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.assertNotIn("/7-", git("branch", "-a", cwd=self.clone))
+        self.assertNotIn("/7-", git("ls-remote", "--heads", "origin", cwd=self.clone))
+        self.assertNotIn("branch", self.fm(self.note("impl")))
+
+    def test_bug_issue_branches_as_fix(self):  # T1
+        self.sealed()
+        self.issue()["labels"].append("bug")
+        self.save()
+        for t in ("feat", "chore"):
+            self.refused(self.branch("--type", t), "bug", "fix/")
+            self.no_branch_made()
+        r = self.branch("--type", "hotfix")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("invalid choice: 'hotfix'", r.stderr)
+        self.no_branch_made()
+        self.ok(self.branch())
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-add-widget-frobbing")
+        self.assertEqual(self.fm(self.note("impl"))["branch"], "fix/7-add-widget-frobbing")
+
+    def test_bug_issue_accepts_explicit_fix(self):  # T1
+        self.sealed()
+        self.issue()["labels"].append("bug")
+        self.save()
+        self.ok(self.branch("--type", "fix", "--slug", "x"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-x")
+
+    def test_non_bug_refuses_fix_and_hotfix(self):  # T2
+        self.sealed()
+        self.refused(self.branch("--type", "fix"), "bug", "label")
+        self.no_branch_made()
+        r = self.branch("--type", "hotfix")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("hotfix", r.stderr)
+        self.no_branch_made()
+
+    def test_help_and_docstring(self):  # T3
+        h = self.cli("branch", "--help").stdout
+        self.assertNotIn("hotfix", h)
+        self.assertIn("bug", h)
+        line = next(ln for ln in VAULT_PY.read_text(encoding="utf-8").splitlines() if "branch <repo>" in ln)
+        self.assertNotIn("--type feat", line)
+        self.assertIn("--type", line)
+        self.assertIn("bug", line)
 
     def test_refuses_existing_local_branch(self):
         self.sealed()

@@ -12,7 +12,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   design stories <design>
   features [--project <id>]
   preflight <repo> <issue>
-  branch <repo> <issue> [--type feat] [--slug <slug>]
+  branch <repo> <issue> [--type <type>] [--slug <slug>]   (type: fix for a bug-labelled issue, else feat)
   open-pr <repo> <issue> [--body-file <file>]
   stage <repo> <issue>
   idea add "<title>" [--project <id>] [--source <source>]
@@ -779,15 +779,27 @@ def default_slug(title: str) -> str:
     return lib.slugify(subject)[:BRANCH_SLUG_MAX].strip("-") or "work"
 
 
+def branch_type(requested, is_bug: bool) -> str:
+    if is_bug:
+        if requested not in (None, "fix"):
+            die(f"the issue is labelled `{lib.BUG_LABEL[0]}`, so its branch is `fix/`, not `{requested}/`")
+        return "fix"
+    if requested == "fix":
+        die(f"`fix/` branches are only for an issue labelled `{lib.BUG_LABEL[0]}`; "
+            f"if this issue is a bug, add the label on GitHub first")
+    return requested or "feat"
+
+
 def cmd_branch(args) -> None:
     slug = issue_context(args)
     refuse_no_pr(args.repo, args.issue, "there is nothing to branch")
     info, warnings = check_preflight(args.repo, args.issue, slug)
     for w in warnings:
         print(f"warning: {w}")
+    btype = branch_type(args.type, lib.BUG_LABEL[0] in info["labels"])
     impl, _ = load_impl(args.repo, args.issue)
     top = require_clone(slug)
-    name = f"{args.type}/{args.issue}-{args.slug or default_slug(info['title'])}"
+    name = f"{btype}/{args.issue}-{args.slug or default_slug(info['title'])}"
     if not lib.BRANCH_RE.match(name):
         die(f"branch '{name}' must match <type>/<issue>-<slug> with a lowercase a-z0-9- slug")
     pat = issue_branch_re(args.issue)
@@ -1718,7 +1730,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("repo")
         p.add_argument("issue")
         if name == "branch":
-            p.add_argument("--type", default="feat", choices=lib.BRANCH_TYPES)
+            p.add_argument("--type", choices=[t for t in lib.BRANCH_TYPES if t != "hotfix"],
+                           help="default: fix for an issue labelled bug, else feat")
             p.add_argument("--slug")
         if name == "open-pr":
             p.add_argument("--body-file")
