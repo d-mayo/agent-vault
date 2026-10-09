@@ -5,14 +5,14 @@ Scripts, hooks and skills for the Claude + Obsidian workflow; installed to `~/.c
 Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is the source of truth).
 
 ## Commands
-<!-- covers: install.py, tests/**; verified: 2026-10-08 -->
+<!-- covers: install.py, tests/**; verified: 2026-10-09 -->
 - Run tests: `python -m unittest discover -s tests -t .` (stdlib only, but the tests need `ruff` on your PATH; pytest also works). It runs the test classes in parallel worker processes (`tests/parallel.py`); setting AGENT_VAULT_TESTS_SERIAL to 1 runs it all in one process, and AGENT_VAULT_TESTS_WORKERS to a number sets the worker count (default: the CPU count, at most the number of classes)
 - Lint: `ruff check .`
 - Install locally: `python install.py --vault <path to Notes>`
 - CLI after install: `<installer's python> ~/.claude/agent-vault/vault.py <command>`; the exact string (which the vault's permission rule matches) is lib.CLI, printed by the installer and written into the vault's CLAUDE.md.
 
 ## Layout
-<!-- covers: agent_vault/**, install.py, templates/**, skills/**, agent_vault/githooks/**, .github/**; verified: 2026-10-01 -->
+<!-- covers: agent_vault/**, install.py, templates/**, skills/**, agent_vault/githooks/**, .github/**; verified: 2026-10-09 -->
 - `agent_vault/`: everything copied to `~/.claude/agent-vault/`. `agent_vault/lib.py` holds the schema and shared helpers; `agent_vault/vault.py` is the CLI; `agent_vault/github.py` is the only place that runs `gh` and `git` (`AGENT_VAULT_GH` overrides where `gh` is found); `agent_vault/claudemd.py` lints `CLAUDE.md` (paths, commands, covers globs, size cap, the `Lint:` line and staleness; `vault.py claudemd-lint` runs it; `vault.py lint` runs it and then the repo's declared `Lint:` command); `agent_vault/hooks/` holds the Claude Code hooks.
 - `agent_vault/hooks/push_guard.py`: user-level guard for the Bash and PowerShell tools (no pushes to main, no `--no-verify`, no `gh issue create` or `gh issue new` aimed at a registered repo: issues go through `vault.py issue create` with a placement flag (`--feature`, `--parent`, `--standalone` or `--bug`); and in a registered repo nothing that removes a feature's `feature` label or a sub-issue link: the user does that by hand on GitHub).
 - `install.py`: idempotent installer; owns only settings entries whose command contains `/.claude/agent-vault/`; writes the vault path, its own Python (`python`) and the CLI permission to `~/.claude/agent-vault.json`.
@@ -31,14 +31,14 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`. `tests/fake_gh.py` stands in for `gh` (`AGENT_VAULT_GH`); tests never touch GitHub. `tests/helpers.py`'s `restore_or_build` and `tests/test_github.py`'s `snapshot` build a repeated setup once per process and copy it per test.
 
 ## Conventions
-<!-- covers: agent_vault/**; verified: 2026-10-08 -->
+<!-- covers: agent_vault/**; verified: 2026-10-09 -->
 - Standard library only; Python 3.9+; must run on Windows.
 - Scripts find the vault through `~/.claude/agent-vault.json` (`lib.VAULT`); `AGENT_VAULT_CONFIG` overrides it. With no config, the CLI exits with an error (except `lint`, which reads nothing from the vault) and Claude hooks exit 0 silently.
 - Hooks never write `__pycache__` (`sys.dont_write_bytecode`), never block a session from starting, and report blocks with exit code 2 and a message on stderr.
 - All note rules live as constants in `agent_vault/lib.py`; `vault.py schema` prints them from there.
 
 ## Gotchas
-<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-10-08 -->
+<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-10-09 -->
 - Hook commands are absolute forward-slash paths to the installer's Python (`sys.executable`) and the script, so they don't depend on PATH or how the Windows hook runner expands `$HOME`. `lib.CLI` builds the same string at runtime; the vault's `Bash(...)` permission must match it exactly.
 - `.gitattributes` pins LF endings: a CRLF `agent_vault/githooks/pre-push` fails in bash and blocks every push.
 - `agent_vault/hooks/push_guard.py` tokenizes quote-aware and treats heredoc bodies as data; add a test case for every new command shape it must handle. Its `gh issue create` rule reads the vault config, so those tests must pass a temp config (`AGENT_VAULT_CONFIG`) or they read the real machine's.
