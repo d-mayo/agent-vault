@@ -189,7 +189,8 @@ against a draft the user hasn't approved.
 Once sealed, tell the user how to start implementation: a fresh session on
 Sonnet inside the repo clone (a new git worktree instead, if the clone is
 already on another issue's branch), then "implement #<issue>" (the
-`implement-story` skill). This skill never creates the branch itself.
+`implement-story` skill). This skill never creates the branch itself. Send
+the push notification here, naming `implement #<issue>` as the next stage.
 
 ## Stop and ask if
 

@@ -166,7 +166,8 @@ Once every step is committed:
    next command's clean-tree check fail. End it with a "Left open" list of
    the minor findings still open, for the user to decide. Open the PR:
    `vault.py open-pr <repo> <issue> --body-file <file>`. `Closes #<issue>` is
-   added automatically.
+   added automatically. Then send the push notification: the user reviews the
+   PR and runs `retro #<issue>` next.
 7. Leave the impl note `status: open`; it's sealed later, by the retro.
 
 ## No-PR plan
@@ -187,7 +188,8 @@ review and no pull request. `branch` and `open-pr` refuse such an issue.
    `## Verification`, and anything worth the retro under `## Discoveries`.
    Skip the diff review: there is no diff.
 4. Leave the impl note `status: open`, and tell the user the next step is
-   the retro (`retro #<issue>`), whose sealing closes the issue.
+   the retro (`retro #<issue>`), whose sealing closes the issue, and send the
+   push notification naming `retro #<issue>` as the next stage.
 
 ## Address PR review
 
@@ -216,7 +218,8 @@ Asked to act on review comments for an issue that already has an open PR
    `## Verification` (`- PR review <k>: R<n>-R<n2>` or `- PR review <k>: no
    findings`); its rounds are counted separately from **Finish**'s, starting
    again at 1.
-4. Push the branch.
+4. Push the branch, then send the push notification: the user should
+   re-review the PR next.
 5. Leave the impl note open; don't reseal or reopen anything else.
 
 ## Stop and ask if

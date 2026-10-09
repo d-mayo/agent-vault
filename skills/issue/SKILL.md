@@ -113,7 +113,8 @@ Before drafting, decide where the issue belongs.
    goes into the repo you name).
 3. If it refuses the body, it names each problem: fix those, show the user
    the changed wording again, and put it to the approval prompt again before retrying.
-4. Report the issue URL, the last line the command prints.
+4. Report the issue URL, the last line the command prints, then send the push
+   notification: the next stage is to plan the issue.
 
 ## Stop and ask if
 

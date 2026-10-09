@@ -226,7 +226,8 @@ references) before creating it, and ask the approval prompt for each.
    the issue with the closing comment and seals, committing nothing. For
    any other it merges the PR (checks passed,
    head matching) and leaves the clone on the default branch, up to date.
-   Once sealed it closes a finished feature, as `closes-feature` said.
+   Once sealed it closes a finished feature, as `closes-feature` said. Then
+   send the push notification: the user starts the next issue.
 
 ## Backfill (a closed issue with no retro yet)
 

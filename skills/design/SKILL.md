@@ -230,7 +230,9 @@ design:
 5. Finish with `vault.py design stories <design>`: it should show the feature
    and every story filed under it. Report any story still "not filed" and why
    (a new project with no repo yet, or one the user chose to hold back), and
-   any story marked as not under the feature.
+   any story marked as not under the feature. Then send the push notification:
+   the next stage is to plan a story (or, when no story was filed, which
+   stories wait and why).
 
 ## Filing later
 
@@ -241,7 +243,8 @@ when every story is already filed (it attaches them). Then, for each story it
 shows as "not filed", draft, show, get approval for and create the issue
 exactly as in File the stories, with `--parent`, then run the command again.
 Nothing refuses to continue while stories are unfiled; this skill is how they
-get filed.
+get filed. When the command shows the stories filed, send the push
+notification, naming a story to plan next (or which stories wait and why).
 
 ## Stop and ask if
 
