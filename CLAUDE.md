@@ -6,7 +6,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 
 ## Commands
 <!-- covers: install.py, tests/**; verified: 2026-10-08 -->
-- Run tests: `python -m unittest discover -s tests -t .` (stdlib only, but the tests need `ruff` on your PATH; pytest also works)
+- Run tests: `python -m unittest discover -s tests -t .` (stdlib only, but the tests need `ruff` on your PATH; pytest also works). It runs the test classes in parallel worker processes (`tests/parallel.py`); setting AGENT_VAULT_TESTS_SERIAL to 1 runs it all in one process, and AGENT_VAULT_TESTS_WORKERS to a number sets the worker count (default: the CPU count, at most the number of classes)
 - Lint: `ruff check .`
 - Install locally: `python install.py --vault <path to Notes>`
 - CLI after install: `<installer's python> ~/.claude/agent-vault/vault.py <command>`; the exact string (which the vault's permission rule matches) is lib.CLI, printed by the installer and written into the vault's CLAUDE.md.
@@ -28,7 +28,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - Designs (`Agent/Designs/<project>/`): a draft until `vault.py seal design` records its decisions, promotes its ideas and seals it; a sealed design is never edited (a later one `extends` or `replaces` it). The guard blocks the edit tools on a sealed one and the Stop hook fingerprints it; `vault.py design stories` shows which stories have no issue yet.
 - `agent_vault/githooks/pre-push`: blocks pushes to `main` and bad branch names, and runs `vault.py lint` on any push that creates or updates a branch. The one copy: this repo's `core.hooksPath` points at it, and `repo-init` points other repos at the installed `~/.claude/agent-vault/githooks/`.
 - `.github/ISSUE_TEMPLATE/issue.md`: the GitHub issue template for this repo, identical to what `repo-init` writes (generated from `lib.ISSUE_SECTIONS`; a test keeps them equal).
-- `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`. `tests/fake_gh.py` stands in for `gh` (`AGENT_VAULT_GH`); tests never touch GitHub.
+- `tests/`: unittest suites; hooks and the CLI are run as subprocesses with `AGENT_VAULT_CONFIG`. `tests/fake_gh.py` stands in for `gh` (`AGENT_VAULT_GH`); tests never touch GitHub. `tests/helpers.py`'s `restore_or_build` and `tests/test_github.py`'s `snapshot` build a repeated setup once per process and copy it per test.
 
 ## Conventions
 <!-- covers: agent_vault/**; verified: 2026-10-08 -->
@@ -44,3 +44,4 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - `agent_vault/hooks/push_guard.py` tokenizes quote-aware and treats heredoc bodies as data; add a test case for every new command shape it must handle. Its `gh issue create` rule reads the vault config, so those tests must pass a temp config (`AGENT_VAULT_CONFIG`) or they read the real machine's.
 - The pre-push hook is one shared file, so it takes Python from the `python` field of the config (never `PATH`) and runs the vault CLI script next to its own folder; with either missing it refuses the push and says to rerun `install.py`.
 - Remote tools can't write `~/.claude/` folders; only `install.py`, run on the PC, can.
+- Test classes run at the same time, so a test must not share any path or state outside its own temp folder (no fixed temp names, no writes under the repo or `~`); a repeated setup is copied per test, never shared.

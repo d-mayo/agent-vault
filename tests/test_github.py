@@ -1,15 +1,17 @@
 """Git and GitHub commands (#4). Real git runs against temporary repos with a local bare
 remote; `gh` is tests/fake_gh.py, selected by AGENT_VAULT_GH. Nothing here touches GitHub."""
+import atexit
 import datetime as dt
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.helpers import CODE, REPO, make_vault, run_py, tmpdir, write_config
+from tests.helpers import CODE, REPO, copy_scenario, make_vault, run_py, tmpdir, write_config
 
 sys.path.insert(0, str(CODE))
 import github  # noqa: E402
@@ -85,6 +87,74 @@ def git(*args, cwd, check=True):
     return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True, text=True).stdout.strip()
 
 
+class Scenario:
+    """GhCase's setup, built once per process: a vault with project `widgets`, a clone whose
+    origin points at a local bare remote, and the fake-gh state. Each test gets its own copy."""
+
+    def __init__(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        vault = make_vault(self.root)
+        cfg = write_config(self.root, vault)
+        state_path = self.root / "gh.json"
+        bare = self.root / "remote.git"
+        clone = self.root / "clone"
+        (self.root / "empty-gitconfig").write_text("", encoding="utf-8")
+        with mock.patch.dict(os.environ, scenario_env(self.root)):
+            git("init", "-q", "--bare", "-b", "main", str(bare), cwd=self.root)
+            git("init", "-q", "-b", "main", str(clone), cwd=self.root)
+            for k, v in (("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")):
+                git("config", k, v, cwd=clone)
+            git("config", f"url.{bare.as_posix()}.insteadOf", f"https://github.com/{SLUG}.git", cwd=clone)
+            git("remote", "add", "origin", f"https://github.com/{SLUG}.git", cwd=clone)
+            (clone / "README.md").write_text("hi\n", encoding="utf-8")
+            git("add", ".", cwd=clone)
+            git("commit", "-q", "-m", "init", cwd=clone)
+            git("push", "-q", "origin", "main", cwd=clone)
+            state = {"repos": {SLUG: {
+                "default_branch": "main", "head_sha": git("rev-parse", "HEAD", cwd=clone), "labels": ["bug"],
+                "settings": {"allow_squash_merge": True, "allow_merge_commit": True,
+                             "allow_rebase_merge": True, "delete_branch_on_merge": False},
+                "refuse_settings": False, "branches": [], "prs": [], "bare": str(bare),
+                "compare": {"total_commits": 0, "files": []},
+                "issues": {"7": {"state": "OPEN", "title": TITLE, "created": CREATED, "body_edited": None,
+                                 "renamed": None, "labels": []}},
+                "created_prs": [], "created_issues": [], "next_number": 20}}, "calls": []}
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            r = run_py(VAULT_PY, ("new", "project", "widgets", "--repo", SLUG), config=cfg, cwd=clone)
+            assert r.returncode == 0, r.stdout + r.stderr
+
+
+def scenario_env(root: Path) -> dict:
+    return {"GIT_CONFIG_GLOBAL": str(root / "empty-gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
+            "AGENT_VAULT_GH": str(FAKE_GH), "FAKE_GH_STATE": str(root / "gh.json")}
+
+
+_scenario = None
+_snapshots = {}
+
+
+def _unlock(func, path, _exc):
+    os.chmod(path, 0o700)
+    func(path)
+
+
+class _Snapshot:
+    def __init__(self, root):
+        self._t = tmpdir()
+        atexit.register(self._t.cleanup)
+        self.root = Path(self._t.name)
+        copy_scenario(root, self.root)
+
+
+def scenario() -> Scenario:
+    global _scenario
+    if _scenario is None:
+        _scenario = Scenario()
+        atexit.register(_scenario._t.cleanup)
+    return _scenario
+
+
 class GhCase(unittest.TestCase):
     """A vault with project `widgets` (repo acme/widget), a clone whose origin looks like the
     GitHub URL but really points at a local bare remote, and a fake gh."""
@@ -92,42 +162,44 @@ class GhCase(unittest.TestCase):
     def setUp(self):
         self._t = tmpdir()
         self.root = Path(self._t.name)
-        self.vault = make_vault(self.root)
-        self.cfg = write_config(self.root, self.vault)
+        copy_scenario(scenario().root, self.root)
+        self.vault = self.root / "Notes"
+        self.cfg = self.root / "agent-vault.json"
         self.state_path = self.root / "gh.json"
         self.bare = self.root / "remote.git"
         self.clone = self.root / "clone"
-        empty = self.root / "empty-gitconfig"
-        empty.write_text("", encoding="utf-8")
-        patch = mock.patch.dict(os.environ, {
-            "GIT_CONFIG_GLOBAL": str(empty), "GIT_CONFIG_NOSYSTEM": "1",
-            "AGENT_VAULT_GH": str(FAKE_GH), "FAKE_GH_STATE": str(self.state_path)})
+        patch = mock.patch.dict(os.environ, scenario_env(self.root))
         patch.start()
         self.addCleanup(patch.stop)
         self.addCleanup(self._t.cleanup)
+        self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self._pristine = self.fingerprint()
 
-        git("init", "-q", "--bare", "-b", "main", str(self.bare), cwd=self.root)
-        git("init", "-q", "-b", "main", str(self.clone), cwd=self.root)
-        for k, v in (("user.name", "t"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")):
-            git("config", k, v, cwd=self.clone)
-        git("config", f"url.{self.bare.as_posix()}.insteadOf", f"https://github.com/{SLUG}.git", cwd=self.clone)
-        git("remote", "add", "origin", f"https://github.com/{SLUG}.git", cwd=self.clone)
-        (self.clone / "README.md").write_text("hi\n", encoding="utf-8")
-        git("add", ".", cwd=self.clone)
-        git("commit", "-q", "-m", "init", cwd=self.clone)
-        git("push", "-q", "origin", "main", cwd=self.clone)
+    def fingerprint(self):
+        """Names, sizes and times of every file in the test's folder except git's object stores."""
+        out = []
+        for path in sorted(self.root.rglob("*")):
+            parts = path.relative_to(self.root).parts
+            if path.is_file() and "objects" not in parts:
+                st = path.stat()
+                out.append((parts, st.st_size, st.st_mtime_ns))
+        return out
 
-        self.state = {"repos": {SLUG: {
-            "default_branch": "main", "head_sha": git("rev-parse", "HEAD", cwd=self.clone), "labels": ["bug"],
-            "settings": {"allow_squash_merge": True, "allow_merge_commit": True,
-                         "allow_rebase_merge": True, "delete_branch_on_merge": False},
-            "refuse_settings": False, "branches": [], "prs": [], "bare": str(self.bare),
-            "compare": {"total_commits": 0, "files": []},
-            "issues": {"7": {"state": "OPEN", "title": TITLE, "created": CREATED, "body_edited": None,
-                             "renamed": None, "labels": []}},
-            "created_prs": [], "created_issues": [], "next_number": 20}}, "calls": []}
-        self.save()
-        self.ok(self.cli("new", "project", "widgets", "--repo", SLUG))
+    def snapshot(self, key, build):
+        """Run `build()`, or, when nothing has changed this test's folder since setUp or the last
+        snapshot, copy the folder as an earlier `build()` left it, saved under `key`."""
+        saved = _snapshots.get(key)
+        clean = self.fingerprint() == self._pristine
+        if saved is not None and clean:
+            for child in self.root.iterdir():
+                shutil.rmtree(child, onerror=_unlock) if child.is_dir() else child.unlink()
+            copy_scenario(saved.root, self.root)
+        else:
+            build()
+            if saved is None and clean:
+                _snapshots[key] = saved = _Snapshot(self.root)
+        self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self._pristine = self.fingerprint()
 
     # --- helpers ---
     def save(self):
@@ -453,9 +525,13 @@ FULL_README_AUDIT = "- Overview: confirmed â€” still true\n- Usage: confirmed â€
 
 class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
     def prep(self, plan=SEALED_PLAN):
+        self.name = "feat/7-add-widget-frobbing"
+        self.snapshot(("retro", plan), lambda: self.build_prep(plan))
+        self.retro = self.note("retro")
+
+    def build_prep(self, plan):
         self.sealed(plan)
         self.ok(self.branch())
-        self.name = "feat/7-add-widget-frobbing"
         (self.clone / "CLAUDE.md").write_text(CLAUDE_MD, encoding="utf-8", newline="\n")
         (self.clone / "README.md").write_text(README_MD, encoding="utf-8", newline="\n")
         git("add", "CLAUDE.md", "README.md", cwd=self.clone)
@@ -463,7 +539,6 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         git("push", "-q", "origin", self.name, cwd=self.clone)
         self.ok(self.cli("open-pr", "widget", "7"))
         self.ok(self.cli("new", "retro", "widget", "7"))
-        self.retro = self.note("retro")
 
     def drop_readme(self):
         (self.clone / "README.md").unlink()
@@ -986,6 +1061,11 @@ class NoPrRetroTest(GhCase):  # T6, T7 -> AC6, AC7
     COMMENT = "Done in the vault.\nSecond line."
 
     def prep(self, plan=NO_PR_PLAN, comment=COMMENT):
+        self.snapshot(("no-pr-retro", plan, comment), lambda: self.build_prep(plan, comment))
+        self.retro = self.note("retro")
+        self.head = git("rev-parse", "HEAD", cwd=self.clone)
+
+    def build_prep(self, plan, comment):
         self.sealed(plan)
         (self.clone / "CLAUDE.md").write_text(CLAUDE_MD, encoding="utf-8", newline="\n")
         (self.clone / "README.md").write_text(README_MD, encoding="utf-8", newline="\n")
@@ -1550,13 +1630,16 @@ class DuoCase(GhCase):
 
     def setUp(self):
         super().setUp()
+        self.path = self.vault / "Agent" / "Designs" / "duo" / f"{self.NAME}.md"
+        self.snapshot("duo", self.build_duo)
+
+    def build_duo(self):
         self.ok(self.cli("new", "project", "duo", "--repo", "acme/duo-a", "--repo", "acme/duo-b"))
         stories = ("### S1. Build it\nOutcome: x.\nDepends on: None\nRepo: duo-a\n\n"
                    "### S2. Ship it\nOutcome: y.\nDepends on: S1\nRepo: duo-b")
         body = ("# Pair\n\n## Problem\np\n\n## Goals\ng\n\n## Non-goals\nn\n\n## Ideas\nNone\n\n"
                 "## Options considered\no\n\n## Chosen design\nc\n\n## Decisions\n"
                 "### D1. Pair up\nDecision: d.\nWhy: w.\n\n## Stories\n" + stories + "\n\n## Open questions\nNone\n")
-        self.path = self.vault / "Agent" / "Designs" / "duo" / f"{self.NAME}.md"
         self.path.parent.mkdir(parents=True)
         self.path.write_text(f"---\ntype: design\nproject: duo\nstatus: draft\ncreated: 2026-09-26\n---\n{body}",
                              encoding="utf-8", newline="\n")
@@ -1625,8 +1708,11 @@ class DesignStoriesTest(DuoCase):  # T7 -> AC7
 class FeatureCreateTest(DuoCase):  # T2-T4 -> AC1-AC3
     def setUp(self):
         super().setUp()
-        self.seal()
         self.url_a = "https://github.com/acme/duo-a/issues"
+        self.snapshot("feature-create", self.build)
+
+    def build(self):
+        self.seal()
         self.add_issue("acme/duo-a", 1, "OPEN", self.source(f"[[{self.NAME}]] S1"))
         self.add_issue("acme/duo-b", 2, "OPEN", self.source(f"[[{self.NAME}]] S2"),
                        parent="https://github.com/acme/duo-b/issues/9")
@@ -1714,7 +1800,7 @@ class FeatureCreateTest(DuoCase):  # T2-T4 -> AC1-AC3
 class ParentTest(DuoCase):  # T5 -> AC4
     def setUp(self):
         super().setUp()
-        self.seal()
+        self.snapshot("parent", self.seal)
 
     def feature(self, n=30, source=None, state="OPEN", slug="acme/duo-a", label=True):
         body = self.source(source if source is not None else f"[[{self.NAME}]]")
@@ -1899,3 +1985,44 @@ class FeaturesTest(DuoCase):  # T6, T7 -> AC5, AC6
         out = self.ok(self.cli("design", "stories", self.NAME)).stdout
         self.assertIn("no feature yet", out)
         self.assertNotIn("not under", out)
+
+
+class ScenarioCopyTest(GhCase):  # T1 -> AC3
+    prep = SealRetroTest.prep
+    build_prep = SealRetroTest.build_prep
+    fill_retro = SealRetroTest.fill_retro
+    record = SealRetroTest.record
+
+    def assert_state_is_the_file(self):
+        self.assertEqual(self.state, json.loads(self.state_path.read_text(encoding="utf-8")))
+
+    def test_every_absolute_path_points_into_this_tests_folder(self):
+        self.assertNotEqual(self.root, scenario().root)
+        self.assertTrue(json.loads(self.cfg.read_text(encoding="utf-8"))["vault"].startswith(self.root.as_posix()))
+        self.assert_state_is_the_file()
+        self.assertEqual(Path(self.state["repos"][SLUG]["bare"]), self.bare)
+        rule = git("config", "--get-regexp", r"^url\..*\.insteadof$", cwd=self.clone)
+        self.assertIn(self.bare.as_posix(), rule)
+        self.assertEqual(git("ls-remote", "origin", "main", cwd=self.clone).split()[0],
+                         git("rev-parse", "HEAD", cwd=self.clone))
+
+    def damaged_prep(self):
+        self.prep()
+        self.assert_state_is_the_file()
+        self.assertEqual(len(self.state["repos"][SLUG]["created_prs"]), 1)
+        self.assertTrue(self.retro.is_file())
+        self.assertTrue((self.clone / "README.md").is_file())     # the earlier test's damage is not here
+        (self.clone / "README.md").unlink()
+        (self.vault / "Agent" / "Daily").mkdir(parents=True, exist_ok=True)
+
+    def test_a_prepared_copy_has_its_state_and_the_pr_a(self):
+        self.damaged_prep()
+
+    def test_a_prepared_copy_has_its_state_and_the_pr_b(self):
+        self.damaged_prep()
+
+    def test_a_decision_added_before_prep_gets_the_full_prep(self):
+        self.record("Old rule", "session")
+        self.prep()
+        self.assertEqual(len(list((self.vault / "Agent" / "Decisions" / "widgets").glob("*.md"))), 1)
+        self.assertTrue(self.retro.is_file())

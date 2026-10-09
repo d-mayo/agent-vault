@@ -2,8 +2,10 @@
 on PATH, because a test runs `ruff check .` over the repo."""
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,3 +39,44 @@ def run_py(script: Path, args=(), stdin: dict | str | None = None, config: Path 
 
 def tmpdir() -> tempfile.TemporaryDirectory:
     return tempfile.TemporaryDirectory()
+
+
+def copy_scenario(src: Path, dst: Path) -> None:
+    """Copy a prepared scenario folder to `dst` and point every absolute path in it at `dst`.
+
+    Text files outside git's object stores (the config, the fake-gh state file, a clone's
+    `.git/config`, vault notes) have `src` replaced by `dst`, in native, posix and JSON-escaped
+    spelling."""
+    shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
+    pairs = []
+    for fmt in (lambda p: str(p), lambda p: p.as_posix(), lambda p: json.dumps(str(p))[1:-1]):
+        old, new = fmt(src).encode(), fmt(dst).encode()
+        if old not in [o for o, _ in pairs]:
+            pairs.append((old, new))
+    for path in dst.rglob("*"):
+        if not path.is_file() or "objects" in path.relative_to(dst).parts or path.name == "index":
+            continue
+        data = path.read_bytes()
+        out = data
+        for old, new in pairs:
+            out = out.replace(old, new)
+        if out != data:
+            path.write_bytes(out)
+
+
+_SNAPSHOTS: dict = {}
+
+
+def restore_or_build(key, root: Path, build) -> None:
+    """Build a test's scenario in `root` with `build()` the first time `key` is seen in this
+    process and keep a copy; later calls copy that scenario over `root` instead, with every
+    absolute path rewritten. `root` must hold only what `build()` starts from (same each time)."""
+    saved = _SNAPSHOTS.get(key)
+    if saved is None:
+        build()
+        keep = tempfile.TemporaryDirectory()
+        atexit.register(keep.cleanup)
+        copy_scenario(root, Path(keep.name))
+        _SNAPSHOTS[key] = keep
+    else:
+        copy_scenario(Path(saved.name), root)

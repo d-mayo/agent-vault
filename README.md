@@ -58,7 +58,7 @@ Windows pip's `Scripts` folder (for the Microsoft Store Python,
 ```bash
 ruff check .                                  # the lint alone
 python ~/.claude/agent-vault/vault.py lint    # claudemd-lint, then the repo's Lint: command
-python -m unittest discover -s tests -t .     # the tests; they need ruff on PATH too
+python -m unittest discover -s tests -t .     # the tests, classes in parallel; ruff on PATH too (AGENT_VAULT_TESTS_SERIAL=1: one process)
 ```
 
 The pre-push hook runs `vault.py lint` before any push that creates or updates a branch, and

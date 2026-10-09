@@ -12,7 +12,7 @@ from unittest import mock
 
 import sys
 
-from tests.helpers import CODE, REPO, make_vault, run_py, tmpdir, write_config
+from tests.helpers import CODE, REPO, make_vault, restore_or_build, run_py, tmpdir, write_config
 
 sys.path.insert(0, str(CODE))
 import lib  # noqa: E402
@@ -365,6 +365,9 @@ class LogTest(CliCase):
 class DecisionAddTest(CliCase):                                    # T4, T5 -> AC3, AC4 (#36)
     def setUp(self):
         super().setUp()
+        restore_or_build("decision-add", self.root, self.build)
+
+    def build(self):
         self.project("demo", "me/demo")
         self.project("other")
 
@@ -509,6 +512,9 @@ class DesignCase(CliCase):
 
     def setUp(self):
         super().setUp()
+        restore_or_build("design-case", self.root, self.build)
+
+    def build(self):
         self.project("demo", "me/demo")
         self.project("other", "me/other")
         self.cli("decision", "add", "demo", "First", "--decision", "One.", "--why", "Because.", "--source", "session")
