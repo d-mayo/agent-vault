@@ -627,7 +627,7 @@ class PlacementDocsTest(unittest.TestCase):  # T6 -> AC6 (#57)
                 text = text.split('"""')[1]
             for item in self.items(text, docstring):
                 for sentence in self.sentences(item):
-                    for m in re.finditer(r"(?<!gh )(issue create|idea promote)", sentence):
+                    for m in re.finditer(r"(?<!gh )(issue create|idea promote)\b", sentence):
                         with self.subTest(file=path.name, sentence=sentence[:90]):
                             self.assertTrue(any(f in sentence for f in self.FLAGS), sentence)
 
