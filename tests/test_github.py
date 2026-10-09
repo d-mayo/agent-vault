@@ -1136,6 +1136,8 @@ class StageTest(GhCase):  # T5 -> AC5
 
 class PromoteTest(GhCase):  # T4 -> AC4 (T6 -> AC6, AC11 before #27)
     def promote(self, name, *extra, body=None):
+        if not any(f in extra for f in ("--parent", "--standalone", "--bug")):
+            extra += ("--standalone",)
         return self.cli("idea", "promote", name, "--body-file", body or self.body_file(), *extra)
 
     def test_promotes_into_the_projects_single_repo(self):
@@ -1189,6 +1191,8 @@ class PromoteTest(GhCase):  # T4 -> AC4 (T6 -> AC6, AC11 before #27)
 
 class IssueCreateTest(GhCase):  # T2, T3 -> AC2, AC3
     def create(self, *extra, repo="widget", title="feat: frob", body=None):
+        if not any(f in extra for f in ("--feature", "--parent", "--standalone", "--bug")):
+            extra += ("--standalone",)
         return self.cli("issue", "create", repo, "--title", title, "--body-file", body or self.body_file(), *extra)
 
     def test_creates_the_issue_with_the_files_text(self):
@@ -1718,7 +1722,7 @@ class ParentTest(DuoCase):  # T5 -> AC4
 
     def create(self, *parent, repo="duo-a", source="session"):
         return self.cli("issue", "create", repo, "--title", "A story", "--body-file",
-                        self.body_file(self.source(source)), *parent)
+                        self.body_file(self.source(source)), *(parent or ("--standalone",)))
 
     def created(self, slug="acme/duo-a"):
         self.load()
@@ -1776,6 +1780,78 @@ class ParentTest(DuoCase):  # T5 -> AC4
         self.feature(31, source="session")
         self.refuses(self.create("--parent", "31", source=f"[[{self.NAME}]] S1"), "no feature yet",
                      f"--feature {self.NAME}")
+
+
+class PlacementTest(DuoCase):  # T1, T2, T3 -> AC1, AC2, AC3 (#57)
+    def create(self, *flags, source="session", repo="duo-a"):
+        return self.cli("issue", "create", repo, "--title", "An issue", "--body-file",
+                        self.body_file(self.source(source)), *flags)
+
+    def writes(self):
+        return [c for c in self.calls("issue") + self.calls("label") if c[1] in ("create", "edit")]
+
+    def made(self):
+        self.load()
+        return self.state["repos"].get("acme/duo-a", {}).get("created_issues", [])
+
+    def test_exactly_one_placement_flag_is_required(self):    # T1
+        for flags, words in (((), ("--feature", "--parent", "--standalone", "--bug")),
+                             (("--standalone", "--bug"), ("--standalone", "--bug")),
+                             (("--parent", "30", "--standalone"), ("--parent", "--standalone"))):
+            r = self.create(*flags)
+            self.assertEqual(r.returncode, 2, r.stderr)
+            for w in words:
+                self.assertIn(w, r.stderr)
+        self.assertEqual(self.writes(), [])
+
+    def test_promote_needs_one_of_three_and_has_no_feature_flag(self):    # T1
+        name = self.idea("--project", "duo")
+        body = self.body_file(self.source("session"))
+        r = self.cli("idea", "promote", name, "--repo", "duo-a", "--body-file", body)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        for w in ("--parent", "--standalone", "--bug"):
+            self.assertIn(w, r.stderr)
+        r = self.cli("idea", "promote", name, "--repo", "duo-a", "--body-file", body, "--standalone", "--feature", "x")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("unrecognized", r.stderr)
+        self.assertEqual(self.writes(), [])
+        self.assertIn("status: open", (self.vault / "Agent" / "Ideas" / name).read_text(encoding="utf-8"))
+
+    def test_standalone_and_bug_labels(self):    # T2
+        self.ok(self.create("--standalone"))
+        args = self.calls("issue", "create")[0]
+        self.assertNotIn("--parent", args)
+        self.assertNotIn("--label", args)
+        self.ok(self.create("--bug"))
+        args = self.calls("issue", "create")[1]
+        self.assertEqual(args[args.index("--label") + 1], "bug")
+        self.assertNotIn("--parent", args)
+        self.assertEqual(len(self.calls("label", "create")), 1)
+        self.ok(self.create("--bug"))
+        self.assertEqual(len(self.calls("label", "create")), 1)    # exists now: not created again
+
+    def test_with_an_idea_or_promote(self):    # T2
+        for flag in ("--bug", "--standalone"):
+            name = self.idea("--project", "duo")
+            self.ok(self.cli("idea", "promote", name, "--repo", "duo-a", flag,
+                             "--body-file", self.body_file(self.source("session"))))
+            self.assertIn("status: promoted", (self.vault / "Agent" / "Ideas" / name).read_text(encoding="utf-8"))
+        self.assertEqual([m["label"] for m in self.made()], ["bug", None])
+        name = self.idea("--project", "duo")
+        r = self.cli("issue", "create", "duo-a", "--title", "T", "--idea", name, "--bug",
+                     "--body-file", self.body_file(self.source("session")))
+        self.ok(r)
+        self.assertEqual(self.made()[-1]["label"], "bug")
+
+    def test_a_story_is_refused_without_a_parent(self):    # T3
+        self.seal()
+        for source in (f"[[{self.NAME}]] S1", "[[no-such-design]] S2"):
+            for flag in ("--standalone", "--bug"):
+                self.refused(self.create(flag, source=source), "--parent", "feature")
+        self.assertEqual(self.writes(), [])
+        self.add_issue("acme/duo-a", 30, "OPEN", self.source(f"[[{self.NAME}]]"), labels=["feature"])
+        self.refused(self.create("--parent", "30", source="[[no-such-design]] S2"), "no-such-design")
+        self.assertEqual(self.writes(), [])
 
 
 class FeaturesTest(DuoCase):  # T6, T7 -> AC5, AC6

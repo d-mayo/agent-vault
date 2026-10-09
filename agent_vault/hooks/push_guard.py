@@ -330,6 +330,7 @@ def check_command(command: str, cwd: str | None, depth: int = 0) -> None:
                 import lib
                 block("create issues with the issue template, not `gh issue create`: "
                       f"{lib.CLI} issue create <repo> --title \"...\" --body-file <file> "
+                      "(--feature <design> | --parent <ref> | --standalone | --bug) "
                       "(the `issue` skill drafts it).")
             removes, repo = feature_link_removal(seg)
             if removes and issue_target_registered(repo, env_repo, cwd):

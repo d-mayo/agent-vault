@@ -131,13 +131,14 @@ until a later PR issue's retro confirms them.
 1. Sort every impl-note discovery, every review finding the impl note
    records as `→ left open`, and every open point the audit raised into
    exactly one of:
-   - `- issue #<n> created`: draft the issue in the template `vault.py
-     schema` prints (its "Issue body" line), with `retro <repo>#<issue>`
-     under `Source`; show the user the exact title and body, and only after
-     they approve that wording write the body to a temporary file outside
-     the clone and the vault and run `vault.py issue create <repo> --title "<title>"
-     --body-file <file>`. If it refuses the body, fix what it names and get
-     approval of the changed wording again.
+   - `- issue #<n> created`: draft it in the `vault.py schema` template, `retro <repo>#<issue>` under
+     `Source`. Place it first: under the retro'd issue's feature (its parent, if an open feature) only
+     when it clearly continues that feature's work; a bug always `--bug`; else a match from `vault.py
+     features --project <id>`, or `--standalone`; another project's repo is never filed under this
+     feature. Show the exact title and body and the placement (under feature `<repo>#<n>`, standalone,
+     or standalone bug); once approved, write the body to a temp file outside the clone and vault, run
+     `vault.py issue create <repo> --title "<title>" --body-file <file> <placement>` (`--parent <ref>`,
+     `--standalone` or `--bug`), and if it refuses the body, fix that and get the new wording approved.
    - `- issue #<n> amended`: an existing issue with no sealed plan for
      it — check `Agent/Work/<repo>/<repo>-<n>-plan.md`'s `status:` in the
      vault (missing file, or `status: draft`, both count); an issue with a

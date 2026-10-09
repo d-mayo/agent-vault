@@ -38,6 +38,20 @@ never `owner/name`.
   the host and any trailing `.git` stripped, the part after the `/`) when
   it is registered; otherwise ask which repo.
 
+## Place
+
+Before drafting, decide where the issue belongs.
+
+1. Run `vault.py features --project <id>` (the repo's project) and read the
+   repo's open issues (`gh issue list --state open --repo <owner/name>`).
+2. Suggest the feature the issue plainly belongs to (its open `<repo>#<n>`),
+   or standalone, and say why. Ask the user whether it is a bug, in prose.
+3. The placement becomes one flag: `--parent <ref>` under that open feature,
+   `--standalone` under none, or `--bug` for a standalone issue labelled
+   `bug`. A design's story (a Source of `[[<design>]] S<n>`) is never filed
+   here: send the user to the design skill, which files it under its
+   design's feature.
+
 ## Draft
 
 1. Read the body template from `vault.py schema` (the "Issue body" line):
@@ -56,7 +70,8 @@ never `owner/name`.
 ## Approval
 
 1. Show the exact title and the exact body, as they will be posted, and
-   ask for approval of that wording.
+   name the placement: under feature `<repo>#<n>`, standalone, or
+   standalone bug. Ask for approval of that wording and placement.
 2. Change nothing until the user answers; if they ask for edits, redraft
    and show it again. Only an explicit approval of the shown wording counts.
 
@@ -64,8 +79,9 @@ never `owner/name`.
 
 1. Write the body to a temporary file outside the vault and the working
    tree (your scratchpad directory, for example).
-2. Run `vault.py issue create <repo> --title "<title>" --body-file <file>`,
-   adding `--idea <file>` when the issue comes from an idea (the CLI then
+2. Run `vault.py issue create <repo> --title "<title>" --body-file <file>
+   <placement>`, where `<placement>` is the approved flag (`--parent <ref>`,
+   `--standalone` or `--bug`), adding `--idea <file>` when the issue comes from an idea (the CLI then
    marks the idea promoted and logs it). The idea must be open; if it
    has a `project:`, that project must list the repo (an idea with none
    goes into the repo you name).
@@ -79,3 +95,5 @@ never `owner/name`.
   the issue belongs to.
 - The idea is not open, or belongs to a project that doesn't list the repo.
 - The user asks to change an existing issue instead of creating one.
+- The issue is a design's story (its Source names `[[<design>]] S<n>`):
+  point the user to the design skill instead.

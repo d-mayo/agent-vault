@@ -396,8 +396,20 @@ class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> 
                             "the exact title and the exact body", "explicit approval",
                              "vault.py issue create", "--idea", "## stop and ask if")
 
+    def test_places_the_issue_before_drafting(self):  # T4 -> AC4 (#57)
+        self.assertMentions("vault.py features --project <id>", "gh issue list", "whether it is a bug",
+                            "--standalone", "--bug", "--parent", "name the placement",
+                            "design skill", "never filed here")
+
     def test_never_runs_gh_issue_create_or_edits_an_issue(self):  # AC5
         self.assertMentions("## never", "never run `gh issue create`", "never edit an existing issue")
+
+    def test_retro_and_plan_story_place_follow_ups(self):  # T5 -> AC5 (#57)
+        self.assertMentions("the retro'd issue's feature", "clearly continues", "`--bug`",
+                            "vault.py features --project <id>", "`--standalone`", "another project's repo",
+                            "<placement>", text=read("retro", "SKILL.md"))
+        self.assertMentions("the `issue` skill does this and decides the placement",
+                            text=read("plan-story", "SKILL.md"))
 
     def test_retro_and_plan_story_create_issues_only_through_the_command(self):  # AC6
         for name in ("retro", "plan-story"):
@@ -567,13 +579,67 @@ class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#3
 
     def test_docs_name_features(self):                                # T12 -> AC11 (#56)
         guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
-        self.assertMentions("--feature", "--parent <n>|<repo>#<n>]` (creates", "{{CLI}} features", "no feature yet",
+        self.assertMentions("--feature", "--standalone | --bug)` (creates", "{{CLI}} features", "no feature yet",
                             "the `planned`, `feature` and `bug` labels", text=guide)
         self.assertMentions("--feature", "--parent", "vault.py features", text=(REPO / "CLAUDE.md").read_text(encoding="utf-8"))
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         self.assertMentions("2.94.0", text=readme.split("## Install")[1].split("## Git conventions")[0])
         self.assertMentions("--feature", "--parent", "under its feature issue",
                             text=readme.split("## Git conventions")[1])
+
+
+class PlacementDocsTest(unittest.TestCase):  # T6 -> AC6 (#57)
+    FLAGS = ("--feature", "--parent", "--standalone", "--bug")
+    ITEM_START = re.compile(r"\s*(- |\d+\. )")
+
+    @staticmethod
+    def items(text, docstring=False):
+        out, cur = [], []
+        for ln in text.splitlines():
+            boundary = (not ln.strip() or PlacementDocsTest.ITEM_START.match(ln)
+                        or (docstring and re.match(r"  \w", ln)))
+            if boundary and cur:
+                out.append(" ".join(cur))
+                cur = []
+            if ln.strip():
+                cur.append(ln.strip())
+        return out + [" ".join(cur)] if cur else out
+
+    @staticmethod
+    def sentences(item):
+        out, start, ticks = [], 0, False
+        for i, ch in enumerate(item):
+            if ch == "`":
+                ticks = not ticks
+            elif ch == "." and not ticks and item[i + 1:i + 2] == " ":
+                out.append(item[start:i + 1])
+                start = i + 2
+        return out + [item[start:]]
+
+    def test_every_mention_shows_a_placement_flag(self):
+        sources = [(REPO / "templates" / "vault-CLAUDE.md", False), (REPO / "README.md", False),
+                   (REPO / "CLAUDE.md", False)]
+        sources += [(p, False) for p in sorted(SKILLS_DIR.glob("*/SKILL.md"))]
+        sources += [(REPO / "agent_vault" / "vault.py", True)]
+        for path, docstring in sources:
+            text = path.read_text(encoding="utf-8")
+            if docstring:
+                text = text.split('"""')[1]
+            for item in self.items(text, docstring):
+                for sentence in self.sentences(item):
+                    for m in re.finditer(r"(?<!gh )(issue create|idea promote)\b", sentence):
+                        with self.subTest(file=path.name, sentence=sentence[:90]):
+                            self.assertTrue(any(f in sentence for f in self.FLAGS), sentence)
+
+    def test_help_lists_standalone_and_bug(self):
+        for cmd in (["issue", "create"], ["idea", "promote"]):
+            import contextlib
+            import io
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+                vault.build_parser().parse_args([*cmd, "--help"])
+            for flag in ("--standalone", "--bug"):
+                self.assertIn(flag, out.getvalue())
 
 
 class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
