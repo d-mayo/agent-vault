@@ -672,8 +672,39 @@ def cmd_seal_retro(args) -> None:
           f"on {lib.rel(project_path)}" + (f"; bumped verified on: {', '.join(bumped)}" if bumped else "")
           + (f"; merged PR #{pr}" if merging else "")
           + (f"; closed issue #{args.issue}" if no_pr and not closed else ""))
+    close_finished_feature(index, args.repo, slug, args.issue, info)
     if merging:
         sync_default_branch(top, default, pr)
+
+
+def feature_close_comment(feature: dict, slug: str, issue: str) -> str:
+    ref = f"#{issue}" if slug.lower() == feature["slug"].lower() else f"{slug}#{issue}"
+    return (f"Closed by the retro of {ref}: every story of this feature's design is filed, "
+            "and none of its sub-issues is open.")
+
+
+def close_finished_feature(index: lib.Index, repo: str, slug: str, issue: str, info: dict) -> None:
+    """After `seal retro` has sealed the notes: close the issue's parent feature if it is finished (#59 D2, D3).
+    Never dies: whatever fails is a warning with the command to run by hand."""
+    try:
+        feature, _ = feature_to_close(index, slug, issue, info)
+    except github.CmdError as e:
+        print(f"warning: couldn't check whether the feature is finished: {e.stderr or e}\n"
+              f"  run `vault.py closes-feature {repo} {issue}` to see whether it should be closed",
+              file=sys.stderr)
+        return
+    if not feature:
+        return
+    comment = feature_close_comment(feature, slug, issue)
+    try:
+        github.close_issue(feature["slug"], feature["number"], comment)
+    except github.CmdError as e:
+        print(f"warning: feature {feature['slug']}#{feature['number']} is finished but was not closed: "
+              f"{e.stderr or e}\n  close it by hand:\n"
+              f"  gh issue close {feature['number']} --repo {feature['slug']} --reason completed "
+              f'--comment "{comment}"', file=sys.stderr)
+        return
+    print(f"closed feature {feature['slug']}#{feature['number']}: {feature['title']}")
 
 
 def cmd_claudemd_lint(args) -> None:
