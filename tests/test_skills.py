@@ -701,6 +701,30 @@ class PlacementDocsTest(unittest.TestCase):  # T6 -> AC6 (#57)
                 self.assertIn(flag, out.getvalue())
 
 
+class StepsOnlyRouteTest(AssertMentionsMixin, unittest.TestCase):  # T1 -> AC12 (#78)
+    def setUp(self):
+        self.text = read("implement-story", "SKILL.md")
+        m = re.search(r"^## Steps only\n(.*?)(?=^## |\Z)", self.text, re.S | re.M)
+        self.assertIsNotNone(m, "implement-story has no '## Steps only' section")
+        self.section = m.group(1)
+
+    def test_route_is_named_in_which_procedure_applies(self):
+        m = re.search(r"^## Which procedure applies\n(.*?)(?=^## |\Z)", self.text, re.S | re.M)
+        self.assertIn("Steps only", m.group(1))
+
+    def test_section_content(self):
+        self.assertMentions("Where **Start** or **Resume** would go on to **Finish**",
+                            "return the question as your final report", "`vault.py lint`",
+                            "no review, open no PR", "no push notification",
+                            "three-bullet rule doesn't apply", "fix each in its own commit",
+                            text=self.section)
+
+    def test_still_no_approval_prompt_outside_shared_section(self):
+        shared = re.search(r"^## Approvals, pings and the closing summary\n(.*?)(?=^## |\Z)",
+                           self.text, re.S | re.M).group(1)
+        self.assertNotIn("the approval prompt", self.text.replace(shared, ""))
+
+
 class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
     def test_plan_story_declares_it(self):
         self.assertMentions("pr: none", "Files:", "whether the issue ends in a pull request",
