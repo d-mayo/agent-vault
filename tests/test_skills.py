@@ -780,6 +780,19 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
         self.assertEqual(PIPELINE_SKILLS, ["implement-story", "plan-story", "retro", "issue", "design"])
 
 
+class HandoffDocsTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC14 (#78)
+    def test_claude_md_bullet(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        bullet = next(ln for ln in text.splitlines() if ln.startswith("- `skills/handoff/`"))
+        self.assertMentions("doesn't carry the shared approvals section", "five pipeline skills",
+                            text=bullet)
+
+    def test_guide_line(self):
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        line = next(ln for ln in guide.splitlines() if "handoff #<issue>" in ln)
+        self.assertMentions("opus", "repo clone", text=line)
+
+
 class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
     def test_plan_story_declares_it(self):
         self.assertMentions("pr: none", "Files:", "whether the issue ends in a pull request",
