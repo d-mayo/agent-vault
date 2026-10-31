@@ -49,6 +49,8 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Which procedure applies
 
+- The request says "Steps only" (an orchestrating session's implementer): go to
+  **Steps only**.
 - The sealed plan's frontmatter says `pr: none`: go to **No-PR plan**.
 - The impl note already has a `pr:`, or the request is about review comments
   or requested changes rather than implementing: go to **Address PR review**.
@@ -185,6 +187,25 @@ Once every step is committed:
    added automatically. Then send the push notification: the user reviews the
    PR and runs `retro #<issue>` next.
 7. Leave the impl note `status: open`; it's sealed later, by the retro.
+
+## Steps only
+
+Used only when the request says "Steps only": a calling session (such as a
+handoff run) implements the steps through this skill and runs the Finish
+itself. Nobody is here to answer, so this route asks no one.
+
+1. Run **Start** and **Per step** as usual (preflight, branch, then each
+   step's commit). Where **Start** or **Resume** would go on to **Finish**,
+   stop there instead.
+2. At a stop-and-ask, return the question as your final report and stop,
+   instead of asking the user. The caller answers by resuming you.
+3. Once every step is committed, run `vault.py lint` (fix a failure as Finish
+   step 1 does) and return a report to the caller: one line per step with its
+   commit, the deviations recorded, and anything for `## Discoveries`. Start
+   no review, open no PR, write no `Review` lines and send no push
+   notification. The closing three-bullet rule doesn't apply to this report.
+4. Resumed with review findings or a failure (a full-check or lint failure),
+   fix each in its own commit, run `vault.py lint` and report the shas.
 
 ## No-PR plan
 
