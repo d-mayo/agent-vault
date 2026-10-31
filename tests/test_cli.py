@@ -796,10 +796,27 @@ class V1RemovedTest(CliCase):
         text = TEMPLATE.read_text(encoding="utf-8")
         for word in ("Notes/", "Intake", "Archive/", "Archive`"):
             self.assertNotIn(word, text)
-        for word in ("Projects/", "Work/", "Ideas/", "Daily/", "{{CLI}} idea add", "{{CLI}} handoff pull",
+        for word in ("Projects/", "Work/", "Ideas/", "Daily/", "{{CLI}} idea add", "{{CLI}} phone pull",
                      "{{CLI}} new plan"):
             self.assertIn(word, text)
         self.assertFalse(re.search(r"new daily|--goal", text))
+        self.assertIn("{{CLI}} phone list", text)
+        self.assertNotIn("handoff pull", text)
+        self.assertNotIn("handoff list", text)
+
+    def test_no_leftover_handoff_command_names(self):             # T5 -> AC6
+        roots = [REPO / "agent_vault", REPO / "templates", REPO / ".github"]
+        files = [REPO / "CLAUDE.md", REPO / "README.md", REPO / "install.py"]
+        for root in roots:
+            files += [p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+        for p in files:
+            text = p.read_text(encoding="utf-8")
+            for word in ("handoff list", "handoff pull", "HANDOFF_LOG"):
+                self.assertNotIn(word, text, f"{word} in {p}")
+            if p.name != "install.py":
+                self.assertNotIn("handoff-log", text, f"handoff-log in {p}")
+        self.assertIn("phone log", (REPO / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("phone log", (REPO / "install.py").read_text(encoding="utf-8").split('"""')[1])
 
 
 class IssueDocsTest(CliCase):                                     # T11 -> AC11 (#27)

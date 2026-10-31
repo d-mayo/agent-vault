@@ -2,7 +2,7 @@
 
 This vault has two sides.
 
-- **Phone side**: everything outside `Agent/`, including `taxonomy.json`. It's my phone capture system. Read it freely; never change it. To act on a phone note, pull it in with `{{CLI}} handoff pull "<path>"`; that creates an idea.
+- **Phone side**: everything outside `Agent/`, including `taxonomy.json`. It's my phone capture system. Read it freely; never change it. To act on a phone note, pull it in with `{{CLI}} phone pull "<path>"`; that creates an idea.
 - **`Agent/`**: your workspace.
   - `Projects/<id>.md`: one overview note per project; it lists the project's GitHub repos in `repos:`.
   - `Work/<repo>/<repo>-<n>-plan.md`, `-impl.md`, `-retro.md`: one set per GitHub issue.
@@ -39,7 +39,7 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what 
 - `{{CLI}} issue create <repo> --title "..." --body-file <file> [--idea <file>] (--feature <design> | --parent <n>|<repo>#<n> | --standalone | --bug)`: the one way to create a GitHub issue, and exactly one placement flag is required; `--feature <design>` files the sealed design's feature issue (label `feature`) and attaches its filed stories as sub-issues, `--parent` files the issue under an open feature, `--standalone` files it under none with no label, `--bug` files a standalone issue labelled `bug`; refuses a body that isn't the issue template (`{{CLI}} schema` lists its sections), and only after I approve the exact title and body
 - `{{CLI}} decision add <project> "<title>" --decision "..." --why "..." --source "plan <repo>#<n> D<k> | design <design> D<k> | issue <repo>#<n> | retro <repo>#<n> | session" [--replaces <record>]`: with `{{CLI}} seal design <design>`, the only way to write a decision record; it also rewrites the project note's `Standing decisions` (generated, never hand-edited). `{{CLI}} decisions [--project <id>] [--all]` lists the active records (`--all`: superseded too).
 - `{{CLI}} ideas [--project <id>] [--status open]` lists ideas; `{{CLI}} ideas review` lists open ideas older than 90 days.
-- `{{CLI}} handoff list` and `{{CLI}} handoff pull "<path>" [--project <id>]`
+- `{{CLI}} phone list` and `{{CLI}} phone pull "<path>" [--project <id>]`
 - `{{CLI}} log "<text>" [--project <id>]`
 
 `{{CLI}} lint` (run inside a clone) runs `claudemd-lint` and then the repo's declared `Lint:` command; it fails rather than skip a missing tool. `{{CLI}} schema` prints the full note rules. `{{CLI}} status` lists projects and the open idea count. `{{CLI}} validate` checks everything.

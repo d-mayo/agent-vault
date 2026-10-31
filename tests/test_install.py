@@ -85,6 +85,8 @@ class InstallTest(unittest.TestCase):
         claude_md = (self.vault / "CLAUDE.md").read_text()
         self.assertIn("/.claude/agent-vault/vault.py", claude_md)
         self.assertNotIn("{{CLI}}", claude_md)
+        self.assertIn("phone pull", claude_md)                           # T5 -> AC5
+        self.assertNotIn("handoff pull", claude_md)
         # v1 migration: code gone, phone log kept
         self.assertFalse((self.vault / "Agent" / "_system").exists())
         self.assertIn("a.md", (self.vault / "Agent" / ".phone-log.json").read_text())
