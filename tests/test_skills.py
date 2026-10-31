@@ -29,7 +29,10 @@ SKILLS = {
     "retro": (r"retro (#\d|issue \d)", None),
     "issue": (r"file an issue for", None),
     "design": (r"design a \.\.\.", "design-reviewer.md"),
+    "handoff": (r"handoff #\d", None),
 }
+# the five skills that carry the shared approvals section (handoff is an orchestrator, not one)
+PIPELINE_SKILLS = [s for s in SKILLS if s != "handoff"]
 
 
 def read(skill: str, name: str) -> str:
@@ -725,6 +728,58 @@ class StepsOnlyRouteTest(AssertMentionsMixin, unittest.TestCase):  # T1 -> AC12 
         self.assertNotIn("the approval prompt", self.text.replace(shared, ""))
 
 
+class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-AC13 (#78)
+    def setUp(self):
+        self.skill = read("handoff", "SKILL.md")
+
+    def test_description_triggers(self):  # T2
+        desc = frontmatter(self.skill)["description"].lower()
+        self.assertRegex(desc, r"handoff #\d")
+        self.assertIn("several issues", desc)
+        self.assertIn("feature", desc)
+
+    def test_scan_and_order(self):  # T3
+        self.assertMentions("vault.py design stories", "other open sub-issues in issue-number order",
+                            "unfiled stories", "never file them", "skip closed issues",
+                            "retro is sealed", "upfront scan", "user decision", "one story at a time",
+                            "only after the previous one has merged", "contradicts a later issue",
+                            "stop and ask")
+
+    def test_planning(self):  # T4
+        self.assertMentions("without asking for approval", "still runs on opus",
+                            "skip plan-story's handoff push notification",
+                            "never edit or create a github issue on your own", "`pr: none`",
+                            "stop and ask")
+
+    def test_implementation_and_review(self):  # T5
+        self.assertMentions('model: "sonnet"', "steps only route", "`sendmessage`",
+                            "only if that implementer can't be resumed", "answer it if you are sure",
+                            "model can't be chosen", "`reviewer.md`", "`review <k>:`", "`r<n>`",
+                            "`full check:` failures and lint failures", "at most two reviews",
+                            "`vault.py open-pr`", "sending no push notification")
+
+    def test_retro(self):  # T6
+        self.assertMentions("an idea or dropped", "never into a created or amended issue",
+                            "lasting decisions", "drop ideas the issue resolved",
+                            "`vault.py closes-feature", "feature-close warning",
+                            "`gh pr checks <pr> --watch`", "`vault.py seal retro", "without approval",
+                            "stop and ask")
+
+    def test_pings_reports_resume(self):  # T7
+        self.assertMentions("push notification", "when the run ends", "`- handed off: <run>`",
+                            "`gh pr comment`", "before sealing", "decisions made without the user",
+                            "deviations", "left-open findings", "questions asked",
+                            "combined report", "retro sealed or issue closed", "has a `pr:`",
+                            "plan sealed", "plan still a draft", "no plan yet",
+                            "asks them again")
+        self.assertNotIn("the approval prompt", self.skill)
+
+    def test_no_desktop_tools_and_pipeline_set(self):  # T8
+        for bad in ("start_session", "mcp__ccd", "AskUserQuestion"):
+            self.assertNotIn(bad, self.skill)
+        self.assertEqual(PIPELINE_SKILLS, ["implement-story", "plan-story", "retro", "issue", "design"])
+
+
 class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
     def test_plan_story_declares_it(self):
         self.assertMentions("pr: none", "Files:", "whether the issue ends in a pull request",
@@ -776,9 +831,9 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
         return m.group(1)
 
     def test_section_identical_and_right_after_never(self):               # T1
-        sections = {s: self.collapse(self.section(s, self.HEADING)) for s in SKILLS}
+        sections = {s: self.collapse(self.section(s, self.HEADING)) for s in PIPELINE_SKILLS}
         self.assertEqual(len(set(sections.values())), 1, "the five copies differ")
-        for skill in SKILLS:
+        for skill in PIPELINE_SKILLS:
             headings = re.findall(r"^## (.*)$", read(skill, "SKILL.md"), re.M)
             self.assertEqual(headings[headings.index("Never") + 1], self.HEADING, skill)
 
