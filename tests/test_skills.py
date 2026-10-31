@@ -766,10 +766,14 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
                             "stop and ask")
 
     def test_pings_reports_resume(self):  # T7
-        self.assertMentions("push notification", "when the run ends", "`- handed off: <run>`",
-                            "`gh pr comment`", "before sealing", "decisions made without the user",
-                            "deviations", "left-open findings", "questions asked",
-                            "combined report", "retro sealed or issue closed", "has a `pr:`",
+        self.assertMentions("first send a push notification", "naming what you need",
+                            "send one more push notification when the run ends",
+                            "these are the only pings", "stage-end pings of the skills followed here are skipped",
+                            "`- handed off: <run>`", "combined report")
+        retro = self.skill.split("## Retro", 1)[1].split("## Asking the user", 1)[0]
+        self.assertMentions("`gh pr comment`", "before sealing", "decisions made without the user",
+                            "deviations", "left-open findings", "questions asked", text=retro)
+        self.assertMentions("retro sealed or issue closed", "has a `pr:`",
                             "plan sealed", "plan still a draft", "no plan yet",
                             "asks them again")
         self.assertNotIn("the approval prompt", self.skill)
