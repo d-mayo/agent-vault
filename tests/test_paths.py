@@ -40,16 +40,24 @@ class PathsTest(unittest.TestCase):
         self.assertIn("Vault check: OK", r.stdout)
         self.assertTrue(list((self.vault / "Agent" / "Daily").glob("*.md")))
 
-    def test_handoff_log_location(self):
+    def test_phone_log_location(self):
         (self.vault / "Agent").mkdir()
-        (self.vault / "Agent" / ".handoff-log.json").write_text('{"Ideas.md": "2026-09-26"}\n')
+        (self.vault / "Agent" / ".phone-log.json").write_text('{"Ideas.md": "2026-09-26"}\n')
         (self.vault / "Ideas.md").write_text("an idea\n")
-        r = run_py(CLI, ["handoff", "list"], config=self.cfg)
+        r = run_py(CLI, ["phone", "list"], config=self.cfg)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("no phone-side notes waiting", r.stdout)
         r = run_py(HOOKS / "guard.py", config=self.cfg, stdin={
             "tool_name": "Edit", "cwd": str(self.vault), "tool_input": {"file_path": "Ideas.md"}})
         self.assertEqual(r.returncode, 2)
+
+    def test_old_handoff_log_is_not_read(self):
+        (self.vault / "Agent").mkdir()
+        (self.vault / "Agent" / ".handoff-log.json").write_text('{"Ideas.md": "2026-09-26"}\n')
+        (self.vault / "Ideas.md").write_text("an idea\n")
+        r = run_py(CLI, ["phone", "list"], config=self.cfg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Ideas.md", r.stdout)
 
 
 if __name__ == "__main__":

@@ -26,8 +26,8 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   decisions [--project <id>] [--all]
   ideas [--project <id>] [--status open|promoted|dropped]
   ideas review
-  handoff list
-  handoff pull "<phone path>" [--project <id>]
+  phone list
+  phone pull "<phone path>" [--project <id>]
   log "what happened" [--project <id>]
   repo-init <path>
   claudemd-lint [<repo path>]
@@ -1264,7 +1264,7 @@ def unique_idea_path(title: str) -> Path:
 
 
 def add_idea(title: str, source: str, project: str | None, context: str = "") -> Path:
-    """Create an idea note and log `idea-added`; shared by `idea add` and `handoff pull`."""
+    """Create an idea note and log `idea-added`; shared by `idea add` and `phone pull`."""
     title = lib.safe_title(one_line(title))
     path = unique_idea_path(title)
     commit_note(path, idea_note(title, source, project, context))
@@ -1666,10 +1666,10 @@ def cmd_log(args) -> None:
     print(f"logged to {lib.rel(path)}: {entry}")
 
 
-# --- handoff ---------------------------------------------------------------------
-def load_handoffs() -> dict:
+# --- phone ------------------------------------------------------------------------
+def load_pulled() -> dict:
     try:
-        return json.loads(lib.read_text(lib.HANDOFF_LOG))
+        return json.loads(lib.read_text(lib.PHONE_LOG))
     except Exception:
         return {}
 
@@ -1685,8 +1685,8 @@ def phone_notes() -> list[Path]:
     return sorted(out, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def cmd_handoff_list(_args) -> None:
-    done = load_handoffs()
+def cmd_phone_list(_args) -> None:
+    done = load_pulled()
     pending = [p for p in phone_notes() if lib.rel(p) not in done]
     if not pending:
         print("no phone-side notes waiting")
@@ -1697,7 +1697,7 @@ def cmd_handoff_list(_args) -> None:
         print(f"... and {len(pending) - 25} more")
 
 
-def cmd_handoff_pull(args) -> None:
+def cmd_phone_pull(args) -> None:
     index = lib.Index()
     require_project(index, args.project)
     given = Path(args.path)
@@ -1712,13 +1712,13 @@ def cmd_handoff_pull(args) -> None:
     if any(x.startswith(".") for x in parts) or parts == ["claude.md"]:
         die(f"'{args.path}' is not a phone-side note")
     rel_path = Path(os.path.relpath(os.path.realpath(src), os.path.realpath(VAULT))).as_posix()
-    done = load_handoffs()
+    done = load_pulled()
     if rel_path in done:
         die(f"'{rel_path}' was already pulled (idea {done[rel_path].get('idea', '?') if isinstance(done[rel_path], dict) else done[rel_path]})")
     title = lib.safe_title(Path(rel_path).stem)
     idea = add_idea(title, f"phone:{rel_path}", args.project, f"From [[{Path(rel_path).stem}]]")
     done[rel_path] = {"idea": idea.stem, "pulled": lib.today().isoformat()}
-    lib.write_text(lib.HANDOFF_LOG, json.dumps(done, indent=2, ensure_ascii=False) + "\n")
+    lib.write_text(lib.PHONE_LOG, json.dumps(done, indent=2, ensure_ascii=False) + "\n")
     print(f"pulled {rel_path} -> {lib.rel(idea)}")
 
 
@@ -1901,13 +1901,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project")
     p.set_defaults(fn=cmd_log)
 
-    hand = sub.add_parser("handoff", help="list or pull phone-side notes").add_subparsers(
+    phone = sub.add_parser("phone", help="list or pull phone-side notes").add_subparsers(
         dest="action", required=True, metavar="list|pull")
-    hand.add_parser("list").set_defaults(fn=cmd_handoff_list)
-    p = hand.add_parser("pull")
+    phone.add_parser("list").set_defaults(fn=cmd_phone_list)
+    p = phone.add_parser("pull")
     p.add_argument("path")
     p.add_argument("--project")
-    p.set_defaults(fn=cmd_handoff_pull)
+    p.set_defaults(fn=cmd_phone_pull)
 
     for name, fn in (("validate", cmd_validate), ("status", cmd_status), ("schema", cmd_schema)):
         sub.add_parser(name).set_defaults(fn=fn)

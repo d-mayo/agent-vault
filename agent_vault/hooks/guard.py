@@ -4,7 +4,7 @@ and decides by the target path alone, because the vault can be edited from anywh
 Exit code 2 blocks the tool call and shows stderr to Claude.
 Blocked:
   - the phone side (anything in the vault outside Agent/, CLAUDE.md and .claude/):
-    phone notes enter via `vault.py handoff pull`;
+    phone notes enter via `vault.py phone pull`;
   - .obsidian/ (Obsidian's own config);
   - the installed code in ~/.claude/agent-vault/ and the vault's CLAUDE.md: both are
     written by install.py from the repo;
@@ -70,7 +70,7 @@ def main() -> None:
         block("that's Obsidian's own config. Ask the user to change it in Obsidian.")
     if parts[0] != agent:
         block("the phone side of the vault (everything outside Agent/) is read-only. "
-              f"To act on a phone note, run: {CLI} handoff pull \"<path>\" [--project <id>]")
+              f"To act on a phone note, run: {CLI} phone pull \"<path>\" [--project <id>]")
 
     folder = parts[1] if len(parts) > 1 else ""
     if len(parts) == 1:

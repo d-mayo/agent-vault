@@ -225,7 +225,7 @@ class LayoutAndFrontmatterTest(VaultCase):
         self.assertTrue(self.problems("Agent/Ideas/x.md", idea).errors[0].startswith("[PATH-NAME]"))
 
     def test_dotfiles_ignored(self):
-        self.put("Agent/.handoff-log.json", "{}")
+        self.put("Agent/.phone-log.json", "{}")
         self.assertEqual(self.check(), ({}, {}))
 
     def test_frontmatter_cases(self):              # T4 -> AC4

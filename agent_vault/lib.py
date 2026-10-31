@@ -39,7 +39,7 @@ def _load_vault():
 VAULT = _load_vault()                      # vault root (Notes), or None
 AGENT = VAULT / "Agent" if VAULT else None
 
-HANDOFF_LOG = AGENT / ".handoff-log.json" if AGENT else None
+PHONE_LOG = AGENT / ".phone-log.json" if AGENT else None
 
 # --- Schema (design-v1.md §6-7) ----------------------------------------------
 TYPES = ["project", "plan", "impl", "retro", "idea", "decision", "design", "daily"]

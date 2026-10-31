@@ -126,7 +126,7 @@ class GuardTest(HookCase):  # T5 -> AC5, AC6, T12
 
     def test_phone_side(self):
         self.put(self.vault / "Inbox" / "idea.md", "x")
-        self.blocked(self.vault / "Inbox" / "idea.md", says="handoff pull")
+        self.blocked(self.vault / "Inbox" / "idea.md", says="phone pull")
         self.blocked(self.vault / "taxonomy.json", says="phone side")
         self.blocked(self.vault / "Inbox" / "new.md", says="phone side")
 
