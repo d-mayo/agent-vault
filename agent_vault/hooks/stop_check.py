@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import github  # noqa: E402
 import lib  # noqa: E402
 
-IGNORE = {".handoff-log.json"}
+IGNORE = {".phone-log.json"}
 MAX_LISTED = 10
 
 

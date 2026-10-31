@@ -299,7 +299,7 @@ class IdeasListTest(CliCase):
         self.assertIn("2026-01-01-broken", self.cli("ideas", "review").stdout)
 
 
-class HandoffTest(CliCase):
+class PhoneTest(CliCase):
     def setUp(self):
         super().setUp()
         self.project("demo", "me/demo")
@@ -307,7 +307,7 @@ class HandoffTest(CliCase):
         self.put("Inbox/Other.md", "more\n")
 
     def test_pull_creates_idea_and_log(self):             # T9 -> AC9
-        self.cli("handoff", "pull", "Inbox/Garden Plan.md", "--project", "demo")
+        self.cli("phone", "pull", "Inbox/Garden Plan.md", "--project", "demo")
         name = f"Ideas/{TODAY}-garden-plan.md"
         idea = self.text(name)
         self.assertIn("source: phone:Inbox/Garden Plan.md", idea)
@@ -315,32 +315,43 @@ class HandoffTest(CliCase):
         self.assertIn("[[Garden Plan]]", idea)
         self.assertIn(f"[[{TODAY}-garden-plan]]", self.text(f"Daily/{TODAY}.md"))
         self.assertIn("idea-added — Garden Plan", self.text(f"Daily/{TODAY}.md"))
-        log = json.loads(self.path(".handoff-log.json").read_text(encoding="utf-8"))
+        log = json.loads(self.path(".phone-log.json").read_text(encoding="utf-8"))
         self.assertIn("Inbox/Garden Plan.md", log)
         self.validate()
 
     def test_refusals(self):                              # T9 -> AC9
-        self.refused("handoff", "pull", "Agent/Projects/demo.md", why="only phone-side")
-        self.refused("handoff", "pull", "agent/projects/demo.md", why="only phone-side")
-        self.refused("handoff", "pull", "Inbox/Missing.md", why="not a file")
-        self.refused("handoff", "pull", "../elsewhere.md", why="outside the vault")
-        self.refused("handoff", "pull", "Inbox/Other.md", "--project", "ghost", why="does not exist")
-        self.cli("handoff", "pull", "Inbox/Other.md")
-        self.refused("handoff", "pull", "Inbox/Other.md", why="already pulled")
+        self.refused("phone", "pull", "Agent/Projects/demo.md", why="only phone-side")
+        self.refused("phone", "pull", "agent/projects/demo.md", why="only phone-side")
+        self.refused("phone", "pull", "Inbox/Missing.md", why="not a file")
+        self.refused("phone", "pull", "../elsewhere.md", why="outside the vault")
+        self.refused("phone", "pull", "Inbox/Other.md", "--project", "ghost", why="does not exist")
+        self.cli("phone", "pull", "Inbox/Other.md")
+        self.refused("phone", "pull", "Inbox/Other.md", why="already pulled")
         self.validate()
 
     def test_list_hides_pulled(self):                     # T9 -> AC9
-        out = self.cli("handoff", "list").stdout
+        out = self.cli("phone", "list").stdout
         self.assertIn("Inbox/Garden Plan.md", out)
         self.assertIn("Inbox/Other.md", out)
-        self.cli("handoff", "pull", "Inbox/Other.md")
-        out = self.cli("handoff", "list").stdout
+        self.cli("phone", "pull", "Inbox/Other.md")
+        out = self.cli("phone", "list").stdout
         self.assertIn("Inbox/Garden Plan.md", out)
         self.assertNotIn("Inbox/Other.md", out)
 
+    def test_handoff_command_is_gone_and_log_renamed(self):   # T1, T2
+        for args in (("handoff", "list"), ("handoff", "pull", "Inbox/Other.md")):
+            r = run_py(CLI, list(args), config=self.cfg)
+            self.assertEqual(r.returncode, 2, f"{args}: {r.stdout}{r.stderr}")
+        self.cli("phone", "pull", "Inbox/Other.md")
+        self.assertTrue(self.path(".phone-log.json").is_file())
+        self.assertFalse(self.path(".handoff-log.json").exists())
+        usage = CLI.read_text(encoding="utf-8").split('"""')[1]
+        self.assertIn('phone pull "<phone path>"', usage)
+        self.assertNotIn("handoff", usage)
+
     def test_absolute_path_is_accepted(self):             # T9 -> AC9
-        self.cli("handoff", "pull", str(self.vault / "Inbox" / "Other.md"))
-        self.assertIn("Inbox/Other.md", self.path(".handoff-log.json").read_text(encoding="utf-8"))
+        self.cli("phone", "pull", str(self.vault / "Inbox" / "Other.md"))
+        self.assertIn("Inbox/Other.md", self.path(".phone-log.json").read_text(encoding="utf-8"))
         self.validate()
 
 
@@ -693,7 +704,7 @@ class AllCommandsTest(CliCase):
         self.cli("idea", "add", "First", "--project", "demo")
         self.cli("idea", "add", "Second")
         self.cli("idea", "drop", f"{TODAY}-second", "--reason", "no")
-        self.cli("handoff", "pull", "Inbox/Phone.md")
+        self.cli("phone", "pull", "Inbox/Phone.md")
         self.cli("log", "wrapped up", "--project", "demo")
         self.validate()
 
@@ -785,10 +796,27 @@ class V1RemovedTest(CliCase):
         text = TEMPLATE.read_text(encoding="utf-8")
         for word in ("Notes/", "Intake", "Archive/", "Archive`"):
             self.assertNotIn(word, text)
-        for word in ("Projects/", "Work/", "Ideas/", "Daily/", "{{CLI}} idea add", "{{CLI}} handoff pull",
+        for word in ("Projects/", "Work/", "Ideas/", "Daily/", "{{CLI}} idea add", "{{CLI}} phone pull",
                      "{{CLI}} new plan"):
             self.assertIn(word, text)
         self.assertFalse(re.search(r"new daily|--goal", text))
+        self.assertIn("{{CLI}} phone list", text)
+        self.assertNotIn("handoff pull", text)
+        self.assertNotIn("handoff list", text)
+
+    def test_no_leftover_handoff_command_names(self):             # T5 -> AC6
+        roots = [REPO / "agent_vault", REPO / "templates", REPO / ".github"]
+        files = [REPO / "CLAUDE.md", REPO / "README.md", REPO / "install.py"]
+        for root in roots:
+            files += [p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+        for p in files:
+            text = p.read_text(encoding="utf-8")
+            for word in ("handoff list", "handoff pull", "HANDOFF_LOG"):
+                self.assertNotIn(word, text, f"{word} in {p}")
+            if p.name != "install.py":
+                self.assertNotIn("handoff-log", text, f"handoff-log in {p}")
+        self.assertIn("phone log", (REPO / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("phone log", (REPO / "install.py").read_text(encoding="utf-8").split('"""')[1])
 
 
 class IssueDocsTest(CliCase):                                     # T11 -> AC11 (#27)

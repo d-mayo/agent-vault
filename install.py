@@ -9,7 +9,7 @@ What it does:
      the ones older versions put in <vault>/.claude/settings.json. Only entries it created
      are replaced or removed; a .bak copy is written before any change.
   4. Writes <vault>/CLAUDE.md.
-  5. Deletes v1 code from <vault>/Agent/_system/ (the handoff log is kept).
+  5. Deletes v1 code from <vault>/Agent/_system/ (the phone log is kept).
   6. Points this repo's git hooks at agent_vault/githooks/ (main-branch protection); other repos
      get the installed copy in ~/.claude/agent-vault/githooks/ through `repo-init`.
 Hooks run with the Python that runs this installer. Standard library only.
@@ -146,20 +146,50 @@ def install_skills(claude: Path, report: list[str]) -> None:
         report.append(f"installed skill {skill.name}")
 
 
+def load_log(path: Path):
+    """The entries of a pulled-notes log, {} if the file is missing; None if it is unreadable."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def migrate_phone_log(vault: Path, report: list[str]) -> None:
+    """Carry Agent/.handoff-log.json over to Agent/.phone-log.json (the new log wins a conflict)."""
+    old, new = vault / "Agent" / ".handoff-log.json", vault / "Agent" / ".phone-log.json"
+    if not old.exists():
+        return
+    old_entries, new_entries = load_log(old), load_log(new)
+    if old_entries is None or new_entries is None:
+        bad = old if old_entries is None else new
+        report.append(f"warning: {bad} is unreadable; left {old} and {new} as they were")
+        return
+    write_if_changed(new, json.dumps({**old_entries, **new_entries}, indent=2, sort_keys=True) + "\n")
+    old.unlink()
+    report.append(f"moved the pulled-notes log {old} into {new}")
+
+
 def migrate_v1(vault: Path, report: list[str]) -> None:
     old = vault / "Agent" / "_system"
     if not old.exists():
         return
-    log, new_log = old / "handoff-log.json", vault / "Agent" / ".handoff-log.json"
+    log, new_log = old / "handoff-log.json", vault / "Agent" / ".phone-log.json"
     if log.exists():
         try:
             old_entries = json.loads(log.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as e:
             report.append(f"warning: {log} is unreadable ({e}); left v1 folder in place")
             return
-        merged = {**old_entries, **read_json(new_log)}
+        new_entries = load_log(new_log)
+        if new_entries is None:
+            report.append(f"warning: {new_log} is unreadable; left the v1 folder in place")
+            return
+        merged = {**old_entries, **new_entries}
         write_if_changed(new_log, json.dumps(merged, indent=2, sort_keys=True) + "\n")
-        report.append(f"handoff log kept at {new_log}")
+        report.append(f"phone log kept at {new_log}")
     try:
         rmtree(old)
         report.append(f"deleted v1 code from {old}")
@@ -194,6 +224,7 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
     managed_before = read_json(config_path).get("managed_allow", [])
     allow = [f"Bash({cli}:*)"]
 
+    migrate_phone_log(vault, report)
     copy_tree(REPO / "agent_vault", install_dir)
     report.append(f"installed code to {install_dir}")
     install_skills(claude, report)

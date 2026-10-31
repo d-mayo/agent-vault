@@ -22,7 +22,7 @@ The installer is safe to rerun after every `git pull`. It:
   only ever replacing entries it created, backing the file up to `.bak` first, and removes
   the entries older versions put in `<vault>/.claude/settings.json`;
 - writes `<vault>/CLAUDE.md`;
-- deletes the v1 scripts from `<vault>/Agent/_system/` if they're still there (the handoff log is kept);
+- deletes the v1 scripts from `<vault>/Agent/_system/` if they're still there (the phone log is kept);
 - turns on this repo's git hooks (`agent_vault/githooks/`); other repos get the installed copy from `repo-init`.
 
 Hooks run with the same Python that ran the installer, so if you switch Python
