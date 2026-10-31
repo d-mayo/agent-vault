@@ -1,6 +1,6 @@
 ---
 name: implement-story
-description: 'Take a GitHub issue with a sealed agent-vault plan from its branch to an open pull request, or address PR review comments already requested on one. Implements step by step with one commit and the relevant tests per step, then one independent review of the whole diff at the end, keeps the impl note current, and resumes cleanly in a new session. Use for requests like "implement #9", "implement issue 9", "continue implementing agent-vault#9", or "address the review on #9".'
+description: 'Take a GitHub issue with a sealed agent-vault plan from its branch to an open pull request, or address PR review comments already requested on one. Implements step by step with one commit and the relevant tests per step, then one independent review of the whole diff at the end (re-reviews cover only the fixes), keeps the impl note current, and resumes cleanly in a new session. Use for requests like "implement #9", "implement issue 9", "continue implementing agent-vault#9", or "address the review on #9".'
 ---
 
 # implement-story
@@ -109,8 +109,9 @@ name (e.g. `agent-vault`), never `owner/name`.
 2. A step is done when its commit exists. Continue from the first step that
    has neither a commit nor a recorded deviation covering it. If every step
    is committed, go to **Finish**; its review rounds are counted from the
-   impl note's `## Verification` `Review <k>:` lines (`PR review <k>:` lines
-   belong to **Address PR review**).
+   impl note's `## Verification` `Review <k>:` lines, whose `(at <sha>)` is the
+   tip to scope the next re-review from (`PR review <k>:` lines belong to
+   **Address PR review**).
 
 ## Per step
 
@@ -137,23 +138,33 @@ Work through the plan's `## Steps` in order. For each step (numbered `<s>`):
 
 Once every step is committed:
 
-1. Run the plan's `Full check:` command, from its `## Tests` section, and
-   `vault.py lint` (`claudemd-lint`, then the repo's `Lint:` command). If
-   either fails, fix it first (a lint failure in its own commit), and record
-   what broke under `## Discoveries` (or as a deviation, if the fix touched
-   files beyond the step that broke it). Request no review while either fails.
-2. Review the whole diff, following `reviewer.md`'s "Prompt" section
-   (`git diff <base>..HEAD`, every acceptance criterion, the repo
-   `CLAUDE.md`). Record it under `## Verification` as `- Review <k>: R<n>-R<n2>`
-   or `- Review <k>: no findings`, and each finding under `## Review findings`,
+1. Run `vault.py lint` (`claudemd-lint`, then the repo's `Lint:` command). If
+   it fails, fix it first (a lint failure in its own commit), and record what
+   broke under `## Discoveries` (or as a deviation, if the fix touched files
+   beyond the step that broke it). Request no review while it fails.
+2. Start the plan's `Full check:` command (from its `## Tests` section) in
+   the background and the review at the same time, following `reviewer.md`'s
+   "Prompt" section (`git diff <base>..HEAD`, every acceptance criterion, the
+   repo `CLAUDE.md`). If the full check fails, the review's findings are
+   discarded: not recorded, and the round doesn't count; fix the failure
+   (record it as in step 1), then run `vault.py lint` and start both again.
+   Once both have finished, record the review under `## Verification` as
+   `- Review <k>: R<n>-R<n2> (at <sha>)` or `- Review <k>: no findings (at <sha>)`
+   (`<sha>` is the tip it reviewed), and each finding under `## Review findings`,
    numbered on from the highest existing `R<n>`:
    `- R<n> (major|minor): Review <k>: <finding> → fixed in <sha>`,
    `→ won't fix: <reason>`, or, for a minor one you're leaving, `→ left open`.
-3. Fix every `major` finding, each fix its own commit (no amending: the
-   whole diff is reviewed anyway), then re-run `Full check:` and `vault.py lint`, and review the
-   whole diff again (`Review <k+1>`). Repeat until a review has no major
-   finding. If the third review still has a major finding, stop and ask the
-   user; never start a fourth review.
+3. Only now fix every `major` finding, each fix its own commit (no amending),
+   then run `vault.py lint` and start the `Full check:` and a re-review
+   (`Review <k+1>`) at the same time. The re-review covers only the commits
+   since the last review: `git diff <reviewed>..HEAD`, where `<reviewed>` is
+   the `(at <sha>)` of the last `Review <k>:` line, with that review's major
+   findings and the whole diff as context. Skip the `Full check:` rerun if the
+   fix commits change no file it reads, and record
+   `- Full check skipped after <sha>: <reason>` under `## Verification`. There
+   are at most two reviews: if the second still has a major finding, stop and
+   ask the user; never start a third review. A commit after the last review
+   tip (e.g. a lint fix) gets a re-review within that cap, or stop and ask.
 4. Minor findings are not fixed here unless a major fix already touches
    them; record them as `→ left open`. The reviewer reports at most three.
 5. Fill in `## Verification` (each command you ran and what it showed,
@@ -207,17 +218,21 @@ Asked to act on review comments for an issue that already has an open PR
    in its own commit, or decline it with a reason. If one comment's fix
    touches several files or changes behaviour, tell the reviewer which
    commit to look at first; it gets no extra review.
-3. Run `Full check:` and `vault.py lint`, fixing failures first as in **Finish**
-   step 1; then review once, covering all the fixes: `git diff <tip>..HEAD`, where `<tip>`
+3. Run `vault.py lint`, then start the `Full check:` and the review at the
+   same time, covering all the fixes: `git diff <tip>..HEAD`, where `<tip>`
    is the branch tip before the first fix, with the request texts supplied
-   (see `reviewer.md`). Same rules as **Finish** step 3: fix every major
-   finding, re-run `Full check:` and `vault.py lint`, and review again, at most three reviews,
-   then stop and ask. Record each finding under `## Review findings` as
+   (see `reviewer.md`). The same rules as **Finish** steps 1-3 apply: a review
+   whose full check failed is discarded, no fix starts until both have
+   finished, and the `Full check:` rerun may be skipped and recorded. Fix every
+   major finding; a second review covers only the commits since the first
+   (with the first review's major findings and `git diff <tip>..HEAD` as
+   context), at most two reviews, then stop and ask; never start a third
+   review. Record each finding under `## Review findings` as
    `- R<n> (major|minor): PR review: <finding> → fixed in <sha>`,
    `→ won't fix: <reason>` or (minor only) `→ left open`, and the review under
-   `## Verification` (`- PR review <k>: R<n>-R<n2>` or `- PR review <k>: no
-   findings`); its rounds are counted separately from **Finish**'s, starting
-   again at 1.
+   `## Verification` (`- PR review <k>: R<n>-R<n2> (at <sha>)` or `- PR review <k>: no
+   findings (at <sha>)`); its rounds are counted separately from **Finish**'s,
+   starting again at 1.
 4. Push the branch, then send the push notification: the user should
    re-review the PR next.
 5. Leave the impl note open; don't reseal or reopen anything else.
@@ -232,5 +247,5 @@ Asked to act on review comments for an issue that already has an open PR
   silently fall back to reviewing on the implementer's own model.
 - A step's `Files:`/`Do:` doesn't match what the repo actually needs, beyond
   a small, worth-recording deviation.
-- The third review still has a major finding.
+- The second review still has a major finding.
 - A PR-review request conflicts with the plan or the acceptance criteria.

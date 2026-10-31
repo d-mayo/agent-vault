@@ -175,18 +175,42 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
             self.assertNotIn("step <s> reviewed", text.lower())
             self.assertNotIn("after every step", text.lower())
 
-    def test_single_end_review_with_three_round_limit(self):  # AC2, AC3
+    def test_single_end_review_with_two_round_limit(self):  # AC2, AC3
         self.assertMentions("`full check:`", "whole diff", "every acceptance criterion",
-                             "re-run `full check:`", "review the whole diff again",
-                             "third review still has a major finding, stop and ask",
-                             "never start a fourth review")
+                             "the second still has a major finding, stop and ask",
+                             "never start a third review")
+        self.assertMentions("up to two reviews", text=self.reviewer)
+        for text in (self.skill, self.reviewer):
+            for old in ("third review still has", "fourth review", "up to three reviews"):
+                self.assertNotIn(old, text.lower())
+
+    def test_re_reviews_cover_only_the_fixes(self):  # T1 -> AC1
+        self.assertMentions("(at <sha>)", "git diff <reviewed>..head", "a commit after the last review tip")
+        self.assertNotIn("review the whole diff again", self.skill.lower())
+        self.assertMentions("covers only the commits since the last review", "that review's major findings",
+                             "whole diff", "read-only context", "problems the fixes cause",
+                             "doesn't re-raise findings about unchanged code", text=self.reviewer)
+
+    def test_check_and_review_run_in_parallel(self):  # T3 -> AC3
+        text = re.sub(r"\s+", " ", self.skill)
+        finish = text[text.index("## Finish"):text.index("## Address PR review")]
+        for needle in ("at the same time", "discarded", "Only now fix every `major` finding",
+                       "Full check skipped after <sha>"):
+            self.assertIn(needle, finish)
+
+    def test_pr_review_second_review_covers_only_the_fixes(self):  # T4 -> AC4
+        text = re.sub(r"\s+", " ", self.skill)
+        pr_review = text[text.index("## Address PR review"):text.rindex("## Stop and ask if")]
+        for needle in ("covers only the commits since the first", "(at <sha>)", "never start a third review",
+                       "rules as **Finish** steps 1-3"):
+            self.assertIn(needle, pr_review)
 
     def test_minors_left_open_and_listed_in_the_pr(self):  # AC4
         self.assertMentions("→ left open", "\"left open\" list", "(major|minor)", "fixed in", "won't fix")
         self.assertMentions("every major finding and at most three minor", text=self.reviewer)
 
     def test_pr_review_fixes_get_one_review(self):  # AC5
-        self.assertMentions("review once, covering all the fixes", "pr review:", "`pr review <k>:`",
+        self.assertMentions("covering all the fixes", "pr review:", "`pr review <k>:`",
                              "starting again at 1")
 
     def test_deviations_and_stop_and_ask(self):  # AC5
@@ -200,10 +224,10 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
         text = re.sub(r"\s+", " ", self.skill)
         finish = text[text.index("## Finish"):text.index("## Address PR review")]
         pr_review = text[text.index("## Address PR review"):text.rindex("## Stop and ask if")]
-        self.assertEqual(finish.count("`vault.py lint`"), 2)           # first review and each re-review
-        self.assertLess(finish.index("`vault.py lint`"), finish.index("Review the whole diff"))
-        self.assertIn("Request no review while either fails", finish)
-        self.assertLess(pr_review.index("`vault.py lint`"), pr_review.index("review once"))
+        self.assertGreaterEqual(finish.count("`vault.py lint`"), 2)    # first review and each re-review
+        self.assertLess(finish.index("`vault.py lint`"), finish.index("Start the plan's"))
+        self.assertIn("Request no review while it fails", finish)
+        self.assertLess(pr_review.index("`vault.py lint`"), pr_review.index("at the same time"))
 
     def test_address_pr_review(self):  # AC7
         self.assertMentions("address pr review", "pr review:", "gh pr view", "--paginate",

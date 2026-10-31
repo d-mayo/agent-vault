@@ -1,8 +1,8 @@
 # implement-story reviewer
 
 The prompt `implement-story` sends to an independent reviewer subagent over
-the whole diff once all steps are committed (again after each round of fixes,
-up to three reviews), and once over all the fixes made while addressing PR
+the whole diff once all steps are committed (again after a round of fixes,
+up to two reviews), and once over all the fixes made while addressing PR
 review. The reviewer runs on a stronger model than the implementer (Opus),
 because judgment is where the stronger model pays off; the implementer's own
 session model is never switched.
@@ -24,8 +24,13 @@ Give the reviewer, verbatim and in full:
    at first if one fix is large.
 2. The plan's `## Acceptance criteria`.
 3. The repo's `CLAUDE.md`, in full.
-4. The diff: `git diff <base>..HEAD` for the end review, `git diff
-   <tip>..HEAD` (the branch tip before the first fix) for PR-review fixes.
+4. The diff: `git diff <base>..HEAD` for the first end review, `git diff
+   <tip>..HEAD` (the branch tip before the first fix) for PR-review fixes. A
+   re-review covers only the commits since the last review
+   (`git diff <reviewed>..HEAD`), with that review's major findings, whose
+   fixes it must check, and the whole diff (`git diff <base>..HEAD`) as
+   read-only context. It reports problems the fixes cause, anywhere in the
+   diff, and doesn't re-raise findings about unchanged code.
 5. The exact instructions under "Findings format" below — the severity
    definitions, the reporting limit and the requirement to answer with
    nothing but those lines.
@@ -68,6 +73,6 @@ of that, continuing the numbering already in the impl note's
 ```
 
 A review that comes back `No findings.` is recorded as a `## Verification`
-line (`- Review <k>: no findings`), not under `## Review findings`; the
-`Review <k>:` lines are also how a later session counts the rounds already
-used.
+line (`- Review <k>: no findings (at <sha>)`), not under `## Review findings`; the
+`Review <k>:` lines (each ends `(at <sha>)`, the tip reviewed) are also how a
+later session counts the rounds already used and scopes the next re-review.
