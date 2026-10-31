@@ -205,6 +205,22 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
                        "rules as **Finish** steps 1-3"):
             self.assertIn(needle, pr_review)
 
+    def test_known_test_failures_come_from_the_repo_gotchas(self):  # T5 -> AC5
+        text = re.sub(r"\s+", " ", self.skill)
+        per_step = text[text.index("## Per step"):text.index("## Finish")]
+        finish = text[text.index("## Finish"):text.index("## No-PR plan")]
+        for part in (per_step, finish):
+            self.assertIn("`Known test failures:`", part)
+            self.assertIn("`## Gotchas`", part)
+            self.assertIn("by name under `## Verification`", part)
+        self.assertIn("even one that only fails under load", per_step)
+
+    def test_repo_claude_md_describes_the_review_rules(self):  # T6 -> AC6
+        text = re.sub(r"\s+", " ", (REPO / "CLAUDE.md").read_text(encoding="utf-8"))
+        bullet = text[text.index("- `skills/implement-story/`"):text.index("- `skills/plan-story/`")]
+        for needle in ("Known test failures:", "at most two reviews", "re-reviews cover only the fixes"):
+            self.assertIn(needle, bullet)
+
     def test_minors_left_open_and_listed_in_the_pr(self):  # AC4
         self.assertMentions("→ left open", "\"left open\" list", "(major|minor)", "fixed in", "won't fix")
         self.assertMentions("every major finding and at most three minor", text=self.reviewer)

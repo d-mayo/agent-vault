@@ -127,7 +127,10 @@ Work through the plan's `## Steps` in order. For each step (numbered `<s>`):
    guessing past it.
 3. Run the tests relevant to this step (not necessarily the whole suite
    yet). If any fail, fix the step before committing — a failing test is
-   never part of a step's checkpoint commit.
+   never part of a step's checkpoint commit, except a failure listed on the
+   repo `CLAUDE.md`'s `Known test failures:` line under `## Gotchas`: record
+   it by name under `## Verification` and don't judge it again. Any other
+   failure blocks, even one that only fails under load.
 4. Commit: `<type>(<scope>): <step title> (#<issue>)` — `<type>` is one of
    `feat fix chore docs refactor test perf hotfix`, `<scope>` is the area the
    step touches, and `<step title>` is the step's own title. One commit per
@@ -145,7 +148,9 @@ Once every step is committed:
 2. Start the plan's `Full check:` command (from its `## Tests` section) in
    the background and the review at the same time, following `reviewer.md`'s
    "Prompt" section (`git diff <base>..HEAD`, every acceptance criterion, the
-   repo `CLAUDE.md`). If the full check fails, the review's findings are
+   repo `CLAUDE.md`). A full-check failure listed on the `Known test failures:`
+   line under `## Gotchas` doesn't count as failing (record it by name under
+   `## Verification`); any other failure does. If the full check fails, the review's findings are
    discarded: not recorded, and the round doesn't count; fix the failure
    (record it as in step 1), then run `vault.py lint` and start both again.
    Once both have finished, record the review under `## Verification` as
