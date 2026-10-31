@@ -85,10 +85,46 @@ class InstallTest(unittest.TestCase):
         claude_md = (self.vault / "CLAUDE.md").read_text()
         self.assertIn("/.claude/agent-vault/vault.py", claude_md)
         self.assertNotIn("{{CLI}}", claude_md)
-        # v1 migration: code gone, handoff log kept
+        # v1 migration: code gone, phone log kept
         self.assertFalse((self.vault / "Agent" / "_system").exists())
-        self.assertIn("a.md", (self.vault / "Agent" / ".handoff-log.json").read_text())
+        self.assertIn("a.md", (self.vault / "Agent" / ".phone-log.json").read_text())
         self.assertFalse([p for p in self.vault.rglob("*.py")])
+
+    def _drop_v1(self):
+        shutil.rmtree(self.vault / "Agent" / "_system")
+
+    def test_old_log_merges_into_phone_log(self):  # T4 -> AC4
+        self._drop_v1()
+        agent = self.vault / "Agent"
+        (agent / ".handoff-log.json").write_text('{"a.md": "old", "c.md": "old"}\n')
+        (agent / ".phone-log.json").write_text('{"a.md": "newer", "b.md": "x"}\n')
+        report = self.run_install()
+        self.assertFalse((agent / ".handoff-log.json").exists())
+        self.assertEqual(json.loads((agent / ".phone-log.json").read_text()),
+                         {"a.md": "newer", "b.md": "x", "c.md": "old"})
+        self.assertTrue(any(".handoff-log.json" in line for line in report))
+        before = snapshot(self.home, self.vault)
+        self.run_install()
+        self.assertEqual(before, snapshot(self.home, self.vault))
+
+    def test_unreadable_logs_are_left_alone(self):  # T4 -> AC4
+        self._drop_v1()
+        agent = self.vault / "Agent"
+        for bad_old in (True, False):
+            with self.subTest(bad_old=bad_old):
+                old, new = '{"a.md": 1}\n', '{"b.md": 2}\n'
+                if bad_old:
+                    old = "{not json"
+                else:
+                    new = "{not json"
+                (agent / ".handoff-log.json").write_text(old)
+                (agent / ".phone-log.json").write_text(new)
+                report = self.run_install()
+                self.assertTrue(any(line.startswith("warning:") and "unreadable" in line
+                                    for line in report), report)
+                self.assertEqual((agent / ".handoff-log.json").read_text(), old)
+                self.assertEqual((agent / ".phone-log.json").read_text(), new)
+                self.assertTrue((self.home / ".claude" / "agent-vault" / "vault.py").exists())
 
     def test_rerun_identical(self):  # T2 -> AC2
         self.run_install()
