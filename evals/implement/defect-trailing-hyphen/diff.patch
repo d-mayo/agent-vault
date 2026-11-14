@@ -1,0 +1,36 @@
+diff --git a/agent_vault/lib.py b/agent_vault/lib.py
+--- a/agent_vault/lib.py
++++ b/agent_vault/lib.py
+@@ -387,5 +387,5 @@ def now_hhmm() -> str:
+ 
+ 
+ def slugify(text: str) -> str:
+-    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
++    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40]
+     return s or "untitled"
+diff --git a/tests/test_slugify.py b/tests/test_slugify.py
+new file mode 100644
+--- /dev/null
++++ b/tests/test_slugify.py
+@@ -0,0 +1,21 @@
++from __future__ import annotations
++
++import sys
++import unittest
++
++from tests.helpers import REPO
++
++sys.path.insert(0, str(REPO / "agent_vault"))
++import lib  # noqa: E402
++
++
++class SlugCap(unittest.TestCase):
++    def test_cap(self):
++        self.assertEqual(len(lib.slugify("a" * 100)), 40)
++
++    def test_trailing_hyphen(self):
++        slug = lib.slugify("a" * 39 + " b")
++        self.assertFalse(slug.endswith("-"))
++
++    def test_short_text_unchanged(self):
++        self.assertEqual(lib.slugify("Fix the Thing!"), "fix-the-thing")
