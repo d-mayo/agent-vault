@@ -677,6 +677,19 @@ class PlanDefectCases(Base):
             with self.subTest(name):
                 self.assertRegex(expect["about"], r"^(agent-vault#\d+ sealed plan:|hand-written:) ")
 
+class PlanBaseline(Base):
+    """T4 -> AC4 (#96)."""
+
+    def test_plan_baseline_covers_every_case(self):
+        entry = score.load_baseline(REPO / "evals")["plan"]
+        folders = {c.name for c in score.case_dirs(REPO / "evals", "plan")}
+        self.assertEqual(set(entry["cases"]), folders)
+        for name, c in entry["cases"].items():
+            with self.subTest(name):
+                self.assertIsInstance(c["passes"], int)
+                self.assertEqual(c["runs"], score.RUNS_PER_CASE)
+                self.assertLessEqual(c["passes"], c["runs"])
+
 
 if __name__ == "__main__":
     unittest.main()

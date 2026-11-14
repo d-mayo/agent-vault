@@ -29,5 +29,36 @@
     "date": "2026-11-14",
     "file": "skills/implement-story/reviewer.md",
     "sha256": "7a337f69ec68c86c430680eecf318734505bfd122dbf398e00142e7d42c0f984"
+  },
+  "plan": {
+    "cases": {
+      "clean-branch-type-from-bug-label": {
+        "passes": 3,
+        "runs": 3
+      },
+      "clean-implement-finish-loop": {
+        "passes": 3,
+        "runs": 3
+      },
+      "defect-contradicts-record": {
+        "passes": 3,
+        "runs": 3
+      },
+      "defect-impossible-step": {
+        "passes": 3,
+        "runs": 3
+      },
+      "defect-missing-ac": {
+        "passes": 3,
+        "runs": 3
+      },
+      "defect-test-cites-ac-only": {
+        "passes": 3,
+        "runs": 3
+      }
+    },
+    "date": "2026-11-14",
+    "file": "skills/plan-story/plan-reviewer.md",
+    "sha256": "50ba7829817cb5f07d4fad1244f2829a7b19de9f2c119b1a63f1e356ed5c4435"
   }
 }
