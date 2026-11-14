@@ -1,0 +1,4 @@
+- AC1: `lib.slugify` returns at most 40 characters.
+- AC2: `lib.slugify` never returns a slug that ends with `-`, however the text is cut.
+- AC3: A text whose slug is already 40 characters or shorter gives the same slug as before.
+- AC4: A test in `tests/test_slugify.py` covers the cap, the trailing hyphen and the short text.

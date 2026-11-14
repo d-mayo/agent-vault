@@ -1,0 +1,10 @@
+{
+  "kind": "defect",
+  "about": "slugify cuts at 40 characters after stripping hyphens, so the slug can end with a hyphen (breaks AC2).",
+  "defects": [
+    {
+      "name": "trailing hyphen after the cut",
+      "patterns": ["trailing (hyphen|dash|-)", "end(s|ing)? (with|in) (a )?(hyphen|dash|-)", "strip.{0,40}(after|before).{0,40}(slice|cut|truncat)", "(slice|cut|truncat).{0,60}(after|before).{0,40}strip", "AC2"]
+    }
+  ]
+}

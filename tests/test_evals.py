@@ -14,7 +14,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from tests.helpers import REPO
+from tests.helpers import REPO, make_vault, tmpdir
 
 _spec = importlib.util.spec_from_file_location("evals_score", REPO / "evals" / "score.py")
 score = importlib.util.module_from_spec(_spec)
@@ -352,6 +352,65 @@ class Update(Base):
         code, _ = run_main(["--update", "implement"], self.root)
         self.assertEqual(code, 1)
         self.assertFalse(self.path.exists())
+
+
+class RealCases(Base):
+    """T6 -> AC6."""
+
+    def test_real_reviewer_folders_are_well_formed(self):
+        for reviewer in score.REVIEWER_FILES:
+            with self.subTest(reviewer):
+                self.assertEqual(score.check_reviewer(REPO / "evals", reviewer), [])
+                self.assertEqual(score.check_limit(REPO / "evals", reviewer), [])
+
+    def test_map_names_existing_files(self):
+        for reviewer, rel in score.REVIEWER_FILES.items():
+            with self.subTest(reviewer):
+                self.assertTrue((REPO / rel).is_file(), rel)
+
+    def test_baseline_is_an_object(self):
+        data = json.loads((REPO / "evals" / "baseline.json").read_text(encoding="utf-8"))
+        self.assertIsInstance(data, dict)
+
+    def test_limit_check_fails_over_the_limit(self):
+        for i in range(score.MAX_REVIEWS // score.RUNS_PER_CASE + 1):
+            write_case(self.root, "implement", "c%d" % i)
+        self.assertEqual(len(score.check_limit(self.root, "implement")), 1)
+        self.assertEqual(score.check_limit(self.root, "plan"), [])
+
+
+class RepoWiring(Base):
+    """T7 -> AC7."""
+
+    def test_implement_samples(self):
+        kinds = set()
+        for case in score.case_dirs(REPO / "evals", "implement"):
+            kinds.add(json.loads((case / "expect.json").read_text(encoding="utf-8"))["kind"])
+        self.assertEqual(kinds, {"defect", "clean"})
+
+    def test_out_is_ignored(self):
+        lines = (REPO / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("evals/out/", [ln.strip() for ln in lines])
+
+    def test_install_copies_nothing_from_evals(self):
+        from tests import test_install as ti
+        t = tmpdir()
+        self.addCleanup(t.cleanup)
+        root = Path(t.name)
+        home, vault = root / "home", make_vault(root)
+        (home / ".claude").mkdir(parents=True)
+        fake_repo = root / "repo"
+        (fake_repo / ".git").mkdir(parents=True)
+        ti.install.install(vault, home, repo=fake_repo)
+        self.assertEqual([p for p in home.rglob("*") if "evals" in p.parts or p.name == "score.py"], [])
+        self.assertEqual([p for p in vault.rglob("score.py")], [])
+
+    def test_claude_md_layout_line(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        layout = text.split("## Layout", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`evals/`", layout)
+        self.assertIn("evals/**", layout.splitlines()[1])
+        self.assertNotIn("`evals/out/`", layout)
 
 
 if __name__ == "__main__":
