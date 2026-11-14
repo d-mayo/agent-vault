@@ -9,6 +9,11 @@ Whatever this prints is added to Claude's context. The session's kind comes from
          and the repo's `claudemd-lint` failures and stale-section count.
   else   nothing.
 
+Before any of that, in every session, `selfupdate` brings the installed copy up to date when the
+clone it was installed from has a newer `main` than the one installed (local refs only, no
+network, only `main`'s committed tree); its one line, if any, is printed first. A config with no
+`source` (installed by an older install.py) or an install that is current adds nothing.
+
 Vault and repo sessions also record what Stop needs: when the session started, the
 fingerprints of sealed and closed notes, and (repo) the git state.
 GitHub gets 5 seconds in total; nothing here may block a session from starting.
@@ -25,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import claudemd  # noqa: E402
 import github  # noqa: E402
 import lib  # noqa: E402
+import selfupdate  # noqa: E402
 import vault  # noqa: E402
 
 MAX_PROBLEMS = 15
@@ -134,6 +140,12 @@ def vault_context() -> list[str]:
 
 def main() -> None:
     lib.setup_io()
+    try:
+        line = selfupdate.selfupdate()
+    except Exception as e:      # an update problem must never stop the rest of the hook
+        line = f"agent-vault: the self-update check failed ({type(e).__name__}: {e})."
+    if line:
+        print(line)
     if lib.VAULT is None:
         return
     data = lib.read_hook_input()

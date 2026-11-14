@@ -11,7 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from tests.helpers import CODE, REPO, copy_scenario, make_vault, run_py, tmpdir, write_config
+from tests.helpers import (CODE, FAKE_INSTALLER, REPO, copy_scenario, make_vault, run_py, tmpdir,
+                           write_config)
 
 sys.path.insert(0, str(CODE))
 import github  # noqa: E402
@@ -1000,6 +1001,72 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
                       (self.clone / "CLAUDE.md").read_text(encoding="utf-8"))
         self.assertIn(self.name, git("branch", "--list", self.name, cwd=self.clone))
         self.assert_valid()
+
+    # --- the install after the merge (#98) ---
+    def source_prep(self, installer=FAKE_INSTALLER, source=None, with_source=True):
+        """filled_prep, with the fake installer committed on the PR's branch (so the merge puts it on
+        main) and a config under <root>/.claude/ whose source is the clone (or `source`)."""
+        self.filled_prep()
+        (self.clone / "install.py").write_text(installer, encoding="utf-8", newline="\n")
+        git("add", "install.py", cwd=self.clone)
+        git("commit", "-q", "-m", "chore: fake installer", cwd=self.clone)
+        git("push", "-q", "origin", self.name, cwd=self.clone)
+        cfg = self.root / ".claude" / "agent-vault.json"
+        cfg.parent.mkdir()
+        data = json.loads(self.cfg.read_text(encoding="utf-8"))
+        data["python"] = Path(sys.executable).as_posix()
+        if with_source:
+            data["source"] = (source or self.clone).as_posix()
+            data["commit_time"] = 0
+        cfg.write_text(json.dumps(data), encoding="utf-8")
+        self.cfg = cfg
+        self.record = self.root / "record.jsonl"
+
+    def installs(self):
+        return [json.loads(ln) for ln in self.record.read_text().splitlines()] if self.record.exists() else []
+
+    def test_installs_main_after_the_merge(self):    # T6 -> AC6
+        self.source_prep()
+        r = self.ok(self.cli("seal", "retro", "widget", "7"))
+        recs = self.installs()
+        self.assertEqual(len(recs), 1)
+        argv = recs[0]["argv"]
+        self.assertEqual(argv[argv.index("--commit") + 1], self.bare_rev("main"))
+        self.assertEqual(argv[argv.index("--repo") + 1], self.clone.as_posix())
+        self.assertIn(self.bare_rev("main")[:7], r.stdout)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_installs_after_a_merge_run_from_a_worktree(self):    # T6 -> AC6
+        self.source_prep()
+        git("switch", "-q", "main", cwd=self.clone)
+        wt = self.root / "wt"
+        git("worktree", "add", "-q", str(wt), self.name, cwd=self.clone)
+        self.ok(self.cli("seal", "retro", "widget", "7", cwd=wt))
+        self.assertEqual(len(self.installs()), 1)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def test_a_failing_install_does_not_fail_the_seal(self):    # T6 -> AC6
+        self.source_prep(installer="import sys\nprint('error: it broke', file=sys.stderr)\nsys.exit(1)\n")
+        r = self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertIn("agent-vault: couldn't update", r.stdout)
+        self.assertIn("it broke", r.stdout)
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertRegex(self.daily(), r"widget#7 retro-done\n")
+
+    def test_no_install_for_another_repository(self):    # T6 -> AC6
+        other = self.root / "elsewhere"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        self.source_prep(source=other)
+        r = self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.installs(), [])
+        self.assertNotIn("agent-vault:", r.stdout + r.stderr)
+
+    def test_no_install_without_a_source(self):    # T6 -> AC6
+        self.source_prep(with_source=False)
+        r = self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.installs(), [])
+        self.assertNotIn("agent-vault:", r.stdout + r.stderr)
 
     def test_pulls_main_in_the_worktree_that_has_it(self):    # T1 -> AC1
         self.filled_prep()

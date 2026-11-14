@@ -51,6 +51,7 @@ sys.dont_write_bytecode = True  # keep __pycache__ out of iCloud
 import claudemd  # noqa: E402
 import github  # noqa: E402
 import lib  # noqa: E402
+import selfupdate  # noqa: E402
 from lib import AGENT, FOLDERS, VAULT  # noqa: E402
 
 REVIEW_DAYS = 90            # `ideas review` lists open ideas older than this
@@ -675,6 +676,29 @@ def cmd_seal_retro(args) -> None:
     close_finished_feature(index, args.repo, slug, args.issue, info)
     if merging:
         sync_default_branch(top, default, pr)
+        update_install(top)
+
+
+def git_common_dir(cwd) -> str:
+    out = github.git("rev-parse", "--git-common-dir", cwd=cwd)
+    return os.path.normcase(os.path.realpath(os.path.join(str(cwd), out)))
+
+
+def update_install(top: Path) -> None:
+    """After the merge and the pull: if this clone (or a worktree of it) is the one agent-vault was
+    installed from, install what its `main` now holds and say what happened (#98). Never fails the
+    command: the merge and the notes are already done."""
+    try:
+        source = json.loads(lib.CONFIG.read_text(encoding="utf-8-sig")).get("source")
+        if not isinstance(source, str) or not source:
+            return
+        if git_common_dir(top) != git_common_dir(source):
+            return
+        line = selfupdate.selfupdate()
+    except Exception as e:
+        line = f"agent-vault: couldn't update the install from main ({type(e).__name__}: {e})."
+    if line:
+        print(line)
 
 
 def feature_close_comment(feature: dict, slug: str, issue: str) -> str:

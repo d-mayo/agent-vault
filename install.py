@@ -6,7 +6,8 @@ What it does:
   1. Copies agent_vault/ to ~/.claude/agent-vault/ and skills/*/ to ~/.claude/skills/, replacing
      the installed files file by file from a staged copy (so a hook that starts during a
      reinstall never finds its script missing) and deleting files the new version dropped.
-  2. Writes ~/.claude/agent-vault.json (vault path and what the installer manages).
+  2. Writes ~/.claude/agent-vault.json (vault path, what the installer manages, and `source`, `commit`
+     and `commit_time`: the clone installed from and its installed commit).
   3. Merges its hook entries and the CLI permission into ~/.claude/settings.json, and removes
      the ones older versions put in <vault>/.claude/settings.json. Only entries it created
      are replaced or removed; a .bak copy is written before any change.
@@ -15,6 +16,11 @@ What it does:
   6. Points this repo's git hooks at agent_vault/githooks/ (main-branch protection); other repos
      get the installed copy in ~/.claude/agent-vault/githooks/ through `repo-init`.
 Hooks run with the Python that runs this installer. Standard library only.
+
+After this one manual run, the install keeps itself current: `seal retro` (after a merge) and every
+session start run agent_vault/selfupdate.py, which exports `main` of `source` with `git archive` and
+runs that copy's install.py with --commit when `main` is newer than the installed commit. An install
+made before `source` was recorded needs this one manual run first.
 
     python install.py --uninstall
 
@@ -264,7 +270,19 @@ def set_git_hooks(repo: Path, report: list[str]) -> None:
         report.append(f"warning: could not set core.hooksPath ({e})")
 
 
-def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
+def commit_info(repo: Path, commit: str | None) -> dict:
+    """{"commit": full sha, "commit_time": committer time in Unix seconds} for `commit` (else HEAD)
+    in the clone `repo`; {} when git can't say (not a work tree, unknown sha, git missing)."""
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%H %ct",
+                              (commit or "HEAD") + "^{commit}", "--"],
+                             capture_output=True, text=True, check=True).stdout.split()
+        return {"commit": out[0], "commit_time": int(out[1])}
+    except Exception:
+        return {}
+
+
+def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = None) -> list[str]:
     vault = Path(os.path.abspath(vault))
     if not (vault / ".obsidian").is_dir():
         sys.exit(f"error: {vault} is not an Obsidian vault (no .obsidian/ folder)")
@@ -299,9 +317,10 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
         if write_if_changed(path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
                             backup=True):
             report.append(f"updated {path}")
-    write_if_changed(config_path, json.dumps(
-        {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
-         "managed_allow": allow}, indent=2, ensure_ascii=False) + "\n")
+    config = {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
+              "managed_allow": allow, "source": Path(os.path.abspath(repo)).as_posix(),
+              **commit_info(repo, commit)}
+    write_if_changed(config_path, json.dumps(config, indent=2, ensure_ascii=False) + "\n")
 
     template = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
     if write_if_changed(vault / "CLAUDE.md", template.replace("{{CLI}}", cli)):
@@ -383,6 +402,7 @@ def main() -> None:
                     help="remove what the installer manages (the vault's notes are kept)")
     ap.add_argument("--repo", default=str(REPO), help=argparse.SUPPRESS)  # tests
     ap.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)  # tests
+    ap.add_argument("--commit", help=argparse.SUPPRESS)  # the commit this copy was exported from
     args = ap.parse_args()
     if args.uninstall:
         for line in uninstall(Path(args.home), Path(args.repo)):
@@ -390,7 +410,7 @@ def main() -> None:
         return
     if not args.vault:
         ap.error("--vault is required (or use --uninstall)")
-    for line in install(Path(args.vault), Path(args.home)):
+    for line in install(Path(args.vault), Path(args.home), Path(args.repo), args.commit):
         print(line)
 
 

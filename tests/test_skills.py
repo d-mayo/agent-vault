@@ -919,6 +919,31 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
         self.assertIn("## Approvals, pings and the closing summary", bullet)
 
 
+class AutoInstallDocsTest(unittest.TestCase):  # T7 -> AC7 (#98)
+    RULE = ("never run `install.py` yourself: only `seal retro` (after a merge) and session start "
+            "install, and only from `main`.")
+
+    def test_three_skills_share_one_install_rule(self):
+        for skill in ("implement-story", "retro", "handoff"):
+            with self.subTest(skill=skill):
+                text = " ".join(read(skill, "SKILL.md").lower().split())
+                self.assertEqual(text.count(self.RULE), 1)
+                self.assertEqual(text.count("never run `install.py`"), 1)
+        self.assertIn("never run two stories at once", " ".join(read("handoff", "SKILL.md").lower().split()))
+
+    def test_docs_describe_the_automatic_install(self):
+        root = Path(__file__).resolve().parent.parent
+        self.assertIn("agent_vault/selfupdate.py", (root / "CLAUDE.md").read_text(encoding="utf-8"))
+        for path in ("README.md", "install.py", "agent_vault/hooks/session_start.py"):
+            with self.subTest(path=path):
+                text = " ".join((root / path).read_text(encoding="utf-8").lower().split())
+                self.assertIn("selfupdate" if path != "README.md" else "installs what `main` now holds",
+                              text)
+        for path in ("README.md", "install.py"):
+            text = " ".join((root / path).read_text(encoding="utf-8").split())
+            self.assertRegex(text, r"(?i)once by hand|one manual")
+
+
 if __name__ == "__main__":
     unittest.main()
 

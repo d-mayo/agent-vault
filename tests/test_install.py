@@ -209,6 +209,60 @@ class InstallTest(unittest.TestCase):
                              capture_output=True, text=True).stdout.strip()
         self.assertEqual(out, install.HOOKS_DIR)
 
+    def git_clone_with_commits(self, n=2):
+        clone = self.root / "srcclone"
+        git = lambda *a: subprocess.run(["git", "-C", str(clone), *a], check=True,  # noqa: E731
+                                        capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        git("config", "user.email", "t@example.com")
+        git("config", "user.name", "t")
+        git("config", "commit.gpgsign", "false")
+        shas = []
+        for i in range(n):
+            (clone / "f.txt").write_text(str(i))
+            git("add", ".")
+            git("commit", "-q", "-m", f"c{i}", "--date", f"2026-01-0{i + 1}T00:00:00")
+            shas.append(git("rev-parse", "HEAD"))
+        return clone, shas, git
+
+    def test_records_source_and_commit(self):  # T1 -> AC1 (#98)
+        clone, shas, git = self.git_clone_with_commits()
+        install.install(self.vault, self.home, repo=clone)
+        cfgp = self.home / ".claude" / "agent-vault.json"
+        cfg = json.loads(cfgp.read_text())
+        self.assertEqual(cfg["source"], clone.resolve().as_posix())
+        self.assertEqual(cfg["commit"], shas[1])
+        self.assertEqual(cfg["commit_time"], int(git("log", "-1", "--format=%ct")))
+        self.assertEqual(git("config", "core.hooksPath"), install.HOOKS_DIR)
+        install.install(self.vault, self.home, repo=clone, commit=shas[0])
+        cfg = json.loads(cfgp.read_text())
+        self.assertEqual(cfg["commit"], shas[0])
+        self.assertEqual(cfg["commit_time"], int(git("log", "-1", "--format=%ct", shas[0])))
+        install.install(self.vault, self.home, repo=clone, commit="0" * 40)
+        cfg = json.loads(cfgp.read_text())
+        self.assertNotIn("commit", cfg)
+        self.assertNotIn("commit_time", cfg)
+        plain = self.root / "plain"
+        plain.mkdir()
+        install.install(self.vault, self.home, repo=plain)
+        cfg = json.loads(cfgp.read_text())
+        self.assertNotIn("commit", cfg)
+        self.assertEqual(cfg["source"], plain.resolve().as_posix())
+
+    def test_commit_option_as_subprocess(self):  # T1 -> AC1 (#98)
+        clone, shas, git = self.git_clone_with_commits()
+        real = lambda: subprocess.run(["git", "-C", str(REPO), "config", "--get", "core.hooksPath"],  # noqa: E731
+                                      capture_output=True, text=True).stdout
+        before = real()
+        out = subprocess.run([sys.executable, str(REPO / "install.py"), "--vault", str(self.vault),
+                              "--home", str(self.home), "--repo", str(clone), "--commit", shas[0]],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
+        self.assertEqual(cfg["commit"], shas[0])
+        self.assertEqual(cfg["source"], clone.resolve().as_posix())
+        self.assertEqual(real(), before)
+
     def test_shared_pre_push_hook(self):  # T9 -> AC9
         self.run_install()
         installed = self.home / ".claude" / "agent-vault" / "githooks" / "pre-push"

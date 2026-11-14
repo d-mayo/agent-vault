@@ -118,6 +118,11 @@ def git(*args: str, cwd=None, check: bool = True) -> str:
     return run(["git", *args], cwd, check).stdout.strip()
 
 
+def archive(cwd, ref: str, out: Path | str) -> None:
+    """Write `ref`'s committed tree (no working-tree changes) to the tar file `out`."""
+    run(["git", "archive", "--format=tar", "-o", str(out), ref], cwd)
+
+
 def status_lines(cwd) -> list[str]:
     """`git status --porcelain`, one entry per changed path. Not stripped: the first column can be a space."""
     return run(["git", "status", "--porcelain"], cwd, check=False).stdout.splitlines()
