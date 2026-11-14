@@ -1,0 +1,14 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault#58 sealed plan, AC4, its step 2 and T4 are removed (and the Goal and Context lines for them) while the issue still requires implement-story's wording about choosing `--type` to match; missing-ac. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "no acceptance criterion for implement-story's --type wording",
+      "patterns": [
+        "implement-story",
+        "wording.{0,80}--type|--type.{0,80}wording",
+        "SKILL\\.md"
+      ]
+    }
+  ]
+}

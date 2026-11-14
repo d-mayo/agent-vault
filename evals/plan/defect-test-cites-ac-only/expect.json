@@ -1,0 +1,13 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault#76 sealed plan, T3 cites AC3 but only checks that Finish still names `Full check:` and `vault.py lint`, which would pass without the parallel run, the discard rule or the skip record AC3 requires; cites-ac-only. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "T3 cites AC3 without exercising it",
+      "patterns": [
+        "\\bT3\\b",
+        "AC3.{0,120}(only|merely|just|not|never|n't).{0,120}(test|assert|exercis|check)"
+      ]
+    }
+  ]
+}
