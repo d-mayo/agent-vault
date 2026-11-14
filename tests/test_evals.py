@@ -507,5 +507,50 @@ class PromptBuilder(Base):
         self.assertEqual(run_main(["--check"], self.root)[0], 2)
 
 
+class ReviewerEvalsSkill(Base):
+    """T2 -> AC2."""
+
+    PATH = REPO / ".claude" / "skills" / "reviewer-evals" / "SKILL.md"
+
+    def test_frontmatter_and_text(self):
+        text = self.PATH.read_text(encoding="utf-8")
+        head = text.split("---")[1]
+        self.assertIn("name: reviewer-evals", head)
+        self.assertIn("run the reviewer evals", head)
+        for needle in ("evals/prompt.py", "--out", 'model: "opus"', "evals/out/",
+                       "run-<k>.txt", "RUNS_PER_CASE", "python evals/score.py", "--check",
+                       "--update", "ask which one", "stop and report", "Delete that reviewer's",
+                       "never fall back", "unchanged and in full", "Ask the user",
+                       "nothing blocks on it", "never a\n      line-numbered"):
+            with self.subTest(needle):
+                self.assertIn(needle, text)
+
+    def test_install_creates_no_such_skill(self):
+        from tests import test_install as ti
+        t = tmpdir()
+        self.addCleanup(t.cleanup)
+        root = Path(t.name)
+        home, vault = root / "home", make_vault(root)
+        (home / ".claude").mkdir(parents=True)
+        fake_repo = root / "repo"
+        (fake_repo / ".git").mkdir(parents=True)
+        ti.install.install(vault, home, repo=fake_repo)
+        self.assertTrue((home / ".claude" / "skills").is_dir())
+        self.assertEqual([p for p in home.rglob("*") if "reviewer-evals" in p.parts], [])
+
+
+class RepoGuideEvals(Base):
+    """T4 -> AC4."""
+
+    def test_claude_md_mentions(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        for needle in ("reviewer-evals skill", "python evals/score.py --status",
+                       ".claude/skills/reviewer-evals/", "evals/prompt.py"):
+            with self.subTest(needle):
+                self.assertIn(needle, text)
+        layout = text.split("## Layout", 1)[1]
+        self.assertIn(".claude/skills/**", layout.splitlines()[1])
+
+
 if __name__ == "__main__":
     unittest.main()
