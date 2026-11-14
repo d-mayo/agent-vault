@@ -691,5 +691,86 @@ class PlanBaseline(Base):
                 self.assertLessEqual(c["passes"], c["runs"])
 
 
+class DesignCleanCases(Base):
+    """T1 -> AC2 (#97)."""
+
+    def clean(self):
+        out = {}
+        for case in score.case_dirs(REPO / "evals", "design"):
+            expect = json.loads((case / "expect.json").read_text(encoding="utf-8"))
+            if expect["kind"] == "clean":
+                out[case] = expect
+        return out
+
+    def test_clean_cases_are_real_sealed_designs(self):
+        cases = self.clean()
+        self.assertGreaterEqual(len(cases), 2)
+        for case, expect in cases.items():
+            with self.subTest(case.name):
+                self.assertRegex(expect["about"], r"^agent-vault design \d+ sealed: ")
+                design = (case / "design.md").read_text(encoding="utf-8")
+                for heading in ("## Goals", "## Decisions", "## Stories"):
+                    self.assertIn(heading, design)
+                self.assertTrue((case / "decisions.md").read_text(encoding="utf-8").strip())
+
+    def test_repo_guide_is_claude_md_at_the_base_commit(self):
+        for case in self.clean():
+            with self.subTest(case.name):
+                m = re.search(r"^base_sha: (\w+)$", (case / "research.md").read_text(encoding="utf-8"), re.M)
+                self.assertIsNotNone(m, "research.md needs a `base_sha: <sha>` line")
+                shown = subprocess.run(["git", "show", "%s:CLAUDE.md" % m.group(1)], cwd=REPO,
+                                       capture_output=True)
+                if shown.returncode != 0:
+                    self.skipTest("commit %s is not in this clone" % m.group(1))
+                self.assertEqual((case / "repo-guide.md").read_bytes().decode("utf-8"),
+                                 shown.stdout.decode("utf-8").replace("\r\n", "\n"))
+
+
+class DesignDefectCases(Base):
+    """T2, T3 -> AC3, AC1 (#97)."""
+
+    MARKERS = ("open-question-as-decision", "goal-no-story", "contradicts-record", "story-cannot-ship")
+    GENERIC = ("(major) the design is wrong", "(major) a story is missing",
+               "(major) contradicts a decision record")
+
+    def cases(self):
+        return {c.name: json.loads((c / "expect.json").read_text(encoding="utf-8"))
+                for c in score.case_dirs(REPO / "evals", "design")}
+
+    def test_defect_cases_each_name_one_defect_specifically(self):
+        defects = {n: e for n, e in self.cases().items() if e["kind"] == "defect"}
+        self.assertEqual(len(defects), 4)
+        for name, expect in defects.items():
+            with self.subTest(name):
+                self.assertEqual(len(expect["defects"]), 1)
+                defect = expect["defects"][0]
+                self.assertTrue(defect["name"].strip())
+                self.assertTrue(defect["patterns"])
+                for pat in defect["patterns"]:
+                    regex = re.compile(pat, re.IGNORECASE)
+                    for line in self.GENERIC:
+                        self.assertIsNone(regex.search(line), "%r matches %r" % (pat, line))
+                self.assertEqual(len([m for m in self.MARKERS if m in expect["about"]]), 1)
+        for marker in self.MARKERS:
+            with self.subTest(marker=marker):
+                self.assertEqual(sum(marker in e["about"] for e in defects.values()), 1)
+
+    def test_case_set_size_and_origins(self):
+        cases = self.cases()
+        self.assertGreaterEqual(len(cases), 4)
+        self.assertLessEqual(len(cases), 8)
+        self.assertEqual(score.check_reviewer(REPO / "evals", "design"), [])
+        self.assertEqual(score.check_limit(REPO / "evals", "design"), [])
+        kinds = [e["kind"] for e in cases.values()]
+        self.assertEqual(kinds.count("defect"), 4)
+        self.assertEqual(kinds.count("clean"), len(kinds) - 4)
+        for name, expect in cases.items():
+            with self.subTest(name):
+                if expect["kind"] == "defect":
+                    self.assertRegex(expect["about"], r"^hand-written: from agent-vault design \d+, ")
+                else:
+                    self.assertRegex(expect["about"], r"^agent-vault design \d+ sealed: ")
+
+
 if __name__ == "__main__":
     unittest.main()

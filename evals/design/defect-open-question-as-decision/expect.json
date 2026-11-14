@@ -1,0 +1,14 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault design 2, D5 now settles that a story closed without a retro counts as finished and its feature closes anyway, which the design's second open question lists as unknown (it never triggers D5, so the feature can stay open; settled by whether it happens); open-question-as-decision. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "D5 decides what happens to a story closed without a retro while the second open question lists it as unknown",
+      "patterns": [
+        "closed without a retro",
+        "second open question",
+        "not planned"
+      ]
+    }
+  ]
+}

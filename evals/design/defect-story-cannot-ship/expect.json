@@ -1,0 +1,15 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault design 1, S6's outcome now has the installer run `repo-init --all` in every registered repo's clone, but neither the design nor its research provides that flag or any way to find the clones (`repo-init` takes one path; the design says to name the repos and run it per clone); story-cannot-ship. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "S6 depends on a `repo-init --all` flag and clone discovery that nothing provides",
+      "patterns": [
+        "repo-init --all",
+        "--all\\b",
+        "(find|locate|discover).{0,40}clones?",
+        "clones? of every"
+      ]
+    }
+  ]
+}

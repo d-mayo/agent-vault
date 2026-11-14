@@ -1,0 +1,4 @@
+{
+  "kind": "clean",
+  "about": "agent-vault design 2 sealed: features group issues as GitHub sub-issues (the feature issue, the placement flags, bugs as fix/, closing a finished feature; decision records d1-d66 minus the superseded d43, with d21, d25, d28, d30 and d66 shown as active as they were then; checked by hand against each reviewer question). The overview is today's Purpose and Architecture sections, not as sealed. research.md holds the issues named, gh's flags and the code at the commit before its first story landed."
+}
