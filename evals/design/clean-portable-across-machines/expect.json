@@ -1,0 +1,4 @@
+{
+  "kind": "clean",
+  "about": "agent-vault design 1 sealed: portable across machines and setups (the launchers, the version guard, the prerequisite check; decision records d1-d57 minus the superseded d43; checked by hand against each reviewer question). The overview is today's Purpose and Architecture sections, not as sealed. research.md holds the idea, the two issues named and the code at the commit before the seal."
+}
