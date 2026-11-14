@@ -17,6 +17,7 @@ Hooks run with the Python that runs this installer. Standard library only.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -304,11 +305,83 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
     return report
 
 
+def unset_git_hooks(repo: Path, report: list[str]) -> bool:
+    """Unset core.hooksPath in this clone if it still points at our hooks (git would otherwise
+    run a pre-push hook that refuses every push once the config is gone)."""
+    if not (repo / ".git").exists():
+        return False
+    try:
+        cur = subprocess.run(["git", "-C", str(repo), "config", "--get", "core.hooksPath"],
+                             capture_output=True, text=True).stdout.strip()
+        if cur != HOOKS_DIR:
+            return False
+        subprocess.run(["git", "-C", str(repo), "config", "--unset", "core.hooksPath"],
+                       check=True, capture_output=True)
+    except Exception as e:
+        report.append(f"warning: could not unset core.hooksPath in {repo} ({e})")
+        return False
+    report.append(f"unset core.hooksPath in {repo}")
+    return True
+
+
+def uninstall(home: Path, repo: Path = REPO) -> list[str]:
+    """Remove what install() manages; never touches the vault's notes or its CLAUDE.md."""
+    home = home.resolve()
+    claude = home / ".claude"
+    config_path = claude / "agent-vault.json"
+    config = read_json(config_path)
+    managed = config.get("managed_allow", [])
+    report: list[str] = []
+    settings_paths = [claude / "settings.json"]
+    if config.get("vault"):
+        settings_paths.append(Path(config["vault"]) / ".claude" / "settings.json")
+    for path in settings_paths:
+        if not path.exists():
+            continue
+        data = read_json(path)
+        merged, _ = merge_settings(copy.deepcopy(data), {}, [], managed)
+        if merged != data:
+            write_if_changed(path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
+                             backup=True)
+            report.append(f"removed agent-vault entries from {path} (backup: {path.name}.bak)")
+    install_dir = claude / "agent-vault"
+    if install_dir.exists():
+        rmtree(install_dir)
+        report.append(f"removed {install_dir}")
+    staging = claude / STAGING
+    if staging.exists():
+        rmtree(staging)
+        report.append(f"removed {staging}")
+    skills = claude / "skills"
+    if skills.is_dir():
+        for skill in sorted(p for p in skills.iterdir() if (p / SKILL_MARKER).exists()):
+            rmtree(skill)
+            report.append(f"removed skill {skill.name}")
+    if config_path.exists():
+        config_path.unlink()
+        report.append(f"removed {config_path}")
+    unset_git_hooks(repo, report)
+    if report:
+        report.append("restart open Claude sessions so they stop running the removed hooks")
+    else:
+        report.append("nothing was installed")
+    return report
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Install agent-vault. Safe to rerun.")
-    ap.add_argument("--vault", required=True, help="path to the Obsidian vault (the Notes folder)")
+    ap.add_argument("--vault", help="path to the Obsidian vault (the Notes folder)")
+    ap.add_argument("--uninstall", action="store_true",
+                    help="remove what the installer manages (the vault's notes are kept)")
+    ap.add_argument("--repo", default=str(REPO), help=argparse.SUPPRESS)  # tests
     ap.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)  # tests
     args = ap.parse_args()
+    if args.uninstall:
+        for line in uninstall(Path(args.home), Path(args.repo)):
+            print(line)
+        return
+    if not args.vault:
+        ap.error("--vault is required (or use --uninstall)")
     for line in install(Path(args.vault), Path(args.home)):
         print(line)
 
