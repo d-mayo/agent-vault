@@ -80,3 +80,56 @@ def restore_or_build(key, root: Path, build) -> None:
         _SNAPSHOTS[key] = keep
     else:
         copy_scenario(Path(saved.name), root)
+
+
+FAKE_INSTALLER = '''\
+import json, os, sys, time
+from pathlib import Path
+home = Path(sys.argv[sys.argv.index("--home") + 1])
+here = Path(__file__).resolve().parent
+rec = {"argv": sys.argv[1:], "folder": str(here), "marker": (here / "marker.txt").read_text(),
+       "has_feature_file": (here / "feature.txt").exists()}
+with open(home / "record.jsonl", "a", encoding="utf-8") as f:
+    f.write(json.dumps(rec) + "\\n")
+'''
+
+
+def make_source_clone(root: Path, installer: str = FAKE_INSTALLER) -> tuple[Path, str, int]:
+    """A temp clone whose `main` holds `installer` as install.py and marker.txt ("main"); it is left
+    on a feature branch with feature.txt committed and marker.txt changed but uncommitted.
+    Returns (clone, main's sha, main's committer time)."""
+    clone = root / "source"
+    clone.mkdir(parents=True)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(clone), *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    git("config", "commit.gpgsign", "false")
+    (clone / "install.py").write_text(installer, encoding="utf-8")
+    (clone / "marker.txt").write_text("main", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-q", "-m", "main commit")
+    sha, when = git("log", "-1", "--format=%H %ct").split()
+    git("switch", "-q", "-c", "feat/1-x")
+    (clone / "feature.txt").write_text("feature", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-q", "-m", "feature commit")
+    (clone / "marker.txt").write_text("uncommitted", encoding="utf-8")
+    return clone, sha, int(when)
+
+
+def write_source_config(root: Path, vault: Path, clone: Path, commit_time: int | None,
+                        **extra) -> Path:
+    """A config at <root>/.claude/agent-vault.json (so an automatic install may run, with
+    `root` as its home) naming `clone` as the source."""
+    cfg = root / ".claude" / "agent-vault.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    data = {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
+            "source": clone.as_posix(), **extra}
+    if commit_time is not None:
+        data["commit_time"] = commit_time
+    cfg.write_text(json.dumps(data), encoding="utf-8")
+    return cfg
