@@ -7,11 +7,12 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from tests.helpers import REPO, make_vault, tmpdir
@@ -19,6 +20,9 @@ from tests.helpers import REPO, make_vault, tmpdir
 _spec = importlib.util.spec_from_file_location("evals_score", REPO / "evals" / "score.py")
 score = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(score)
+_pspec = importlib.util.spec_from_file_location("evals_prompt", REPO / "evals" / "prompt.py")
+prompt = importlib.util.module_from_spec(_pspec)
+_pspec.loader.exec_module(prompt)
 
 DEFECT_EXPECT = {
     "kind": "defect",
@@ -372,6 +376,22 @@ class RealCases(Base):
         data = json.loads((REPO / "evals" / "baseline.json").read_text(encoding="utf-8"))
         self.assertIsInstance(data, dict)
 
+    def test_baseline_entries_are_well_formed(self):
+        """T5 -> AC5."""
+        data = json.loads((REPO / "evals" / "baseline.json").read_text(encoding="utf-8"))
+        self.assertIn("implement", data)
+        for reviewer, entry in data.items():
+            with self.subTest(reviewer):
+                self.assertIn(reviewer, score.REVIEWER_FILES)
+                self.assertEqual(entry["file"], score.REVIEWER_FILES[reviewer])
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+                self.assertRegex(entry["date"], r"^\d{4}-\d{2}-\d{2}$")
+                for name, case in entry["cases"].items():
+                    with self.subTest(case=name):
+                        self.assertIsInstance(case["passes"], int)
+                        self.assertIsInstance(case["runs"], int)
+                        self.assertLessEqual(case["passes"], case["runs"])
+
     def test_limit_check_fails_over_the_limit(self):
         for i in range(score.MAX_REVIEWS // score.RUNS_PER_CASE + 1):
             write_case(self.root, "implement", "c%d" % i)
@@ -411,6 +431,178 @@ class RepoWiring(Base):
         self.assertIn("`evals/`", layout)
         self.assertIn("evals/**", layout.splitlines()[1])
         self.assertNotIn("`evals/out/`", layout)
+
+REVIEWER_TEXT = (
+    "# reviewer\n\nIntro \u2014 text.\n\n## Requesting it\n\nLaunch it.\n\n"
+    "## Prompt\n\nGive it everything \u2014 in full.\n\n## Findings format\n\n"
+    "```\n## not a heading\n(major) x\n```\n\nOne line each.\n\n## After\n\nTail text.\n")
+
+
+class PromptBuilder(Base):
+    """T1 -> AC1 (the prompt builder and score.py --check)."""
+
+    def setUp(self):
+        super().setUp()
+        for rel in score.REVIEWER_FILES.values():
+            dest = self.tmp / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(REVIEWER_TEXT.encode("utf-8"))
+        self.expect = {"kind": "defect", "about": "hand-written: secret-about",
+                       "defects": [{"name": "secretdefect", "patterns": ["secretpattern"]}]}
+
+    def test_sections_opening_and_material_order(self):
+        for reviewer in ("implement", "plan", "design"):
+            with self.subTest(reviewer):
+                case = write_case(self.root, reviewer, "the-case", expect=self.expect)
+                for i, f in enumerate(score.MATERIAL[reviewer]):
+                    (case / f).write_text("BODY-%d of %s\n" % (i, f), encoding="utf-8")
+                text = prompt.build(reviewer, "the-case", self.root, self.tmp)
+                self.assertIn("Judge from that text alone", text)
+                self.assertIn("open no file other than this one", text)
+                self.assertIn("run no command", text)
+                self.assertIn("## Prompt\n\nGive it everything \u2014 in full.", text)
+                self.assertIn("## Findings format\n\n```\n## not a heading\n(major) x\n```"
+                              "\n\nOne line each.", text)
+                self.assertNotIn("Tail text", text)
+                self.assertNotIn("Launch it.", text)
+                pos = [text.index("BODY-%d of %s" % (i, f))
+                       for i, f in enumerate(score.MATERIAL[reviewer])]
+                self.assertEqual(pos, sorted(pos))
+                self.assertGreater(min(pos), text.index("## Findings format"))
+                for leak in ("the-case", str(self.root), "expect.json", "secretpattern",
+                             "secretdefect", "secret-about"):
+                    self.assertNotIn(leak, text)
+
+    def test_errors_exit_2_and_write_no_file(self):
+        write_case(self.root, "implement", "good", expect=self.expect)
+        write_case(self.root, "implement", "nomaterial", **{"diff.patch": None})
+        for argv in (["nope", "good"], ["implement", "missing"],
+                     ["implement", "nomaterial"], ["implement", "../good"]):
+            with self.subTest(argv):
+                out = self.tmp / "out.txt"
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    code = prompt.main(argv + ["--out", str(out)], self.root, self.tmp)
+                self.assertEqual(code, 2)
+                self.assertTrue(err.getvalue().strip())
+                self.assertFalse(out.exists())
+
+    def test_subprocess_writes_utf8_and_prints_the_path(self):
+        case = score.case_dirs(REPO / "evals", "implement")[0].name
+        out = self.tmp / "p.txt"
+        proc = subprocess.run([sys.executable, str(REPO / "evals" / "prompt.py"),
+                               "implement", case, "--out", str(out)],
+                              capture_output=True, text=True, cwd=self.tmp)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), str(out))
+        text = out.read_bytes().decode("utf-8")
+        self.assertIn("\u2014", text)
+        self.assertNotIn("expect.json", text)
+        bad = subprocess.run([sys.executable, str(REPO / "evals" / "prompt.py"),
+                              "implement", "no-such-case", "--out", str(self.tmp / "q.txt")],
+                             capture_output=True, text=True)
+        self.assertEqual(bad.returncode, 2)
+        self.assertFalse((self.tmp / "q.txt").exists())
+
+    def test_check(self):
+        write_case(self.root, "implement", "ok")
+        code, out = run_main(["--check", "implement"], self.root)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(out.strip().splitlines()), 1)
+        write_case(self.root, "implement", "bad", **{"diff.patch": None})
+        code, out = run_main(["--check", "implement"], self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("missing diff.patch", out)
+        code, out = run_main(["--check", "plan"], self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("no cases", out)
+        for i in range(9):
+            write_case(self.root, "design", "c%d" % i)
+        code, out = run_main(["--check", "design"], self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("over the limit", out)
+        self.assertEqual(run_main(["--check"], self.root)[0], 2)
+
+
+class ReviewerEvalsSkill(Base):
+    """T2 -> AC2."""
+
+    PATH = REPO / ".claude" / "skills" / "reviewer-evals" / "SKILL.md"
+
+    def test_frontmatter_and_text(self):
+        text = self.PATH.read_text(encoding="utf-8")
+        head = text.split("---")[1]
+        self.assertIn("name: reviewer-evals", head)
+        self.assertIn("run the reviewer evals", head)
+        for needle in ("evals/prompt.py", "--out", 'model: "opus"', "evals/out/",
+                       "run-<k>.txt", "RUNS_PER_CASE", "python evals/score.py", "--check",
+                       "--update", "ask which one", "stop and report", "Delete that reviewer's",
+                       "never fall back", "Read tool", "Open no other file", "neutral name",
+                       "no case name", "Ask the user", "nothing blocks on it"):
+            with self.subTest(needle):
+                self.assertIn(needle, text)
+
+    def test_install_creates_no_such_skill(self):
+        from tests import test_install as ti
+        t = tmpdir()
+        self.addCleanup(t.cleanup)
+        root = Path(t.name)
+        home, vault = root / "home", make_vault(root)
+        (home / ".claude").mkdir(parents=True)
+        fake_repo = root / "repo"
+        (fake_repo / ".git").mkdir(parents=True)
+        ti.install.install(vault, home, repo=fake_repo)
+        self.assertTrue((home / ".claude" / "skills").is_dir())
+        self.assertEqual([p for p in home.rglob("*") if "reviewer-evals" in p.parts], [])
+
+
+class RepoGuideEvals(Base):
+    """T4 -> AC4."""
+
+    def test_claude_md_mentions(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        for needle in ("reviewer-evals skill", "python evals/score.py --status",
+                       ".claude/skills/reviewer-evals/", "evals/prompt.py"):
+            with self.subTest(needle):
+                self.assertIn(needle, text)
+        layout = text.split("## Layout", 1)[1]
+        self.assertIn(".claude/skills/**", layout.splitlines()[1])
+
+
+class ImplementCases(Base):
+    """T3 -> AC3."""
+
+    ORIGIN = re.compile(r"(hand-written:|agent-vault#\d+ R\d+, PR \d+:) ")
+
+    def cases(self):
+        out = {}
+        for case in score.case_dirs(REPO / "evals", "implement"):
+            out[case.name] = json.loads((case / "expect.json").read_text(encoding="utf-8"))
+        return out
+
+    def test_count_kinds_and_origins(self):
+        cases = self.cases()
+        self.assertGreaterEqual(len(cases), 6)
+        self.assertLessEqual(len(cases), 8)
+        self.assertGreaterEqual(sum(c["kind"] == "clean" for c in cases.values()), 2)
+        for name, expect in cases.items():
+            with self.subTest(name):
+                self.assertRegex(expect["about"], r"^" + self.ORIGIN.pattern)
+                self.assertEqual(score.check_case(REPO / "evals" / "implement" / name,
+                                                  "implement"), [])
+        real = {n: c for n, c in cases.items() if c["about"].startswith("agent-vault#")}
+        self.assertGreaterEqual(sum(c["kind"] == "defect" for c in real.values()), 3)
+        self.assertGreaterEqual(sum(c["kind"] == "clean" for c in real.values()), 1)
+
+    def test_defect_patterns_are_specific(self):
+        for name, expect in self.cases().items():
+            if expect["kind"] != "defect":
+                continue
+            for defect in expect["defects"]:
+                for pat in defect["patterns"]:
+                    with self.subTest(name=name, pattern=pat):
+                        regex = re.compile(pat, re.IGNORECASE)
+                        self.assertIsNone(regex.search("(major) The diff has a bug."))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,4 @@
+{
+  "kind": "clean",
+  "about": "agent-vault#56 R1, PR 60: the same files with the fix applied (the guard reads gh's {owner}/{repo} placeholder as the clone, and the tests cover it); every part of AC13 holds, so no major finding is expected."
+}

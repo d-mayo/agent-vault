@@ -1,0 +1,47 @@
+- AC1: `skills/handoff/SKILL.md` exists with frontmatter `name: handoff` and a description whose triggers include "handoff #<n>", several issues, and a feature.
+- AC2: handoff takes one issue, several issues, or a feature. For a feature (an issue labelled `feature`), it runs the feature's open sub-issues that are design stories first, in its design's story order (`vault.py design stories <design>`), then any other open sub-issues in issue-number order. It lists unfiled stories in its report and never files them. Closed issues and issues whose retro is sealed are skipped.
+- AC3: Before the first story, handoff reads every issue in the run and asks the user, in open-ended prose, any questions it can already tell it will need. It keeps the answers in the session and uses them when planning each story, recording each as a user decision in that story's plan.
+- AC4: Each story is planned by following plan-story's procedure, with these changes:
+  - It interviews only where it isn't sure.
+  - The independent plan reviewer still runs on Opus.
+  - It seals the plan after `vault.py validate` and the review, without asking for approval.
+  - It skips plan-story's Handoff push notification.
+  - It never edits or creates a GitHub issue on its own; where plan-story would, it asks the user instead.
+  - If the story turns out to need `pr: none`, handoff stops and asks the user instead of sealing.
+- AC5: Each story's steps are implemented by a subagent launched with an explicit `model: "sonnet"`, told to follow implement-story's Steps only route for that issue. If the subagent's model can't be chosen, handoff stops and asks. When the implementer returns a stop-and-ask question, handoff answers it if it is sure and otherwise asks the user. Either way it resumes the same implementer with the answer (`SendMessage`). Only if that implementer can't be resumed does it start a new one on the same route, which picks up from the commits.
+- AC6: Once the implementer reports every step committed and lint passing, handoff runs implement-story's Finish itself, except that every code change goes to the implementer:
+  - It runs the `Full check:` and the Opus review in parallel, following `reviewer.md`.
+  - It records the `Review <k>:` and `R<n>` lines in the impl note.
+  - Major findings, `Full check:` failures and lint failures go back to the same implementer, which fixes each in its own commit and runs `vault.py lint`.
+  - It runs at most two reviews, then stops and asks.
+  - It fills in `## Verification` and `## Discoveries`.
+  - It opens the PR with `vault.py open-pr`, sending no push notification for that.
+- AC7: Each story's retro is run by following the retro skill's procedure, without approval prompts or retro's Seal push notification:
+  - It decides audit lines and rewrites itself.
+  - It sorts every follow-up and left-open finding into an idea or dropped, never into a created or amended issue. A follow-up it thinks must become an issue counts as not sure, so it asks.
+  - It records lasting decisions and drops ideas the issue resolved without asking.
+  - It runs `vault.py closes-feature`, names any feature that sealing will close in the report, and lets `seal retro` close it. If `seal retro` prints a feature-close warning, it reports the printed command and asks before running it.
+  - It runs `vault.py seal retro` without approval, which merges the PR. If the PR's checks haven't finished, it waits for them (`gh pr checks <pr> --watch`) and retries. If a check fails, or `seal retro` refuses for any other reason, it stops and asks.
+- AC8: Stories run one at a time. The next story is planned only after the previous one has merged, from the updated default branch that `seal retro` leaves checked out. When an earlier story contradicts a later issue, or an answer the user gave earlier, handoff stops and asks rather than guessing, and the report says so.
+- AC9: Whenever handoff needs the user, it first sends a push notification naming what it needs, then asks in open-ended prose. It never uses a yes/no approval prompt. It sends one more push notification when the run ends. These are handoff's only pings: the stage-end pings of the skills it follows are skipped.
+- AC10: Reporting:
+  - Each story's impl note gets a `- Handed off: <run>` line under `## Verification`, naming the run's issues.
+  - Before `seal retro`, each story's PR gets a comment (`gh pr comment`) with a condensed report: decisions made without the user (plan judgment calls, lasting decisions recorded, retro dispositions), deviations, left-open findings and how they were sorted, questions asked or re-asked with their answers, and any feature the merge closes.
+  - The run ends with one combined report in chat, covering every story (including unfiled stories, and anything that stopped the run).
+- AC11: Re-invoking handoff with the same issues resumes the run from the vault notes. For each issue:
+  - retro sealed or issue closed: skipped;
+  - impl note has a `pr:`: the retro;
+  - plan sealed: implementation, the implementer resuming from its commits;
+  - plan still a draft: drafting continues;
+  - no plan yet: planning.
+  Answers from an upfront scan that the session lost are asked again where still needed.
+- AC12: implement-story gains a `## Steps only` route, used only when the request says "Steps only":
+  - It runs Start (preflight, branch) and Per step as usual. Where Start or Resume would go on to **Finish**, it stops there instead.
+  - At a stop-and-ask, it returns the question as its final report and stops, instead of asking the user.
+  - Once every step is committed, it runs `vault.py lint` (fixing as Finish step 1 does), then returns a report to its caller: one line per step with its commit, the deviations recorded, and anything for `## Discoveries`. It starts no review, opens no PR, writes no `Review` lines, and sends no push notification. The closing three-bullet rule doesn't apply to this report.
+  - Resumed with review findings or a failure, it fixes each in its own commit, runs `vault.py lint` and reports the shas.
+  "Which procedure applies" names the route. implement-story's other routes are unchanged, and it still asks no yes/no approval.
+- AC13: handoff's own text names no desktop-app session tool (nothing like `start_session` or `mcp__ccd`). It uses only subagents (the Agent tool), `SendMessage` and `PushNotification`, and asks its questions in prose.
+- AC14: Docs:
+  - The repo `CLAUDE.md`'s Layout has a `skills/handoff/` bullet. It says what handoff does, that it doesn't carry the pipeline skills' shared approvals section, and that the section's identity test covers the five pipeline skills.
+  - The vault guide template (`templates/vault-CLAUDE.md`) gains a line on starting it: a fresh session on Opus (by convention) inside the repo clone, saying "handoff #<issue>" (or several, or a feature), for stories the user hands over entirely.

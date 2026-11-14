@@ -1,1 +1,33 @@
-{}
+{
+  "implement": {
+    "cases": {
+      "clean-guard-placeholder-fixed": {
+        "passes": 1,
+        "runs": 3
+      },
+      "clean-slug-cap": {
+        "passes": 3,
+        "runs": 3
+      },
+      "defect-guard-placeholder": {
+        "passes": 3,
+        "runs": 3
+      },
+      "defect-pings-test-generic": {
+        "passes": 0,
+        "runs": 3
+      },
+      "defect-reviewer-scope": {
+        "passes": 3,
+        "runs": 3
+      },
+      "defect-trailing-hyphen": {
+        "passes": 3,
+        "runs": 3
+      }
+    },
+    "date": "2026-11-14",
+    "file": "skills/implement-story/reviewer.md",
+    "sha256": "7a337f69ec68c86c430680eecf318734505bfd122dbf398e00142e7d42c0f984"
+  }
+}

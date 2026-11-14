@@ -1,0 +1,15 @@
+{
+  "kind": "defect",
+  "about": "agent-vault#56 R1, PR 60: the push guard's gh api DELETE rule takes gh's {owner}/{repo} placeholder as the repo, which is never registered, so the removal is allowed inside a registered clone (breaks AC13).",
+  "defects": [
+    {
+      "name": "{owner}/{repo} placeholder read as a repo name",
+      "patterns": [
+        "\\{owner\\}",
+        "\\{repo\\}",
+        "placeholder",
+        "repos/\\{"
+      ]
+    }
+  ]
+}

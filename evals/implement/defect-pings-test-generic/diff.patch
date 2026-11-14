@@ -1,0 +1,323 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index f6e5ac7..9c7dc80 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -24,6 +24,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
+ - `skills/design/`: turns a larger idea into a sealed design note, decision records and one issue per story: researches, interviews over as many rounds as needed, holds the draft to the rigor rules, has an independent Opus reviewer check it (`skills/design/design-reviewer.md`), seals with `vault.py seal design` once the user approves, then files the design's feature (`vault.py issue create --feature`) and its stories under it (`--parent`); `vault.py design stories` shows the feature and which stories are unfiled, and `vault.py features` lists the open features.
+ - `skills/issue/`: the one way to create a GitHub issue: drafts the title and body in the issue template (`lib.ISSUE_SECTIONS`), asks about what's unclear, and places the issue (under a feature, `--standalone` or `--bug`) and calls `vault.py issue create` only after the user approves the exact wording; the retro and plan-story skills call that command too.
+ - `skills/retro/`: closes out an issue before merge — audits the repo `CLAUDE.md`, its `README.md` and the project overview one heading at a time, sorts follow-ups, including every `→ left open` review finding (named by a trailing `(R<n>)`; `seal retro` refuses an unsorted one), into an issue, an idea or dropped, and seals (`seal retro` also refuses an open issue whose PR no longer closes it, and then squash-merges that PR itself once its checks have passed and the user has approved the retro; otherwise only the user merges; for a `pr: none` plan it instead closes the issue itself with the retro's `## Closing comment`, commits nothing and needs no branch); also runs as a backfill for an issue that already merged without one. `seal retro` also closes the issue's parent feature once sealed, if every story of the feature's design is filed and no other sub-issue is open (a failure there only warns); `vault.py closes-feature <repo> <issue>` runs the same read-only check, so the retro summary can name the feature.
++- `skills/handoff/`: an orchestrator for stories the user hands over entirely (one issue, several, or a feature), run in one top-level Opus session: plans each story itself (plan-story's procedure, sealing without asking), has a Sonnet subagent implement the steps (implement-story's `## Steps only` route), runs the Opus review, writes the retro and lets `seal retro` merge, one story at a time, asking only when unsure; it never creates or edits an issue. It is not a pipeline skill: it doesn't carry the shared approvals section, and the section's identity test covers the five pipeline skills (`PIPELINE_SKILLS` in `tests/test_skills.py`).
+ - Decision records (`Agent/Decisions/<project>/`): one per lasting decision, created only by `vault.py decision add` or, for a design's decisions, `vault.py seal design`, never edited and replaced by a later record (`--replaces`). The guard blocks the edit tools on them and the Stop hook fingerprints all but `status` and `superseded_by`. A plan decision line ending ` (lasting)` needs a record before `seal retro`; the overview's `## Standing decisions` is generated from the records.
+ - Designs (`Agent/Designs/<project>/`): a draft until `vault.py seal design` records its decisions, promotes its ideas and seals it; a sealed design is never edited (a later one `extends` or `replaces` it). The guard blocks the edit tools on a sealed one and the Stop hook fingerprints it; `vault.py design stories` shows which stories have no issue yet.
+ - `agent_vault/githooks/pre-push`: blocks pushes to `main` and bad branch names, and runs `vault.py lint` on any push that creates or updates a branch. The one copy: this repo's `core.hooksPath` points at it, and `repo-init` points other repos at the installed `~/.claude/agent-vault/githooks/`.
+diff --git a/skills/handoff/SKILL.md b/skills/handoff/SKILL.md
+new file mode 100644
+index 0000000..02909f2
+--- /dev/null
++++ b/skills/handoff/SKILL.md
+@@ -0,0 +1,131 @@
++---
++name: handoff
++description: 'Run stories from issue to merged PR in one top-level Opus session, asking the user only when unsure: plans each story, has a Sonnet subagent implement it, reviews, runs the retro and lets the retro merge. Takes one issue, several issues, or a feature. Use for requests like "handoff #78", "handoff #78 #79 #80", "handoff the feature #50", or "hand these issues off".'
++---
++
++# handoff
++
++An orchestrator for stories the user hands over entirely. One top-level Opus
++session plans each story, has a Sonnet subagent implement it, runs the
++independent review, writes the retro and lets `seal retro` merge. The default
++path (plan-story, implement-story, retro, each with the user) is unchanged;
++this skill follows their procedures with the changes below. It is not a
++pipeline skill: it carries no shared approvals section, asks no yes/no
++approvals, and its pings are the ones named under "Asking the user".
++
++Every `vault.py <command>` below means the exact CLI string in the current
++vault's `CLAUDE.md` (the line under "CLI after install"); `<repo>` is the
++plain repo name. Work inside the repo clone.
++
++## Never
++
++- Never create or edit a GitHub issue on your own. Follow-ups become ideas or
++  are dropped; anything that seems to need an issue is a question for the user.
++- Never merge except through `vault.py seal retro`, and never push to `main`.
++- Never run two stories at once, and never run `install.py`.
++- Never edit a sealed plan. If it turns out to be wrong, stop and ask.
++
++## The run
++
++1. **Collect the issues.** One issue, several, or a feature (an issue
++   labelled `feature`).
++   - A feature runs its open sub-issues that are design stories first, in the
++     design's story order (`vault.py design stories <design>`), then any other
++     open sub-issues in issue-number order.
++   - List unfiled stories in the report and never file them: filing is the
++     design skill's job.
++   - Skip closed issues and issues whose retro is sealed.
++2. **Upfront scan.** Read every issue in the run before the first story and ask
++   the user, in open-ended prose, any questions you can already tell you will
++   need. Keep the answers in the session; when planning each story, record each
++   as a user decision in that story's plan. Answers live only in the session: a
++   resumed run asks them again where still needed.
++3. **One story at a time.** Take the stories in order, running **Plan**,
++   **Implement**, **Finish**, **Retro** for one before starting the next. Plan
++   the next story only after the previous one has merged, from the default
++   branch `seal retro` leaves checked out. When an earlier story contradicts a
++   later issue, or an answer the user gave earlier, stop and ask rather than
++   guessing, and say so in the report.
++4. **Resume.** Re-invoking handoff with the same issues resumes from the vault
++   notes. For each issue: retro sealed or issue closed: skip; impl note has a
++   `pr:`: the retro; plan sealed: implementation, the implementer resuming from
++   its commits; plan still a draft: drafting continues; no plan yet: planning.
++5. At the end, send the final push notification and give the combined report.
++
++## Plan
++
++Follow plan-story's procedure (research, draft, plan review), with these changes:
++
++- Interview only where you aren't sure. Skip its approval summary.
++- The independent plan reviewer (`plan-reviewer.md`) still runs on Opus.
++- Seal the plan with `vault.py seal plan` after `vault.py validate` and the
++  review pass, without asking for approval.
++- Skip plan-story's Handoff push notification.
++- Never edit or create a GitHub issue on your own; where plan-story would, ask
++  the user instead.
++- If the story turns out to need `pr: none`, stop and ask the user instead of
++  sealing.
++
++## Implement
++
++Launch a subagent (the Agent tool) with an explicit `model: "sonnet"`, telling
++it to follow implement-story's Steps only route for that issue. If the
++subagent's model can't be chosen, stop and ask.
++
++When the implementer returns a stop-and-ask question, answer it if you are sure
++and otherwise ask the user. Either way resume the same implementer with the
++answer (`SendMessage`). Only if that implementer can't be resumed, start a new
++one on the same route, which picks up from the commits.
++
++## Finish
++
++Once the implementer reports every step committed and lint passing, run
++implement-story's Finish yourself, except that every code change goes to the
++implementer:
++
++- Run the `Full check:` and the Opus review in parallel, following
++  `reviewer.md`, and record the `Review <k>:` and `R<n>` lines in the impl note.
++- Send major findings, `Full check:` failures and lint failures back to the same
++  implementer, which fixes each in its own commit and runs `vault.py lint`.
++- Run at most two reviews, then stop and ask.
++- Fill in `## Verification` and `## Discoveries`, and add a
++  `- Handed off: <run>` line under `## Verification` naming the run's issues.
++- Open the PR with `vault.py open-pr`, sending no push notification for that.
++
++## Retro
++
++Follow the retro skill's procedure, without approval prompts or its Seal push
++notification:
++
++- Decide audit lines and rewrites yourself.
++- Sort every follow-up and left-open finding into an idea or dropped, never
++  into a created or amended issue. A follow-up you think must become an issue
++  counts as not sure, so ask.
++- Record lasting decisions and drop ideas the issue resolved without asking.
++- Run `vault.py closes-feature <repo> <issue>` and name any feature that
++  sealing will close in the report; `seal retro` closes it. If `seal retro`
++  prints a feature-close warning, report the printed command and ask before
++  running it.
++- Before sealing, comment on the PR (`gh pr comment`) with a condensed report:
++  decisions made without the user (plan judgment calls, lasting decisions
++  recorded, retro dispositions), deviations, left-open findings and how they
++  were sorted, questions asked or re-asked with their answers, and any feature
++  the merge closes.
++- Run `vault.py seal retro <repo> <issue>` without approval; it merges the PR.
++  If the PR's checks haven't finished, wait for them (`gh pr checks <pr> --watch`)
++  and retry. If a check fails, or `seal retro` refuses for any other reason,
++  stop and ask.
++
++## Asking the user
++
++Whenever you need the user, first send a push notification (`PushNotification`)
++naming what you need, then ask in open-ended prose; never a yes/no approval
++prompt. Send one more push notification when the run ends. These are the only
++pings: the stage-end pings of the skills followed here are skipped.
++
++## The combined report
++
++The run ends with one report in chat covering every story: what merged, the
++decisions made without the user, deviations, left-open findings and their
++sorting, questions asked, features closed, unfiled stories, and anything that
++stopped the run.
+diff --git a/skills/implement-story/SKILL.md b/skills/implement-story/SKILL.md
+index 78b6321..40c8e53 100644
+--- a/skills/implement-story/SKILL.md
++++ b/skills/implement-story/SKILL.md
+@@ -49,6 +49,8 @@ name (e.g. `agent-vault`), never `owner/name`.
+ 
+ ## Which procedure applies
+ 
++- The request says "Steps only" (an orchestrating session's implementer): go to
++  **Steps only**.
+ - The sealed plan's frontmatter says `pr: none`: go to **No-PR plan**.
+ - The impl note already has a `pr:`, or the request is about review comments
+   or requested changes rather than implementing: go to **Address PR review**.
+@@ -186,6 +188,25 @@ Once every step is committed:
+    PR and runs `retro #<issue>` next.
+ 7. Leave the impl note `status: open`; it's sealed later, by the retro.
+ 
++## Steps only
++
++Used only when the request says "Steps only": a calling session (such as a
++handoff run) implements the steps through this skill and runs the Finish
++itself. Nobody is here to answer, so this route asks no one.
++
++1. Run **Start** and **Per step** as usual (preflight, branch, then each
++   step's commit). Where **Start** or **Resume** would go on to **Finish**,
++   stop there instead.
++2. At a stop-and-ask, return the question as your final report and stop,
++   instead of asking the user. The caller answers by resuming you.
++3. Once every step is committed, run `vault.py lint` (fix a failure as Finish
++   step 1 does) and return a report to the caller: one line per step with its
++   commit, the deviations recorded, and anything for `## Discoveries`. Start
++   no review, open no PR, write no `Review` lines and send no push
++   notification. The closing three-bullet rule doesn't apply to this report.
++4. Resumed with review findings or a failure (a full-check or lint failure),
++   fix each in its own commit, run `vault.py lint` and report the shas.
++
+ ## No-PR plan
+ 
+ A plan with `pr: none` changes no repo file (`seal plan` guarantees every
+diff --git a/templates/vault-CLAUDE.md b/templates/vault-CLAUDE.md
+index 0d9c36b..28df793 100644
+--- a/templates/vault-CLAUDE.md
++++ b/templates/vault-CLAUDE.md
+@@ -32,6 +32,7 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what
+ - To file an issue, say "file an issue for ..." or "turn this idea into an issue" (the `issue` skill); it drafts the title and body in the issue template, asks about anything unclear, and creates it through `{{CLI}} issue create` with a placement flag (`--parent`, `--standalone` or `--bug`) only after I approve the exact wording and placement. Never `gh issue create`: a hook blocks it in registered repos. The same hook blocks removing a feature's `feature` label or a sub-issue link (`gh issue edit --remove-parent`, `--remove-sub-issue`, `--remove-label feature`, `gh label delete feature`, the matching `gh api` calls): I change those by hand on GitHub.
+ - To design something larger than one issue (a new project, a feature, a refactor, or several ideas combined), start a fresh session on Opus (by convention) and say "design ..." (the `design` skill); it researches first, interviews me over as many rounds as it needs, gets an independent Opus review, seals the design only once I approve the summary, then drafts one issue per story for me to approve. Ask it later to "file the stories of <design>" for any left unfiled.
+ - To plan an issue, start a fresh session on Opus (by convention) inside the repo clone and say "plan #<issue>" (the `plan-story` skill); it researches first, interviews me only on what research can't settle, gets an independent Opus review of the draft, and seals only once I approve the summary.
++- To hand stories over entirely (plan, implement, review, retro and merge with no approvals from me), start a fresh session on Opus (by convention) inside the repo clone and say "handoff #<issue>" (or several issues, or a feature) (the `handoff` skill); it asks me only when it isn't sure, and runs the implementation on a Sonnet subagent.
+ - To implement a sealed plan, start a fresh session inside the repo clone and say "implement #<issue>" (the `implement-story` skill); it stays on this session's model (Sonnet, by convention) and runs its own review on Opus.
+ - `{{CLI}} repo-init <path>`: one-time setup of a repo clone (squash-only merges, the `planned`, `feature` and `bug` labels, shared pre-push hook, `CLAUDE.md` skeleton, `.github/ISSUE_TEMPLATE/issue.md`; the last two are left uncommitted).
+ - `{{CLI}} idea add "<title>" [--project <id>] [--source ...]` and `{{CLI}} idea drop <file> --reason "..."`, `{{CLI}} idea promote <file> --body-file <file> [--title "..."] [--repo <name>] (--parent <n>|<repo>#<n> | --standalone | --bug)` (creates the GitHub issue from a body in the issue template; only after I approve)
+diff --git a/tests/test_skills.py b/tests/test_skills.py
+index 20f9b3b..855347e 100644
+--- a/tests/test_skills.py
++++ b/tests/test_skills.py
+@@ -29,7 +29,10 @@ SKILLS = {
+     "retro": (r"retro (#\d|issue \d)", None),
+     "issue": (r"file an issue for", None),
+     "design": (r"design a \.\.\.", "design-reviewer.md"),
++    "handoff": (r"handoff #\d", None),
+ }
++# the five skills that carry the shared approvals section (handoff is an orchestrator, not one)
++PIPELINE_SKILLS = [s for s in SKILLS if s != "handoff"]
+ 
+ 
+ def read(skill: str, name: str) -> str:
+@@ -701,6 +704,95 @@ class PlacementDocsTest(unittest.TestCase):  # T6 -> AC6 (#57)
+                 self.assertIn(flag, out.getvalue())
+ 
+ 
++class StepsOnlyRouteTest(AssertMentionsMixin, unittest.TestCase):  # T1 -> AC12 (#78)
++    def setUp(self):
++        self.text = read("implement-story", "SKILL.md")
++        m = re.search(r"^## Steps only\n(.*?)(?=^## |\Z)", self.text, re.S | re.M)
++        self.assertIsNotNone(m, "implement-story has no '## Steps only' section")
++        self.section = m.group(1)
++
++    def test_route_is_named_in_which_procedure_applies(self):
++        m = re.search(r"^## Which procedure applies\n(.*?)(?=^## |\Z)", self.text, re.S | re.M)
++        self.assertIn("Steps only", m.group(1))
++
++    def test_section_content(self):
++        self.assertMentions("Where **Start** or **Resume** would go on to **Finish**",
++                            "return the question as your final report", "`vault.py lint`",
++                            "no review, open no PR", "no push notification",
++                            "three-bullet rule doesn't apply", "fix each in its own commit",
++                            text=self.section)
++
++    def test_still_no_approval_prompt_outside_shared_section(self):
++        shared = re.search(r"^## Approvals, pings and the closing summary\n(.*?)(?=^## |\Z)",
++                           self.text, re.S | re.M).group(1)
++        self.assertNotIn("the approval prompt", self.text.replace(shared, ""))
++
++
++class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-AC13 (#78)
++    def setUp(self):
++        self.skill = read("handoff", "SKILL.md")
++
++    def test_description_triggers(self):  # T2
++        desc = frontmatter(self.skill)["description"].lower()
++        self.assertRegex(desc, r"handoff #\d")
++        self.assertIn("several issues", desc)
++        self.assertIn("feature", desc)
++
++    def test_scan_and_order(self):  # T3
++        self.assertMentions("vault.py design stories", "other open sub-issues in issue-number order",
++                            "unfiled stories", "never file them", "skip closed issues",
++                            "retro is sealed", "upfront scan", "user decision", "one story at a time",
++                            "only after the previous one has merged", "contradicts a later issue",
++                            "stop and ask")
++
++    def test_planning(self):  # T4
++        self.assertMentions("without asking for approval", "still runs on opus",
++                            "skip plan-story's handoff push notification",
++                            "never edit or create a github issue on your own", "`pr: none`",
++                            "stop and ask")
++
++    def test_implementation_and_review(self):  # T5
++        self.assertMentions('model: "sonnet"', "steps only route", "`sendmessage`",
++                            "only if that implementer can't be resumed", "answer it if you are sure",
++                            "model can't be chosen", "`reviewer.md`", "`review <k>:`", "`r<n>`",
++                            "`full check:` failures and lint failures", "at most two reviews",
++                            "`vault.py open-pr`", "sending no push notification")
++
++    def test_retro(self):  # T6
++        self.assertMentions("an idea or dropped", "never into a created or amended issue",
++                            "lasting decisions", "drop ideas the issue resolved",
++                            "`vault.py closes-feature", "feature-close warning",
++                            "`gh pr checks <pr> --watch`", "`vault.py seal retro", "without approval",
++                            "stop and ask")
++
++    def test_pings_reports_resume(self):  # T7
++        self.assertMentions("push notification", "when the run ends", "`- handed off: <run>`",
++                            "`gh pr comment`", "before sealing", "decisions made without the user",
++                            "deviations", "left-open findings", "questions asked",
++                            "combined report", "retro sealed or issue closed", "has a `pr:`",
++                            "plan sealed", "plan still a draft", "no plan yet",
++                            "asks them again")
++        self.assertNotIn("the approval prompt", self.skill)
++
++    def test_no_desktop_tools_and_pipeline_set(self):  # T8
++        for bad in ("start_session", "mcp__ccd", "AskUserQuestion"):
++            self.assertNotIn(bad, self.skill)
++        self.assertEqual(PIPELINE_SKILLS, ["implement-story", "plan-story", "retro", "issue", "design"])
++
++
++class HandoffDocsTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC14 (#78)
++    def test_claude_md_bullet(self):
++        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
++        bullet = next(ln for ln in text.splitlines() if ln.startswith("- `skills/handoff/`"))
++        self.assertMentions("doesn't carry the shared approvals section", "five pipeline skills",
++                            text=bullet)
++
++    def test_guide_line(self):
++        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
++        line = next(ln for ln in guide.splitlines() if "handoff #<issue>" in ln)
++        self.assertMentions("opus", "repo clone", text=line)
++
++
+ class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
+     def test_plan_story_declares_it(self):
+         self.assertMentions("pr: none", "Files:", "whether the issue ends in a pull request",
+@@ -752,9 +844,9 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
+         return m.group(1)
+ 
+     def test_section_identical_and_right_after_never(self):               # T1
+-        sections = {s: self.collapse(self.section(s, self.HEADING)) for s in SKILLS}
++        sections = {s: self.collapse(self.section(s, self.HEADING)) for s in PIPELINE_SKILLS}
+         self.assertEqual(len(set(sections.values())), 1, "the five copies differ")
+-        for skill in SKILLS:
++        for skill in PIPELINE_SKILLS:
+             headings = re.findall(r"^## (.*)$", read(skill, "SKILL.md"), re.M)
+             self.assertEqual(headings[headings.index("Never") + 1], self.HEADING, skill)
+ 

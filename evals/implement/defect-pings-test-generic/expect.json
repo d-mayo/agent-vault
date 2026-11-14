@@ -1,0 +1,14 @@
+{
+  "kind": "defect",
+  "about": "agent-vault#78 R1, PR 80: test_pings_reports_resume pins AC9's pings only with generic phrases (such as \"push notification\") that appear elsewhere in the skill, so it would pass without the pings AC9 requires.",
+  "defects": [
+    {
+      "name": "the pings test pins AC9 only with generic phrases",
+      "patterns": [
+        "test_pings_reports_resume",
+        "AC9",
+        "T7"
+      ]
+    }
+  ]
+}

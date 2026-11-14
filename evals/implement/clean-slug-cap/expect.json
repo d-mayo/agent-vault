@@ -1,4 +1,4 @@
 {
   "kind": "clean",
-  "about": "slugify cuts at 40 characters and then strips hyphens, so every criterion holds; no major finding is expected."
+  "about": "hand-written: slugify cuts at 40 characters and then strips hyphens, so every criterion holds; no major finding is expected."
 }

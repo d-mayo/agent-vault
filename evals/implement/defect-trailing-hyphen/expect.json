@@ -1,6 +1,6 @@
 {
   "kind": "defect",
-  "about": "slugify cuts at 40 characters after stripping hyphens, so the slug can end with a hyphen (breaks AC2).",
+  "about": "hand-written: slugify cuts at 40 characters after stripping hyphens, so the slug can end with a hyphen (breaks AC2).",
   "defects": [
     {
       "name": "trailing hyphen after the cut",
