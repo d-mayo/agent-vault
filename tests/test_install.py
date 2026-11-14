@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -239,6 +240,212 @@ class InstallTest(unittest.TestCase):
         self.assertEqual((user_skill / "SKILL.md").read_text(), "user's own")
         self.assertTrue((self.home / ".claude" / "skills" / "plan-story" / "SKILL.md").exists())
         self.assertTrue(any("skipped skill mine" in r for r in report))
+
+    def _tree(self, root: Path) -> set:
+        return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()
+                and "__pycache__" not in p.parts and p.suffix != ".pyc" and p.name != ".gitkeep"}
+
+    def test_replaces_file_by_file(self):  # T1 -> AC1
+        from unittest import mock
+        self.run_install()
+        claude = self.home / ".claude"
+        inst = claude / "agent-vault"
+        skill = next(p for p in (claude / "skills").iterdir() if (p / install.SKILL_MARKER).exists())
+        (inst / "stale.py").write_text("old")
+        (inst / "olddir").mkdir()
+        (inst / "olddir" / "x.py").write_text("old")
+        (skill / "stale.md").write_text("old")
+        (inst / "vault.py").write_text("old version")      # a file both versions have, differing
+        staging = claude / install.STAGING
+        (staging / "junk").mkdir(parents=True)
+        (staging / "junk" / "left.txt").write_text("interrupted")
+        common = [(inst / p) for p in self._tree(REPO / "agent_vault")] +                  [(skill / p) for p in self._tree(REPO / "skills" / skill.name)]
+        problems, deleted, staged_in_skills = [], [], []
+        real_replace, real_remove, real_rmdir = os.replace, os.remove, os.rmdir
+
+        def check(what):
+            for f in common:
+                if not f.exists():
+                    problems.append(f"{what}: {f} missing")
+            if any(install.STAGING in str(p) for p in (claude / "skills").rglob("*")):
+                staged_in_skills.append(what)
+
+        def replace(a, b):
+            check(f"before replace {b}")
+            real_replace(a, b)
+            check(f"after replace {b}")
+
+        def remove(p, *a, **k):
+            check(f"before remove {p}")
+            deleted.append(Path(p).name)
+            real_remove(p, *a, **k)
+            check(f"after remove {p}")
+
+        def rmdir(p, *a, **k):
+            check(f"before rmdir {p}")
+            real_rmdir(p, *a, **k)
+            check(f"after rmdir {p}")
+
+        with mock.patch.object(install.os, "replace", replace),                 mock.patch.object(install.os, "remove", remove),                 mock.patch.object(install.os, "rmdir", rmdir):
+            self.run_install()
+        self.assertEqual(problems, [])
+        self.assertEqual(staged_in_skills, [])
+        self.assertNotIn(install.SKILL_MARKER, deleted)
+        self.assertFalse((inst / "stale.py").exists())
+        self.assertFalse((inst / "olddir" / "x.py").exists())
+        self.assertFalse((skill / "stale.md").exists())
+        self.assertTrue((skill / install.SKILL_MARKER).exists())
+        self.assertEqual(self._tree(inst), self._tree(REPO / "agent_vault"))
+        self.assertEqual((inst / "vault.py").read_bytes(), (REPO / "agent_vault" / "vault.py").read_bytes())
+        self.assertFalse(staging.exists())
+        self.assertFalse((inst / "junk").exists())
+
+    def test_new_file_in_source_appears(self):  # T1 -> AC1
+        fake = self.root / "fakerepo"
+        shutil.copytree(REPO / "agent_vault", fake / "agent_vault")
+        shutil.copytree(REPO / "skills", fake / "skills")
+        shutil.copytree(REPO / "templates", fake / "templates")
+        (fake / "agent_vault" / "newfile.py").write_text("new")
+        old = install.REPO
+        try:
+            install.REPO = fake
+            self.run_install()
+        finally:
+            install.REPO = old
+        self.assertEqual((self.home / ".claude" / "agent-vault" / "newfile.py").read_text(), "new")
+
+    def test_replace_retries_then_gives_up(self):  # T3 -> AC2
+        from unittest import mock
+        self.run_install()
+        inst = self.home / ".claude" / "agent-vault"
+        (inst / "vault.py").write_text("old version")
+        (inst / "stale.py").write_text("old")
+        real = os.replace
+        calls = []
+
+        def flaky(a, b):
+            if Path(b).name == "vault.py" and Path(b).parent == inst and len(calls) < 2:
+                calls.append(b)
+                raise PermissionError("in use")
+            real(a, b)
+
+        with mock.patch.object(install.os, "replace", flaky), mock.patch.object(install.time, "sleep"):
+            self.run_install()
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual((inst / "vault.py").read_text(), "old version")
+
+        (inst / "vault.py").write_text("old version")
+        (inst / "stale.py").write_text("old")
+
+        def stuck(a, b):
+            if Path(b).name == "vault.py" and Path(b).parent == inst:
+                raise PermissionError("in use")
+            real(a, b)
+
+        with mock.patch.object(install.os, "replace", stuck), mock.patch.object(install.time, "sleep"):
+            with self.assertRaises(SystemExit) as cm:
+                self.run_install()
+        msg = str(cm.exception)
+        self.assertIn("vault.py", msg)
+        self.assertIn("install.py", msg)
+        self.assertTrue((inst / "stale.py").exists())            # nothing deleted before the failure
+        self.assertEqual((inst / "vault.py").read_text(), "old version")
+
+    def _clone(self, name="clone"):
+        clone = self.root / name
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        return clone
+
+    def _hooks_path(self, clone):
+        return subprocess.run(["git", "-C", str(clone), "config", "core.hooksPath"],
+                              capture_output=True, text=True).stdout.strip()
+
+    def test_uninstall(self):  # T4 -> AC3
+        clone = self._clone()
+        install.install(self.vault, self.home, repo=clone)
+        claude = self.home / ".claude"
+        user_skill = claude / "skills" / "mine"
+        user_skill.mkdir(parents=True)
+        (user_skill / "SKILL.md").write_text("user skill")
+        (claude / install.STAGING / "x").mkdir(parents=True)
+        us = json.loads((claude / "settings.json").read_text())
+        us["permissions"]["allow"].append("Bash(ls:*)")
+        (claude / "settings.json").write_text(json.dumps(us))
+        notes = snapshot(self.vault / "Agent")
+        guide = (self.vault / "CLAUDE.md").read_bytes()
+        marked = sorted(p.name for p in (claude / "skills").iterdir() if (p / install.SKILL_MARKER).exists())
+        self.assertTrue(marked)
+        report = install.uninstall(self.home, repo=clone)
+        self.assertFalse((claude / install.STAGING).exists())
+        self.assertFalse((claude / "agent-vault").exists())
+        self.assertFalse((claude / "agent-vault.json").exists())
+        for name in marked:
+            self.assertFalse((claude / "skills" / name).exists())
+        self.assertTrue((user_skill / "SKILL.md").exists())
+        text = (claude / "settings.json").read_text()
+        self.assertNotIn("/.claude/agent-vault/", text)
+        us = json.loads(text)
+        self.assertEqual(us["model"], "opus")
+        self.assertIn(FOREIGN, [h for g in us["hooks"]["PreToolUse"] for h in g["hooks"]])
+        self.assertEqual(us["permissions"]["allow"], ["Bash(ls:*)"])
+        self.assertTrue((claude / "settings.json.bak").exists())
+        self.assertEqual(self._hooks_path(clone), "")
+        self.assertEqual(guide, (self.vault / "CLAUDE.md").read_bytes())
+        self.assertEqual(notes, snapshot(self.vault / "Agent"))
+        joined = "\n".join(report)
+        for needle in ["agent-vault", "agent-vault.json", "core.hooksPath", *marked]:
+            self.assertIn(needle, joined)
+        self.assertEqual(len([r for r in report if r.startswith("removed skill ")]), len(marked))
+
+    def test_uninstall_vault_entries_and_other_hooks_path(self):  # T5 -> AC3
+        clone = self._clone()
+        install.install(self.vault, self.home, repo=clone)
+        subprocess.run(["git", "-C", str(clone), "config", "core.hooksPath", "elsewhere"], check=True)
+        inst = self.home / ".claude" / "agent-vault"
+        vsp = self.vault / ".claude" / "settings.json"
+        vsp.write_text(json.dumps({"hooks": install.user_hooks(inst), "permissions": {
+            "allow": [f"Bash({self.cli()}:*)", "Bash(ls:*)"]}}))
+        install.uninstall(self.home, repo=clone)
+        vs = json.loads(vsp.read_text())
+        self.assertNotIn("hooks", vs)
+        self.assertEqual(vs["permissions"]["allow"], ["Bash(ls:*)"])
+        self.assertEqual(self._hooks_path(clone), "elsewhere")
+
+    def test_uninstall_when_nothing_installed(self):  # T5 -> AC3
+        clone = self._clone()
+        (self.home / ".claude" / "settings.json").write_text('{"model":"opus"}')
+        before = snapshot(self.home, self.vault)
+        report = install.uninstall(self.home, repo=clone)
+        self.assertEqual(before, snapshot(self.home, self.vault))
+        self.assertFalse((self.home / ".claude" / "settings.json.bak").exists())
+        self.assertTrue(any("nothing was installed" in r for r in report))
+        for extra in ([], ["--vault", str(self.vault)]):
+            out = subprocess.run([sys.executable, str(REPO / "install.py"), "--uninstall",
+                                  "--home", str(self.home), "--repo", str(clone), *extra],
+                                 capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+        out = subprocess.run([sys.executable, str(REPO / "install.py"), "--home", str(self.home)],
+                             capture_output=True, text=True)
+        self.assertNotEqual(out.returncode, 0)
+
+    def test_uninstall_unsets_hooks_path_when_nothing_else(self):  # T5 -> AC3
+        clone = self._clone()
+        subprocess.run(["git", "-C", str(clone), "config", "core.hooksPath", install.HOOKS_DIR], check=True)
+        report = install.uninstall(self.home, repo=clone)
+        self.assertEqual(self._hooks_path(clone), "")
+        self.assertTrue(any("core.hooksPath" in r for r in report))
+
+    def test_uninstall_report_ends_with_restart(self):  # T6 -> AC3
+        install.install(self.vault, self.home, repo=self._clone())
+        report = install.uninstall(self.home, repo=self._clone("other"))
+        self.assertIn("restart", report[-1])
+        self.assertIn("Claude sessions", report[-1])
+
+    def test_docs_describe_file_by_file_and_uninstall(self):  # T7 -> AC4, AC5
+        for text in (install.__doc__, (REPO / "README.md").read_text(encoding="utf-8"),
+                     (REPO / "CLAUDE.md").read_text(encoding="utf-8")):
+            self.assertIn("--uninstall", text)
+            self.assertIn("file by file", text)
 
     def test_rejects_non_vault(self):
         with self.assertRaises(SystemExit):

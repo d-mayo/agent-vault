@@ -3,7 +3,9 @@
     python install.py --vault "C:/Users/<you>/iCloudDrive/iCloud~md~obsidian/Notes"
 
 What it does:
-  1. Copies agent_vault/ to ~/.claude/agent-vault/ and skills/*/ to ~/.claude/skills/.
+  1. Copies agent_vault/ to ~/.claude/agent-vault/ and skills/*/ to ~/.claude/skills/, replacing
+     the installed files file by file from a staged copy (so a hook that starts during a
+     reinstall never finds its script missing) and deleting files the new version dropped.
   2. Writes ~/.claude/agent-vault.json (vault path and what the installer manages).
   3. Merges its hook entries and the CLI permission into ~/.claude/settings.json, and removes
      the ones older versions put in <vault>/.claude/settings.json. Only entries it created
@@ -13,16 +15,24 @@ What it does:
   6. Points this repo's git hooks at agent_vault/githooks/ (main-branch protection); other repos
      get the installed copy in ~/.claude/agent-vault/githooks/ through `repo-init`.
 Hooks run with the Python that runs this installer. Standard library only.
+
+    python install.py --uninstall
+
+removes everything above that the installer manages (the code, the skills it installed, its
+settings entries and permission, the config, this repo's core.hooksPath) and leaves the vault's
+notes and <vault>/CLAUDE.md alone.
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -32,6 +42,8 @@ LEGACY_ALLOW = ["Bash(python Agent/_system/vault.py:*)"]
 HOOKS_DIR = "agent_vault/githooks"           # this repo's hooks: the same file that gets installed
 SKILL_MARKER = ".installed-by-agent-vault"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".gitkeep")
+STAGING = "agent-vault.staging"                 # under ~/.claude/, never under skills/ (D6)
+REPLACE_TRIES, REPLACE_PAUSE = 6, 0.25          # about 1.5 seconds in all
 
 
 def python_cmd() -> str:
@@ -128,10 +140,54 @@ def rmtree(path: Path) -> None:
         shutil.rmtree(path, onerror=_clear_readonly)
 
 
-def copy_tree(src: Path, dest: Path) -> None:
-    if dest.exists():
-        rmtree(dest)
-    shutil.copytree(src, dest, ignore=IGNORE)
+def replace_file(src: Path, dest: Path) -> None:
+    """Move src over dest in one step, retrying briefly while the OS says it is in use."""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(src, dest)
+            return
+        except PermissionError as e:
+            if attempt == REPLACE_TRIES - 1:
+                sys.exit(f"error: could not replace {dest} ({e}): it is in use. Close what is "
+                         "using it and rerun install.py; files not yet replaced are untouched.")
+            time.sleep(REPLACE_PAUSE)
+
+
+def clear_staging(root: Path) -> None:
+    if root.exists():
+        rmtree(root)
+
+
+def copy_tree(src: Path, dest: Path, stage: Path, keep: tuple = ()) -> None:
+    """Make dest match src file by file: stage a copy, move each staged file over its target,
+    and only then delete what src doesn't have, so a file both versions have is never missing."""
+    if stage.exists():
+        rmtree(stage)
+    shutil.copytree(src, stage, ignore=IGNORE)
+    dest.mkdir(parents=True, exist_ok=True)
+    wanted = set()
+    for staged in sorted(stage.rglob("*")):
+        rel = staged.relative_to(stage)
+        target = dest / rel
+        wanted.add(rel)
+        if staged.is_dir():
+            if target.exists() and not target.is_dir():
+                os.remove(target)
+            target.mkdir(exist_ok=True)
+        else:
+            if target.is_dir():
+                rmtree(target)
+            replace_file(staged, target)
+    for old in sorted(dest.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        rel = old.relative_to(dest)
+        if rel in wanted or rel.parts[0] in keep:
+            continue
+        if old.is_dir():
+            if not any(old.iterdir()):
+                os.rmdir(old)
+        else:
+            os.remove(old)
+    rmtree(stage)
 
 
 def install_skills(claude: Path, report: list[str]) -> None:
@@ -141,7 +197,7 @@ def install_skills(claude: Path, report: list[str]) -> None:
             report.append(f"warning: skipped skill {skill.name}: {dest} exists and wasn't "
                           "installed by agent-vault")
             continue
-        copy_tree(skill, dest)
+        copy_tree(skill, dest, claude / STAGING / skill.name, keep=(SKILL_MARKER,))
         (dest / SKILL_MARKER).write_text("", encoding="utf-8")
         report.append(f"installed skill {skill.name}")
 
@@ -225,9 +281,11 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
     allow = [f"Bash({cli}:*)"]
 
     migrate_phone_log(vault, report)
-    copy_tree(REPO / "agent_vault", install_dir)
+    clear_staging(claude / STAGING)
+    copy_tree(REPO / "agent_vault", install_dir, claude / STAGING / "_code")
     report.append(f"installed code to {install_dir}")
     install_skills(claude, report)
+    clear_staging(claude / STAGING)
 
     vault_settings = vault / ".claude" / "settings.json"
     for path, hooks, perms in [
@@ -255,11 +313,83 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
     return report
 
 
+def unset_git_hooks(repo: Path, report: list[str]) -> bool:
+    """Unset core.hooksPath in this clone if it still points at our hooks (git would otherwise
+    run a pre-push hook that refuses every push once the config is gone)."""
+    if not (repo / ".git").exists():
+        return False
+    try:
+        cur = subprocess.run(["git", "-C", str(repo), "config", "--get", "core.hooksPath"],
+                             capture_output=True, text=True).stdout.strip()
+        if cur != HOOKS_DIR:
+            return False
+        subprocess.run(["git", "-C", str(repo), "config", "--unset", "core.hooksPath"],
+                       check=True, capture_output=True)
+    except Exception as e:
+        report.append(f"warning: could not unset core.hooksPath in {repo} ({e})")
+        return False
+    report.append(f"unset core.hooksPath in {repo}")
+    return True
+
+
+def uninstall(home: Path, repo: Path = REPO) -> list[str]:
+    """Remove what install() manages; never touches the vault's notes or its CLAUDE.md."""
+    home = home.resolve()
+    claude = home / ".claude"
+    config_path = claude / "agent-vault.json"
+    config = read_json(config_path)
+    managed = config.get("managed_allow", [])
+    report: list[str] = []
+    settings_paths = [claude / "settings.json"]
+    if config.get("vault"):
+        settings_paths.append(Path(config["vault"]) / ".claude" / "settings.json")
+    for path in settings_paths:
+        if not path.exists():
+            continue
+        data = read_json(path)
+        merged, _ = merge_settings(copy.deepcopy(data), {}, [], managed)
+        if merged != data:
+            write_if_changed(path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
+                             backup=True)
+            report.append(f"removed agent-vault entries from {path} (backup: {path.name}.bak)")
+    install_dir = claude / "agent-vault"
+    if install_dir.exists():
+        rmtree(install_dir)
+        report.append(f"removed {install_dir}")
+    staging = claude / STAGING
+    if staging.exists():
+        rmtree(staging)
+        report.append(f"removed {staging}")
+    skills = claude / "skills"
+    if skills.is_dir():
+        for skill in sorted(p for p in skills.iterdir() if (p / SKILL_MARKER).exists()):
+            rmtree(skill)
+            report.append(f"removed skill {skill.name}")
+    if config_path.exists():
+        config_path.unlink()
+        report.append(f"removed {config_path}")
+    unset_git_hooks(repo, report)
+    if report:
+        report.append("restart open Claude sessions so they stop running the removed hooks")
+    else:
+        report.append("nothing was installed")
+    return report
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Install agent-vault. Safe to rerun.")
-    ap.add_argument("--vault", required=True, help="path to the Obsidian vault (the Notes folder)")
+    ap.add_argument("--vault", help="path to the Obsidian vault (the Notes folder)")
+    ap.add_argument("--uninstall", action="store_true",
+                    help="remove what the installer manages (the vault's notes are kept)")
+    ap.add_argument("--repo", default=str(REPO), help=argparse.SUPPRESS)  # tests
     ap.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)  # tests
     args = ap.parse_args()
+    if args.uninstall:
+        for line in uninstall(Path(args.home), Path(args.repo)):
+            print(line)
+        return
+    if not args.vault:
+        ap.error("--vault is required (or use --uninstall)")
     for line in install(Path(args.vault), Path(args.home)):
         print(line)
 

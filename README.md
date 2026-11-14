@@ -16,7 +16,7 @@ python install.py --vault "C:/Users/<you>/iCloudDrive/iCloud~md~obsidian/Notes"
 
 The installer is safe to rerun after every `git pull`. It:
 
-- copies the code to `~/.claude/agent-vault/` and any skills to `~/.claude/skills/`;
+- copies the code to `~/.claude/agent-vault/` and any skills to `~/.claude/skills/`, replacing the installed files file by file (from a staged copy, so a running session never finds a hook script missing) and deleting the ones the new version dropped;
 - writes `~/.claude/agent-vault.json` with the vault path and the installer's Python (the pre-push hook runs the lint with it);
 - merges every hook and the permission to run the CLI into `~/.claude/settings.json`,
   only ever replacing entries it created, backing the file up to `.bak` first, and removes
@@ -27,6 +27,11 @@ The installer is safe to rerun after every `git pull`. It:
 
 Hooks run with the same Python that ran the installer, so if you switch Python
 installs, rerun it.
+
+To remove it, run `python install.py --uninstall` (no `--vault` needed). It takes out the installed
+code, the skills it installed, its entries and permission in the settings files, its config and this
+clone's `core.hooksPath`, and leaves the vault's notes and `<vault>/CLAUDE.md` alone; then restart
+open Claude sessions.
 
 **To verify:** run the `check:` command it prints last. Then start Claude Code in
 the vault and ask it to quote the context it was given at session start: it should
