@@ -376,6 +376,22 @@ class RealCases(Base):
         data = json.loads((REPO / "evals" / "baseline.json").read_text(encoding="utf-8"))
         self.assertIsInstance(data, dict)
 
+    def test_baseline_entries_are_well_formed(self):
+        """T5 -> AC5."""
+        data = json.loads((REPO / "evals" / "baseline.json").read_text(encoding="utf-8"))
+        self.assertIn("implement", data)
+        for reviewer, entry in data.items():
+            with self.subTest(reviewer):
+                self.assertIn(reviewer, score.REVIEWER_FILES)
+                self.assertEqual(entry["file"], score.REVIEWER_FILES[reviewer])
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+                self.assertRegex(entry["date"], r"^\d{4}-\d{2}-\d{2}$")
+                for name, case in entry["cases"].items():
+                    with self.subTest(case=name):
+                        self.assertIsInstance(case["passes"], int)
+                        self.assertIsInstance(case["runs"], int)
+                        self.assertLessEqual(case["passes"], case["runs"])
+
     def test_limit_check_fails_over_the_limit(self):
         for i in range(score.MAX_REVIEWS // score.RUNS_PER_CASE + 1):
             write_case(self.root, "implement", "c%d" % i)
