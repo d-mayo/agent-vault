@@ -264,7 +264,19 @@ def set_git_hooks(repo: Path, report: list[str]) -> None:
         report.append(f"warning: could not set core.hooksPath ({e})")
 
 
-def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
+def commit_info(repo: Path, commit: str | None) -> dict:
+    """{"commit": full sha, "commit_time": committer time in Unix seconds} for `commit` (else HEAD)
+    in the clone `repo`; {} when git can't say (not a work tree, unknown sha, git missing)."""
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%H %ct",
+                              (commit or "HEAD") + "^{commit}", "--"],
+                             capture_output=True, text=True, check=True).stdout.split()
+        return {"commit": out[0], "commit_time": int(out[1])}
+    except Exception:
+        return {}
+
+
+def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = None) -> list[str]:
     vault = Path(os.path.abspath(vault))
     if not (vault / ".obsidian").is_dir():
         sys.exit(f"error: {vault} is not an Obsidian vault (no .obsidian/ folder)")
@@ -299,9 +311,10 @@ def install(vault: Path, home: Path, repo: Path = REPO) -> list[str]:
         if write_if_changed(path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
                             backup=True):
             report.append(f"updated {path}")
-    write_if_changed(config_path, json.dumps(
-        {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
-         "managed_allow": allow}, indent=2, ensure_ascii=False) + "\n")
+    config = {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
+              "managed_allow": allow, "source": Path(os.path.abspath(repo)).as_posix(),
+              **commit_info(repo, commit)}
+    write_if_changed(config_path, json.dumps(config, indent=2, ensure_ascii=False) + "\n")
 
     template = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
     if write_if_changed(vault / "CLAUDE.md", template.replace("{{CLI}}", cli)):
@@ -383,6 +396,7 @@ def main() -> None:
                     help="remove what the installer manages (the vault's notes are kept)")
     ap.add_argument("--repo", default=str(REPO), help=argparse.SUPPRESS)  # tests
     ap.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)  # tests
+    ap.add_argument("--commit", help=argparse.SUPPRESS)  # the commit this copy was exported from
     args = ap.parse_args()
     if args.uninstall:
         for line in uninstall(Path(args.home), Path(args.repo)):
@@ -390,7 +404,7 @@ def main() -> None:
         return
     if not args.vault:
         ap.error("--vault is required (or use --uninstall)")
-    for line in install(Path(args.vault), Path(args.home)):
+    for line in install(Path(args.vault), Path(args.home), Path(args.repo), args.commit):
         print(line)
 
 
