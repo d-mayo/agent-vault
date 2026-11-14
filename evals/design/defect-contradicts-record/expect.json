@@ -1,0 +1,15 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault design 1, D6 now has the installer require SSH keys for git remotes, which contradicts the active record d15 (git remotes use HTTPS with `gh` as the credential helper) with no `Replaces:` line; contradicts-record. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "D6 requires SSH remotes, contradicting d15 without replacing it",
+      "patterns": [
+        "\\bd15\\b",
+        "\\bSSH\\b",
+        "credential helper",
+        "HTTPS"
+      ]
+    }
+  ]
+}

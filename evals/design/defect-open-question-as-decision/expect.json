@@ -1,0 +1,15 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault design 2, D2 now settles that a parent feature may be in any other repo of the project, which the design's first open question says is unknown (no project has two repos; a cross-repo `--parent` is untested); open-question-as-decision. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "D2 decides that a cross-repo parent works while the first open question lists it as unknown",
+      "patterns": [
+        "cross-repo",
+        "(another|other|second) repos?\\b",
+        "(different|several|two|multiple) repos",
+        "first open question"
+      ]
+    }
+  ]
+}
