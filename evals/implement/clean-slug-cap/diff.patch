@@ -12,7 +12,7 @@ diff --git a/tests/test_slugify.py b/tests/test_slugify.py
 new file mode 100644
 --- /dev/null
 +++ b/tests/test_slugify.py
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,21 @@
 +from __future__ import annotations
 +
 +import sys
