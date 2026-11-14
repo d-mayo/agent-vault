@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -550,6 +551,42 @@ class RepoGuideEvals(Base):
                 self.assertIn(needle, text)
         layout = text.split("## Layout", 1)[1]
         self.assertIn(".claude/skills/**", layout.splitlines()[1])
+
+
+class ImplementCases(Base):
+    """T3 -> AC3."""
+
+    ORIGIN = re.compile(r"(hand-written:|agent-vault#\d+ R\d+, PR \d+:) ")
+
+    def cases(self):
+        out = {}
+        for case in score.case_dirs(REPO / "evals", "implement"):
+            out[case.name] = json.loads((case / "expect.json").read_text(encoding="utf-8"))
+        return out
+
+    def test_count_kinds_and_origins(self):
+        cases = self.cases()
+        self.assertGreaterEqual(len(cases), 6)
+        self.assertLessEqual(len(cases), 8)
+        self.assertGreaterEqual(sum(c["kind"] == "clean" for c in cases.values()), 2)
+        for name, expect in cases.items():
+            with self.subTest(name):
+                self.assertRegex(expect["about"], r"^" + self.ORIGIN.pattern)
+                self.assertEqual(score.check_case(REPO / "evals" / "implement" / name,
+                                                  "implement"), [])
+        real = {n: c for n, c in cases.items() if c["about"].startswith("agent-vault#")}
+        self.assertGreaterEqual(sum(c["kind"] == "defect" for c in real.values()), 3)
+        self.assertGreaterEqual(sum(c["kind"] == "clean" for c in real.values()), 1)
+
+    def test_defect_patterns_are_specific(self):
+        for name, expect in self.cases().items():
+            if expect["kind"] != "defect":
+                continue
+            for defect in expect["defects"]:
+                for pat in defect["patterns"]:
+                    with self.subTest(name=name, pattern=pat):
+                        regex = re.compile(pat, re.IGNORECASE)
+                        self.assertIsNone(regex.search("(major) The diff has a bug."))
 
 
 if __name__ == "__main__":

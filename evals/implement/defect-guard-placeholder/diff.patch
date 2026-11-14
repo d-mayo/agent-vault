@@ -1,0 +1,144 @@
+diff --git a/agent_vault/hooks/push_guard.py b/agent_vault/hooks/push_guard.py
+index 889d9bf..5e55b68 100644
+--- a/agent_vault/hooks/push_guard.py
++++ b/agent_vault/hooks/push_guard.py
+@@ -6,6 +6,11 @@ Blocks (exit 2, reason on stderr):
+     else the clone it runs in): issues go through `vault.py issue create`;
+   - `git push` whose destination is main: an explicit refspec, `--all`/`--mirror`,
+     or no refspec while the repo it runs in is on main;
++  - in a registered repo, removing what makes a design's feature: `gh issue edit` with
++    `--remove-parent`, `--remove-sub-issue` or `--remove-label` naming `feature`,
++    `gh label delete feature`, and `gh api` calls that remove a sub-issue (`removeSubIssue`,
++    or a DELETE on a `sub_issue` path) or delete the `feature` label (a DELETE on
++    `…/labels/feature`): only the user changes those, by hand on GitHub;
+   - skipping git's own hooks: `--no-verify`, `git commit -n`, `-c core.hooksPath=…`.
+ The command is tokenized quote-aware, heredoc bodies are treated as data,
+ `cd`/`pushd` (and PowerShell's `Set-Location`/`Push-Location`/`sl`) change the
+@@ -214,6 +219,65 @@ def gh_issue_create(seg: list[str]) -> tuple[bool, str | None]:
+     return words[:1] == ["issue"] and words[1:2] in (["create"], ["new"]), repo
+ 
+ 
++def gh_words_and_repo(seg: list[str]) -> tuple[list[str], str | None]:
++    """The words of a gh command (every token that isn't an option, the `-R`/`--repo` value dropped)
++    and its --repo/-R value."""
++    words, repo, i = [], None, 1
++    while i < len(seg):
++        a = seg[i]
++        if a in ("-R", "--repo") and i + 1 < len(seg):
++            repo = seg[i + 1]
++            i += 1
++        elif a.startswith("--repo="):
++            repo = a[len("--repo="):]
++        elif a.startswith("-R") and not a.startswith("--") and len(a) > 2:
++            repo = a[2:].lstrip("=")
++        elif not a.startswith("-"):
++            words.append(a)
++        i += 1
++    return words, repo
++
++
++def feature_link_removal(seg: list[str]) -> tuple[bool, str | None]:
++    """(removes a feature's label or a sub-issue link, the repo it names if any). A command it can't
++    read is not a match (d14)."""
++    words, repo = gh_words_and_repo(seg)
++    opts = seg[1:]
++    if words[:2] == ["issue", "edit"]:
++        for k, a in enumerate(opts):
++            if a in ("--remove-parent", "--remove-sub-issue") or a.startswith(("--remove-parent=", "--remove-sub-issue=")):
++                return True, repo
++            if a == "--remove-label" or a.startswith("--remove-label="):
++                value = a.split("=", 1)[1] if "=" in a else (opts[k + 1] if k + 1 < len(opts) else "")
++                if "feature" in [v.strip().lower() for v in value.split(",")]:
++                    return True, repo
++        return False, repo
++    if [w.lower() for w in words[:3]] == ["label", "delete", "feature"]:
++        return True, repo
++    if words[:1] == ["api"]:
++        if any("removesubissue" in t.lower() for t in opts):
++            return True, repo
++        method = ""
++        for k, a in enumerate(opts):
++            if a in ("-X", "--method") and k + 1 < len(opts):
++                method = opts[k + 1]
++            elif a.startswith("--method="):
++                method = a.split("=", 1)[1]
++            elif a.startswith("-X") and len(a) > 2:
++                method = a[2:]
++        if method.upper() != "DELETE":
++            return False, repo
++        for t in opts:
++            path = t.strip("/").lower()
++            if t.startswith("-") or "/" not in path:
++                continue
++            hit = re.search(r"(^|/)sub_issues?(/|$)", path) or re.search(r"(^|/)labels/feature$", path)
++            if hit:
++                m = re.match(r"(?:repos/)([^/]+/[^/]+)/", path)
++                return True, repo or (m.group(1) if m else None)
++    return False, repo
++
++
+ def issue_target_registered(repo: str | None, env_repo: str | None, cwd: str | None) -> bool:
+     """Whether the issue would land in a registered repo. Imports lib only now, and any
+     failure means "not registered": the guard never blocks on its own bugs."""
+@@ -267,6 +331,10 @@ def check_command(command: str, cwd: str | None, depth: int = 0) -> None:
+                 block("create issues with the issue template, not `gh issue create`: "
+                       f"{lib.CLI} issue create <repo> --title \"...\" --body-file <file> "
+                       "(the `issue` skill drafts it).")
++            removes, repo = feature_link_removal(seg)
++            if removes and issue_target_registered(repo, env_repo, cwd):
++                block("a feature's label and sub-issue links are never removed by a session. The user "
++                      "changes them by hand on GitHub.")
+ 
+ 
+ def main() -> None:
+diff --git a/tests/test_push_guard.py b/tests/test_push_guard.py
+index f796de7..549eee9 100644
+--- a/tests/test_push_guard.py
++++ b/tests/test_push_guard.py
+@@ -203,6 +203,46 @@ class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
+             with self.subTest(cmd=cmd):
+                 self.assertEqual(self.code(cmd, cwd), 0)
+ 
++    def test_blocks_removing_a_features_label_or_links(self):     # T13 -> AC13
++        c, e = self.clone, self.elsewhere
++        graphql = "gh api graphql -f query='mutation{removeSubIssue(input:{issueId:\"a\",subIssueId:\"b\"}){issue{id}}}'"
++        for cmd, cwd in [
++            ("gh issue edit 5 --remove-parent", c),
++            ("gh issue edit 5 --remove-sub-issue 7", c),
++            ("gh issue edit 5 --remove-label bug,feature", c),
++            ("gh issue edit 5 --remove-label=Feature", c),
++            ("gh -R acme/widget issue edit 5 --remove-label feature", e),
++            ("gh label delete feature", c),
++            ("gh label delete feature --yes -R acme/widget", e),
++            (graphql, c),
++            ("gh api -X DELETE repos/acme/widget/issues/5/sub_issue -F sub_issue_id=7", c),
++            ("gh api --method DELETE repos/acme/widget/issues/5/labels/feature", e),
++            ("gh api --method=DELETE repos/acme/widget/labels/feature", e),
++            ("bash -c 'gh issue edit 5 --remove-parent'", c),
++        ]:
++            with self.subTest(cmd=cmd):
++                r = self.run_guard(cmd, cwd)
++                self.assertEqual(r.returncode, 2, r.stderr)
++                self.assertIn("user", r.stderr)
++                self.assertIn("by hand", r.stderr)
++
++    def test_allows_other_edits_and_other_repos(self):            # T13 -> AC13
++        c, o = self.clone, self.other
++        for cmd, cwd in [
++            ("gh issue edit 5 --remove-label bug", c),
++            ("gh issue edit 5 --add-sub-issue 7", c),
++            ("gh issue edit 5 --add-label planned", c),
++            ("gh label delete bug", c),
++            ("gh api repos/acme/widget/issues/5/sub_issues", c),
++            ("gh api -X DELETE repos/acme/widget/issues/5/labels/bug", c),
++            ("gh issue edit 5 --remove-parent", o),
++            ("gh issue edit 5 --remove-label feature -R other/repo", c),
++            ("gh label delete feature -R other/repo", c),
++            ("gh api -X DELETE repos/other/repo/issues/5/sub_issue", c),
++        ]:
++            with self.subTest(cmd=cmd):
++                self.assertEqual(self.code(cmd, cwd), 0)
++
+     def test_option_values_are_not_read_as_repo(self):
+         r = self.run_guard('gh issue create --title "-Rx" --body y', self.clone)
+         self.assertEqual(r.returncode, 2, r.stderr)

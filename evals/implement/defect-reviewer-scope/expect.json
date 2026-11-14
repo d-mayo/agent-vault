@@ -1,0 +1,14 @@
+{
+  "kind": "defect",
+  "about": "agent-vault#76 R1, PR 77: reviewer.md's Prompt item 1 still tells the reviewer to review the whole diff every time, contradicting item 4's fix-only scope for a re-review (breaks AC1).",
+  "defects": [
+    {
+      "name": "item 1 contradicts item 4 on a re-review's scope",
+      "patterns": [
+        "item 1",
+        "item 4.{0,120}item 1|item 1.{0,120}item 4",
+        "whole diff.{0,120}(contradict|conflict|inconsisten)|(contradict|conflict|inconsisten).{0,120}whole diff"
+      ]
+    }
+  ]
+}
