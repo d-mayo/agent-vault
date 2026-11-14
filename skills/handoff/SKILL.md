@@ -22,7 +22,8 @@ plain repo name. Work inside the repo clone.
 - Never create or edit a GitHub issue on your own. Follow-ups become ideas or
   are dropped; anything that seems to need an issue is a question for the user.
 - Never merge except through `vault.py seal retro`, and never push to `main`.
-- Never run two stories at once, and never run `install.py`.
+- Never run two stories at once.
+- Never run `install.py` yourself: only `seal retro` (after a merge) and session start install, and only from `main`.
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
 
 ## The run

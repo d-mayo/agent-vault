@@ -19,7 +19,7 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 - Never merge a PR, and never push to `main`.
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
-- Never run `install.py`.
+- Never run `install.py` yourself: only `seal retro` (after a merge) and session start install, and only from `main`.
 
 ## Approvals, pings and the closing summary
 

@@ -17,7 +17,7 @@ python install.py --vault "C:/Users/<you>/iCloudDrive/iCloud~md~obsidian/Notes"
 The installer is safe to rerun after every `git pull`. It:
 
 - copies the code to `~/.claude/agent-vault/` and any skills to `~/.claude/skills/`, replacing the installed files file by file (from a staged copy, so a running session never finds a hook script missing) and deleting the ones the new version dropped;
-- writes `~/.claude/agent-vault.json` with the vault path and the installer's Python (the pre-push hook runs the lint with it);
+- writes `~/.claude/agent-vault.json` with the vault path, the installer's Python (the pre-push hook runs the lint with it), and the clone it installed from (`source`) with the commit installed (`commit`, `commit_time`);
 - merges every hook and the permission to run the CLI into `~/.claude/settings.json`,
   only ever replacing entries it created, backing the file up to `.bak` first, and removes
   the entries older versions put in `<vault>/.claude/settings.json`;
@@ -27,6 +27,15 @@ The installer is safe to rerun after every `git pull`. It:
 
 Hooks run with the same Python that ran the installer, so if you switch Python
 installs, rerun it.
+
+After that first run you don't have to rerun it by hand: the installed copy keeps itself current
+with `main`. `seal retro`, after it merges a PR in the clone you installed from, installs what
+`main` now holds, and every session start checks whether that clone's local `main` has a newer commit
+than the installed one and installs it if so. Both install only `main`'s committed tree (never a
+branch or uncommitted changes), look at local refs only (a `git pull` brings in a merge made on
+GitHub), say what they did, or how to run `install.py` by hand when they can't, and take effect in
+the next session. This happens on the PC only; phone and cloud sessions have no config. An install
+from before this change has no `source`, so after pulling it run `install.py` once by hand.
 
 To remove it, run `python install.py --uninstall` (no `--vault` needed). It takes out the installed
 code, the skills it installed, its entries and permission in the settings files, its config and this
