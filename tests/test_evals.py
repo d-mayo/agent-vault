@@ -442,7 +442,7 @@ class PromptBuilder(Base):
                     (case / f).write_text("BODY-%d of %s\n" % (i, f), encoding="utf-8")
                 text = prompt.build(reviewer, "the-case", self.root, self.tmp)
                 self.assertIn("Judge from that text alone", text)
-                self.assertIn("open no file", text)
+                self.assertIn("open no file other than this one", text)
                 self.assertIn("run no command", text)
                 self.assertIn("## Prompt\n\nGive it everything \u2014 in full.", text)
                 self.assertIn("## Findings format\n\n```\n## not a heading\n(major) x\n```"
@@ -521,8 +521,8 @@ class ReviewerEvalsSkill(Base):
         for needle in ("evals/prompt.py", "--out", 'model: "opus"', "evals/out/",
                        "run-<k>.txt", "RUNS_PER_CASE", "python evals/score.py", "--check",
                        "--update", "ask which one", "stop and report", "Delete that reviewer's",
-                       "never fall back", "unchanged and in full", "Ask the user",
-                       "nothing blocks on it", "never a\n      line-numbered"):
+                       "never fall back", "Read tool", "Open no other file", "neutral name",
+                       "no case name", "Ask the user", "nothing blocks on it"):
             with self.subTest(needle):
                 self.assertIn(needle, text)
 

@@ -82,7 +82,7 @@ def build(reviewer, case, evals_root=None, repo_root=None):
     parts = [
         "You are the reviewer that the text below describes. Everything you need "
         "is pasted in full below: %s. Judge from that text alone: open no file "
-        "and run no command. The two sections that follow are the instructions "
+        "other than this one and run no command. The two sections that follow are the instructions "
         "for your review (they are worded for whoever launches you; the "
         "material they list is already pasted below). Answer with nothing but the findings, in the "
         "format given under \"Findings format\"." % listing,
