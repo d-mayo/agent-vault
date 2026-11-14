@@ -87,7 +87,7 @@ import json, os, sys, time
 from pathlib import Path
 home = Path(sys.argv[sys.argv.index("--home") + 1])
 here = Path(__file__).resolve().parent
-rec = {"argv": sys.argv[1:], "folder": str(here), "marker": (here / "marker.txt").read_text(),
+rec = {"argv": sys.argv[1:], "folder": str(here), "marker": (here / "marker.txt").read_text() if (here / "marker.txt").exists() else "",
        "has_feature_file": (here / "feature.txt").exists()}
 with open(home / "record.jsonl", "a", encoding="utf-8") as f:
     f.write(json.dumps(rec) + "\\n")
