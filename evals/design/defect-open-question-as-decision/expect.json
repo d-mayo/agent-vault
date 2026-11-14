@@ -1,14 +1,13 @@
 {
   "kind": "defect",
-  "about": "hand-written: from agent-vault design 2, D2 now settles that a parent feature may be in any other repo of the project, which the design's first open question says is unknown (no project has two repos; a cross-repo `--parent` is untested); open-question-as-decision. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "about": "hand-written: from agent-vault design 2, D5 now settles that a story closed without a retro counts as finished and its feature closes anyway, which the design's second open question lists as unknown (it never triggers D5, so the feature can stay open; settled by whether it happens); open-question-as-decision. The overview is today's Purpose and Architecture sections, not as sealed.",
   "defects": [
     {
-      "name": "D2 decides that a cross-repo parent works while the first open question lists it as unknown",
+      "name": "D5 decides what happens to a story closed without a retro while the second open question lists it as unknown",
       "patterns": [
-        "cross-repo",
-        "(another|other|second) repos?\\b",
-        "(different|several|two|multiple) repos",
-        "first open question"
+        "closed without a retro",
+        "second open question",
+        "not planned"
       ]
     }
   ]

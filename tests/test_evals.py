@@ -761,6 +761,9 @@ class DesignDefectCases(Base):
         self.assertLessEqual(len(cases), 8)
         self.assertEqual(score.check_reviewer(REPO / "evals", "design"), [])
         self.assertEqual(score.check_limit(REPO / "evals", "design"), [])
+        kinds = [e["kind"] for e in cases.values()]
+        self.assertEqual(kinds.count("defect"), 4)
+        self.assertEqual(kinds.count("clean"), len(kinds) - 4)
         for name, expect in cases.items():
             with self.subTest(name):
                 if expect["kind"] == "defect":

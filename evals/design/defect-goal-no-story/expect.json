@@ -6,9 +6,9 @@
       "name": "G5 (a feature closes itself) is delivered by no story after S4 was removed",
       "patterns": [
         "\\bG5\\b",
-        "\\bD5\\b",
-        "closes? (itself|the feature|a (finished )?feature)",
-        "closing (a|the) (finished )?feature"
+        "closes itself",
+        "seal retro closes a finished feature",
+        "closes? (the|a) (finished )?feature"
       ]
     }
   ]

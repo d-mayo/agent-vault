@@ -108,7 +108,7 @@ Decision: A sealed design has at most one feature issue, in a repo of its projec
 Why: The design already is the larger unit with its reasoning in the vault, so the feature only has to show it on GitHub; one per design keeps the grouping traceable both ways, and creating it through `issue create` keeps d22's single path for new issues.
 
 ### D2. Features are one level deep and a story is always a sub-issue of its design's feature
-Decision: Only an open issue labelled `feature`, in the story's repo or in any other repo of the same project, can be a parent, a feature is never a sub-issue, and `issue create` refuses a body naming `[[<design>]] S<n>` unless its parent is that design's feature; the Source line stays the story's identity and the sub-issue link mirrors it.
+Decision: Only an open issue labelled `feature` can be a parent, a feature is never a sub-issue, and `issue create` refuses a body naming `[[<design>]] S<n>` unless its parent is that design's feature; the Source line stays the story's identity and the sub-issue link mirrors it.
 Why: One level keeps the tree readable and the checks simple, and enforcing the story's parent in code keeps GitHub's grouping from drifting away from the design.
 
 ### D3. Every new issue declares its place when it is filed
@@ -120,7 +120,7 @@ Decision: `issue create --bug` files a standalone issue with the `bug` label; `v
 Why: The user wants bugs and feature work told apart at a glance, decided once at filing; git refuses `:` in branch names, so the existing branch type carries the marker.
 
 ### D5. seal retro closes a feature once its design is fully filed and its last open sub-issue is merged
-Decision: After merging, or sealing a closed issue's retro, `seal retro` closes the issue's parent feature when every story of its design is filed and no other sub-issue is still open, and the retro summary the user approves names that close.
+Decision: After merging, or sealing a closed issue's retro, `seal retro` closes the issue's parent feature when every story of its design is filed and no other sub-issue is still open, and the retro summary the user approves names that close; a story closed without a retro (by hand, or as not planned) counts as finished too, so its feature closes anyway.
 Why: GitHub never closes a parent itself, and the retro is the step every story already passes through with the user's approval, so the feature closes without the user having to remember it, while a story held back for later still has an open feature to be filed under.
 
 ### D6. A feature is never planned or implemented
