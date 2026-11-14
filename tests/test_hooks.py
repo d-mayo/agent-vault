@@ -11,7 +11,8 @@ import unittest
 import uuid
 from pathlib import Path
 
-from tests.helpers import CODE, REPO, make_vault, restore_or_build, run_py, tmpdir, write_config
+from tests.helpers import (CODE, REPO, make_source_clone, make_vault, restore_or_build, run_py, tmpdir,
+                           write_config, write_source_config)
 
 HOOKS = CODE / "hooks"
 CLI = CODE / "vault.py"
@@ -396,7 +397,7 @@ class SessionStartTest(HookCase):
         script.write_text(textwrap.dedent(f"""
             import sys
             sys.path[:0] = [{str(CODE)!r}, {str(HOOKS)!r}]
-            import {module}, lib, vault
+            import {module}, lib, selfupdate, vault
             def boom(*a, **k):
                 raise RuntimeError("boom")
             setattr({mod}, {attr!r}, boom)
@@ -405,6 +406,48 @@ class SessionStartTest(HookCase):
         data = {"session_id": self.sid, "cwd": str(cwd or self.vault),
                 "tool_name": "Write", "tool_input": {"file_path": str(self.agent("Projects/demo.md"))}}
         return run_py(script, stdin=data, config=self.cfg, env=self.env)
+
+    # --- selfupdate (#98) ---
+    def source_config(self, commit_time_offset: int) -> Path:
+        """A config under <root>/su/.claude/ naming a temp clone as the install's source; the fake
+        installer there records its call in <root>/su/record.jsonl."""
+        su = self.root / "su"
+        su.mkdir(exist_ok=True)
+        clone, _, when = make_source_clone(self.root)
+        self.record = su / "record.jsonl"
+        return write_source_config(su, self.vault, clone, when + commit_time_offset)
+
+    def test_stale_install_updates_first_in_every_kind_of_session(self):  # T5 -> AC5
+        self.cfg = self.source_config(-100)
+        unrelated = self.root / "unrelated"
+        unrelated.mkdir()
+        out = self.start(unrelated)
+        self.assertTrue(out.startswith("agent-vault installed main"), out)
+        self.assertEqual(len(self.record.read_text().splitlines()), 1)
+        self.record.unlink()
+        write_source_config(self.root / "su", self.vault, self.root / "source", 0)
+        out = self.start(self.vault)
+        self.assertTrue(out.startswith("agent-vault installed main"), out)
+        self.assertIn("# Vault context", out)
+        self.assertEqual(out.splitlines()[1].split()[0:2], ["#", "Vault"])
+
+    def test_current_install_adds_nothing(self):  # T5 -> AC5
+        self.cfg = self.source_config(0)
+        unrelated = self.root / "unrelated"
+        unrelated.mkdir()
+        self.assertEqual(self.start(unrelated), "")
+        self.assertFalse(self.record.exists())
+
+    def test_config_without_source_is_silent(self):  # T5 -> AC5
+        unrelated = self.root / "unrelated"
+        unrelated.mkdir()
+        self.assertEqual(self.start(unrelated), "")
+
+    def test_raising_selfupdate_keeps_the_rest(self):  # T5 -> AC5
+        r = self.crashing("session_start", "selfupdate.selfupdate", cwd=self.vault)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("self-update check failed", r.stdout)
+        self.assertIn("# Vault context", r.stdout)
 
 
 class StopTest(HookCase):
