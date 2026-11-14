@@ -6,7 +6,7 @@ diff --git a/agent_vault/lib.py b/agent_vault/lib.py
  
  def slugify(text: str) -> str:
 -    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-+    s = re.sub(r"[^a-z0-9]+", "-", text.lower())[:40].strip("-")
++    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].rstrip("-")
      return s or "untitled"
 diff --git a/tests/test_slugify.py b/tests/test_slugify.py
 new file mode 100644
