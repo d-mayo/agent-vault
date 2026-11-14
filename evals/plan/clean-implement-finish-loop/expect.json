@@ -1,0 +1,4 @@
+{
+  "kind": "clean",
+  "about": "agent-vault#76 sealed plan: implement-story's Finish loop (fix-only re-reviews, parallel full check, known failures; replaces d30 by name in D1; checked by hand against each reviewer question); no major finding is expected. The overview is today's Purpose and Architecture sections, not as sealed."
+}

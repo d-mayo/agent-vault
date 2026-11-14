@@ -605,5 +605,40 @@ class ImplementCases(Base):
                         self.assertIsNone(regex.search("(major) The diff has a bug."))
 
 
+class PlanCleanCases(Base):
+    """T1 -> AC2 (#96)."""
+
+    def clean(self):
+        out = {}
+        for case in score.case_dirs(REPO / "evals", "plan"):
+            expect = json.loads((case / "expect.json").read_text(encoding="utf-8"))
+            if expect["kind"] == "clean":
+                out[case] = expect
+        return out
+
+    def test_clean_cases_are_real_sealed_plans(self):
+        cases = self.clean()
+        self.assertGreaterEqual(len(cases), 2)
+        for case, expect in cases.items():
+            with self.subTest(case.name):
+                self.assertRegex(expect["about"], r"^agent-vault#\d+ sealed plan: ")
+                plan = (case / "plan.md").read_text(encoding="utf-8")
+                self.assertIn("## Acceptance criteria", plan)
+                self.assertIn("## Steps", plan)
+                self.assertTrue((case / "decisions.md").read_text(encoding="utf-8").strip())
+
+    def test_repo_guide_is_claude_md_at_the_base_commit(self):
+        for case in self.clean():
+            with self.subTest(case.name):
+                m = re.search(r"^base_sha: (\w+)$", (case / "context.md").read_text(encoding="utf-8"), re.M)
+                self.assertIsNotNone(m, "context.md needs a `base_sha: <sha>` line")
+                shown = subprocess.run(["git", "show", "%s:CLAUDE.md" % m.group(1)], cwd=REPO,
+                                       capture_output=True)
+                if shown.returncode != 0:
+                    self.skipTest("commit %s is not in this clone" % m.group(1))
+                self.assertEqual((case / "repo-guide.md").read_bytes().decode("utf-8"),
+                                 shown.stdout.decode("utf-8").replace("\r\n", "\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
