@@ -1,12 +1,15 @@
 diff --git a/agent_vault/lib.py b/agent_vault/lib.py
 --- a/agent_vault/lib.py
 +++ b/agent_vault/lib.py
-@@ -387,5 +387,5 @@ def now_hhmm() -> str:
+@@ -387,5 +387,8 @@ def now_hhmm() -> str:
  
  
++SLUG_MAX = 40
++
++
  def slugify(text: str) -> str:
 -    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].rstrip("-")
++    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:SLUG_MAX].rstrip("-")
      return s or "untitled"
 diff --git a/tests/test_slugify.py b/tests/test_slugify.py
 new file mode 100644
@@ -26,10 +29,10 @@ new file mode 100644
 +
 +class SlugCap(unittest.TestCase):
 +    def test_cap(self):
-+        self.assertEqual(len(lib.slugify("a" * 100)), 40)
++        self.assertEqual(len(lib.slugify("a" * 100)), lib.SLUG_MAX)
 +
 +    def test_trailing_hyphen(self):
-+        slug = lib.slugify("a" * 39 + " b")
++        slug = lib.slugify("a" * (lib.SLUG_MAX - 1) + " b")
 +        self.assertFalse(slug.endswith("-"))
 +
 +    def test_short_text_unchanged(self):
