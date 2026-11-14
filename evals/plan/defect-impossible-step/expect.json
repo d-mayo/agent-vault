@@ -1,0 +1,13 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault#58 sealed plan, step 1 and Context send `cmd_branch` to `resolve_branch_type` in `agent_vault/branch_types.py` to be updated, but neither the module nor the function exists (the file listing and `cmd_branch` in context.md show it); impossible-step. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "step 1 names a module and function that do not exist",
+      "patterns": [
+        "branch_types",
+        "resolve_branch_type"
+      ]
+    }
+  ]
+}

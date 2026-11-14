@@ -1,0 +1,15 @@
+{
+  "kind": "defect",
+  "about": "hand-written: from agent-vault#76 sealed plan, D1 no longer says it replaces d30 (reviewed once at the end, three rounds at most), yet it sets at most two reviews and d30 is in decisions.md and active; contradicts-record. The overview is today's Purpose and Architecture sections, not as sealed.",
+  "defects": [
+    {
+      "name": "D1 contradicts d30 without replacing it",
+      "patterns": [
+        "\\bd30\\b",
+        "three (rounds|reviews).{0,150}(two|replace|contradict|conflict)",
+        "(two|replace|contradict|conflict).{0,150}three (rounds|reviews)",
+        "implementation-is-reviewed-once-at-the-end"
+      ]
+    }
+  ]
+}

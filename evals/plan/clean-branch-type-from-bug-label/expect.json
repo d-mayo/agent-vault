@@ -1,0 +1,4 @@
+{
+  "kind": "clean",
+  "about": "agent-vault#58 sealed plan: `vault.py branch` takes its type from the issue's `bug` label (a small code-and-skill-text plan, checked by hand against each reviewer question); no major finding is expected. The overview is today's Purpose and Architecture sections, not as sealed."
+}

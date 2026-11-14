@@ -605,5 +605,91 @@ class ImplementCases(Base):
                         self.assertIsNone(regex.search("(major) The diff has a bug."))
 
 
+class PlanCleanCases(Base):
+    """T1 -> AC2 (#96)."""
+
+    def clean(self):
+        out = {}
+        for case in score.case_dirs(REPO / "evals", "plan"):
+            expect = json.loads((case / "expect.json").read_text(encoding="utf-8"))
+            if expect["kind"] == "clean":
+                out[case] = expect
+        return out
+
+    def test_clean_cases_are_real_sealed_plans(self):
+        cases = self.clean()
+        self.assertGreaterEqual(len(cases), 2)
+        for case, expect in cases.items():
+            with self.subTest(case.name):
+                self.assertRegex(expect["about"], r"^agent-vault#\d+ sealed plan: ")
+                plan = (case / "plan.md").read_text(encoding="utf-8")
+                self.assertIn("## Acceptance criteria", plan)
+                self.assertIn("## Steps", plan)
+                self.assertTrue((case / "decisions.md").read_text(encoding="utf-8").strip())
+
+    def test_repo_guide_is_claude_md_at_the_base_commit(self):
+        for case in self.clean():
+            with self.subTest(case.name):
+                m = re.search(r"^base_sha: (\w+)$", (case / "context.md").read_text(encoding="utf-8"), re.M)
+                self.assertIsNotNone(m, "context.md needs a `base_sha: <sha>` line")
+                shown = subprocess.run(["git", "show", "%s:CLAUDE.md" % m.group(1)], cwd=REPO,
+                                       capture_output=True)
+                if shown.returncode != 0:
+                    self.skipTest("commit %s is not in this clone" % m.group(1))
+                self.assertEqual((case / "repo-guide.md").read_bytes().decode("utf-8"),
+                                 shown.stdout.decode("utf-8").replace("\r\n", "\n"))
+
+class PlanDefectCases(Base):
+    """T2, T3 -> AC3, AC1 (#96)."""
+
+    MARKERS = ("cites-ac-only", "contradicts-record", "missing-ac", "impossible-step")
+    GENERIC = ("(major) the plan is wrong", "(major) a test is missing",
+               "(major) contradicts a decision record")
+
+    def cases(self):
+        return {c.name: json.loads((c / "expect.json").read_text(encoding="utf-8"))
+                for c in score.case_dirs(REPO / "evals", "plan")}
+
+    def test_defect_cases_each_name_one_defect_specifically(self):
+        defects = {n: e for n, e in self.cases().items() if e["kind"] == "defect"}
+        self.assertGreaterEqual(len(defects), 4)
+        for name, expect in defects.items():
+            with self.subTest(name):
+                self.assertEqual(len(expect["defects"]), 1)
+                defect = expect["defects"][0]
+                self.assertTrue(defect["name"].strip())
+                self.assertTrue(defect["patterns"])
+                for pat in defect["patterns"]:
+                    regex = re.compile(pat, re.IGNORECASE)
+                    for line in self.GENERIC:
+                        self.assertIsNone(regex.search(line), "%r matches %r" % (pat, line))
+        for marker in self.MARKERS:
+            with self.subTest(marker=marker):
+                self.assertTrue(any(marker in e["about"] for e in defects.values()))
+
+    def test_case_set_size_and_origins(self):
+        cases = self.cases()
+        self.assertGreaterEqual(len(cases), 6)
+        self.assertLessEqual(len(cases), 8)
+        self.assertEqual(score.check_reviewer(REPO / "evals", "plan"), [])
+        self.assertEqual(score.check_limit(REPO / "evals", "plan"), [])
+        for name, expect in cases.items():
+            with self.subTest(name):
+                self.assertRegex(expect["about"], r"^(agent-vault#\d+ sealed plan:|hand-written:) ")
+
+class PlanBaseline(Base):
+    """T4 -> AC4 (#96)."""
+
+    def test_plan_baseline_covers_every_case(self):
+        entry = score.load_baseline(REPO / "evals")["plan"]
+        folders = {c.name for c in score.case_dirs(REPO / "evals", "plan")}
+        self.assertEqual(set(entry["cases"]), folders)
+        for name, c in entry["cases"].items():
+            with self.subTest(name):
+                self.assertIsInstance(c["passes"], int)
+                self.assertEqual(c["runs"], score.RUNS_PER_CASE)
+                self.assertLessEqual(c["passes"], c["runs"])
+
+
 if __name__ == "__main__":
     unittest.main()
