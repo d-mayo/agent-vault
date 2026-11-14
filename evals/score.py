@@ -3,6 +3,7 @@
 Usage:
     python evals/score.py [<reviewer>]         score replies, baseline beside
     python evals/score.py --status             list reviewer files changed since baseline
+    python evals/score.py --check <reviewer>   list problems with the reviewer's cases
     python evals/score.py --update <reviewer>  record the current scores as the baseline
 
 Layout (see the repo CLAUDE.md): cases in evals/<reviewer>/<case>/, saved replies in
@@ -302,19 +303,35 @@ def update(root, reviewer, today=None):
     return 0, "baseline for %s updated: %d/%d over %d case(s)" % (reviewer, tp, tr, len(cases))
 
 
+def check_all(root, reviewer):
+    """Every problem with a reviewer's cases, no cases at all included."""
+    problems = check_reviewer(root, reviewer) + check_limit(root, reviewer)
+    if not case_dirs(root, reviewer):
+        problems.append("%s: no cases" % reviewer)
+    return problems
+
+
 def main(argv=None, root=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     root = Path(root) if root is not None else DEFAULT_ROOT
     flag = None
-    if argv and argv[0] in ("--status", "--update"):
+    if argv and argv[0] in ("--status", "--update", "--check"):
         flag = argv.pop(0)
-    if len(argv) > 1 or (flag == "--update" and not argv) or (flag == "--status" and argv):
-        _emit("usage: score.py [<reviewer>] | --status | --update <reviewer>")
+    if (len(argv) > 1 or (flag in ("--update", "--check") and not argv)
+            or (flag == "--status" and argv)):
+        _emit("usage: score.py [<reviewer>] | --status | --update <reviewer> | --check <reviewer>")
         return 2
     if argv and argv[0] not in REVIEWER_FILES:
         _emit("unknown reviewer %s (one of: %s)" % (ascii(argv[0]), ", ".join(REVIEWER_FILES)))
         return 2
     reviewers = [argv[0]] if argv else list(REVIEWER_FILES)
+    if flag == "--check":
+        problems = check_all(root, reviewers[0])
+        for p in problems:
+            _emit(p)
+        if not problems:
+            _emit("%s: the cases are well-formed" % reviewers[0])
+        return 1 if problems else 0
     if flag == "--update":
         code, message = update(root, reviewers[0])
         _emit(message)

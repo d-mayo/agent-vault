@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from tests.helpers import REPO, make_vault, tmpdir
@@ -19,6 +19,9 @@ from tests.helpers import REPO, make_vault, tmpdir
 _spec = importlib.util.spec_from_file_location("evals_score", REPO / "evals" / "score.py")
 score = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(score)
+_pspec = importlib.util.spec_from_file_location("evals_prompt", REPO / "evals" / "prompt.py")
+prompt = importlib.util.module_from_spec(_pspec)
+_pspec.loader.exec_module(prompt)
 
 DEFECT_EXPECT = {
     "kind": "defect",
@@ -411,6 +414,97 @@ class RepoWiring(Base):
         self.assertIn("`evals/`", layout)
         self.assertIn("evals/**", layout.splitlines()[1])
         self.assertNotIn("`evals/out/`", layout)
+
+REVIEWER_TEXT = (
+    "# reviewer\n\nIntro \u2014 text.\n\n## Requesting it\n\nLaunch it.\n\n"
+    "## Prompt\n\nGive it everything \u2014 in full.\n\n## Findings format\n\n"
+    "```\n## not a heading\n(major) x\n```\n\nOne line each.\n\n## After\n\nTail text.\n")
+
+
+class PromptBuilder(Base):
+    """T1 -> AC1 (the prompt builder and score.py --check)."""
+
+    def setUp(self):
+        super().setUp()
+        for rel in score.REVIEWER_FILES.values():
+            dest = self.tmp / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(REVIEWER_TEXT.encode("utf-8"))
+        self.expect = {"kind": "defect", "about": "hand-written: secret-about",
+                       "defects": [{"name": "secretdefect", "patterns": ["secretpattern"]}]}
+
+    def test_sections_opening_and_material_order(self):
+        for reviewer in ("implement", "plan", "design"):
+            with self.subTest(reviewer):
+                case = write_case(self.root, reviewer, "the-case", expect=self.expect)
+                for i, f in enumerate(score.MATERIAL[reviewer]):
+                    (case / f).write_text("BODY-%d of %s\n" % (i, f), encoding="utf-8")
+                text = prompt.build(reviewer, "the-case", self.root, self.tmp)
+                self.assertIn("Judge from that text alone", text)
+                self.assertIn("open no file", text)
+                self.assertIn("run no command", text)
+                self.assertIn("## Prompt\n\nGive it everything \u2014 in full.", text)
+                self.assertIn("## Findings format\n\n```\n## not a heading\n(major) x\n```"
+                              "\n\nOne line each.", text)
+                self.assertNotIn("Tail text", text)
+                self.assertNotIn("Launch it.", text)
+                pos = [text.index("BODY-%d of %s" % (i, f))
+                       for i, f in enumerate(score.MATERIAL[reviewer])]
+                self.assertEqual(pos, sorted(pos))
+                self.assertGreater(min(pos), text.index("## Findings format"))
+                for leak in ("the-case", str(self.root), "expect.json", "secretpattern",
+                             "secretdefect", "secret-about"):
+                    self.assertNotIn(leak, text)
+
+    def test_errors_exit_2_and_write_no_file(self):
+        write_case(self.root, "implement", "good", expect=self.expect)
+        write_case(self.root, "implement", "nomaterial", **{"diff.patch": None})
+        for argv in (["nope", "good"], ["implement", "missing"],
+                     ["implement", "nomaterial"], ["implement", "../good"]):
+            with self.subTest(argv):
+                out = self.tmp / "out.txt"
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    code = prompt.main(argv + ["--out", str(out)], self.root, self.tmp)
+                self.assertEqual(code, 2)
+                self.assertTrue(err.getvalue().strip())
+                self.assertFalse(out.exists())
+
+    def test_subprocess_writes_utf8_and_prints_the_path(self):
+        case = score.case_dirs(REPO / "evals", "implement")[0].name
+        out = self.tmp / "p.txt"
+        proc = subprocess.run([sys.executable, str(REPO / "evals" / "prompt.py"),
+                               "implement", case, "--out", str(out)],
+                              capture_output=True, text=True, cwd=self.tmp)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), str(out))
+        text = out.read_bytes().decode("utf-8")
+        self.assertIn("\u2014", text)
+        self.assertNotIn("expect.json", text)
+        bad = subprocess.run([sys.executable, str(REPO / "evals" / "prompt.py"),
+                              "implement", "no-such-case", "--out", str(self.tmp / "q.txt")],
+                             capture_output=True, text=True)
+        self.assertEqual(bad.returncode, 2)
+        self.assertFalse((self.tmp / "q.txt").exists())
+
+    def test_check(self):
+        write_case(self.root, "implement", "ok")
+        code, out = run_main(["--check", "implement"], self.root)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(out.strip().splitlines()), 1)
+        write_case(self.root, "implement", "bad", **{"diff.patch": None})
+        code, out = run_main(["--check", "implement"], self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("missing diff.patch", out)
+        code, out = run_main(["--check", "plan"], self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("no cases", out)
+        for i in range(9):
+            write_case(self.root, "design", "c%d" % i)
+        code, out = run_main(["--check", "design"], self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("over the limit", out)
+        self.assertEqual(run_main(["--check"], self.root)[0], 2)
 
 
 if __name__ == "__main__":
