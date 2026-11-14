@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -239,6 +240,116 @@ class InstallTest(unittest.TestCase):
         self.assertEqual((user_skill / "SKILL.md").read_text(), "user's own")
         self.assertTrue((self.home / ".claude" / "skills" / "plan-story" / "SKILL.md").exists())
         self.assertTrue(any("skipped skill mine" in r for r in report))
+
+    def _tree(self, root: Path) -> set:
+        return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()
+                and "__pycache__" not in p.parts and p.suffix != ".pyc" and p.name != ".gitkeep"}
+
+    def test_replaces_file_by_file(self):  # T1 -> AC1
+        from unittest import mock
+        self.run_install()
+        claude = self.home / ".claude"
+        inst = claude / "agent-vault"
+        skill = next(p for p in (claude / "skills").iterdir() if (p / install.SKILL_MARKER).exists())
+        (inst / "stale.py").write_text("old")
+        (inst / "olddir").mkdir()
+        (inst / "olddir" / "x.py").write_text("old")
+        (skill / "stale.md").write_text("old")
+        (inst / "vault.py").write_text("old version")      # a file both versions have, differing
+        staging = claude / install.STAGING
+        (staging / "junk").mkdir(parents=True)
+        (staging / "junk" / "left.txt").write_text("interrupted")
+        common = [(inst / p) for p in self._tree(REPO / "agent_vault")] +                  [(skill / p) for p in self._tree(REPO / "skills" / skill.name)]
+        problems, deleted, staged_in_skills = [], [], []
+        real_replace, real_remove, real_rmdir = os.replace, os.remove, os.rmdir
+
+        def check(what):
+            for f in common:
+                if not f.exists():
+                    problems.append(f"{what}: {f} missing")
+            if any(install.STAGING in str(p) for p in (claude / "skills").rglob("*")):
+                staged_in_skills.append(what)
+
+        def replace(a, b):
+            check(f"before replace {b}")
+            real_replace(a, b)
+            check(f"after replace {b}")
+
+        def remove(p, *a, **k):
+            check(f"before remove {p}")
+            deleted.append(Path(p).name)
+            real_remove(p, *a, **k)
+            check(f"after remove {p}")
+
+        def rmdir(p, *a, **k):
+            check(f"before rmdir {p}")
+            real_rmdir(p, *a, **k)
+            check(f"after rmdir {p}")
+
+        with mock.patch.object(install.os, "replace", replace),                 mock.patch.object(install.os, "remove", remove),                 mock.patch.object(install.os, "rmdir", rmdir):
+            self.run_install()
+        self.assertEqual(problems, [])
+        self.assertEqual(staged_in_skills, [])
+        self.assertNotIn(install.SKILL_MARKER, deleted)
+        self.assertFalse((inst / "stale.py").exists())
+        self.assertFalse((inst / "olddir" / "x.py").exists())
+        self.assertFalse((skill / "stale.md").exists())
+        self.assertTrue((skill / install.SKILL_MARKER).exists())
+        self.assertEqual(self._tree(inst), self._tree(REPO / "agent_vault"))
+        self.assertEqual((inst / "vault.py").read_bytes(), (REPO / "agent_vault" / "vault.py").read_bytes())
+        self.assertFalse(staging.exists())
+        self.assertFalse((inst / "junk").exists())
+
+    def test_new_file_in_source_appears(self):  # T1 -> AC1
+        fake = self.root / "fakerepo"
+        shutil.copytree(REPO / "agent_vault", fake / "agent_vault")
+        shutil.copytree(REPO / "skills", fake / "skills")
+        shutil.copytree(REPO / "templates", fake / "templates")
+        (fake / "agent_vault" / "newfile.py").write_text("new")
+        old = install.REPO
+        try:
+            install.REPO = fake
+            self.run_install()
+        finally:
+            install.REPO = old
+        self.assertEqual((self.home / ".claude" / "agent-vault" / "newfile.py").read_text(), "new")
+
+    def test_replace_retries_then_gives_up(self):  # T3 -> AC2
+        from unittest import mock
+        self.run_install()
+        inst = self.home / ".claude" / "agent-vault"
+        (inst / "vault.py").write_text("old version")
+        (inst / "stale.py").write_text("old")
+        real = os.replace
+        calls = []
+
+        def flaky(a, b):
+            if Path(b).name == "vault.py" and Path(b).parent == inst and len(calls) < 2:
+                calls.append(b)
+                raise PermissionError("in use")
+            real(a, b)
+
+        with mock.patch.object(install.os, "replace", flaky), mock.patch.object(install.time, "sleep"):
+            self.run_install()
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual((inst / "vault.py").read_text(), "old version")
+
+        (inst / "vault.py").write_text("old version")
+        (inst / "stale.py").write_text("old")
+
+        def stuck(a, b):
+            if Path(b).name == "vault.py" and Path(b).parent == inst:
+                raise PermissionError("in use")
+            real(a, b)
+
+        with mock.patch.object(install.os, "replace", stuck), mock.patch.object(install.time, "sleep"):
+            with self.assertRaises(SystemExit) as cm:
+                self.run_install()
+        msg = str(cm.exception)
+        self.assertIn("vault.py", msg)
+        self.assertIn("install.py", msg)
+        self.assertTrue((inst / "stale.py").exists())            # nothing deleted before the failure
+        self.assertEqual((inst / "vault.py").read_text(), "old version")
 
     def test_rejects_non_vault(self):
         with self.assertRaises(SystemExit):
