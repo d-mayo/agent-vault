@@ -3,7 +3,9 @@
     python install.py --vault "C:/Users/<you>/iCloudDrive/iCloud~md~obsidian/Notes"
 
 What it does:
-  1. Copies agent_vault/ to ~/.claude/agent-vault/ and skills/*/ to ~/.claude/skills/.
+  1. Copies agent_vault/ to ~/.claude/agent-vault/ and skills/*/ to ~/.claude/skills/, replacing
+     the installed files file by file from a staged copy (so a hook that starts during a
+     reinstall never finds its script missing) and deleting files the new version dropped.
   2. Writes ~/.claude/agent-vault.json (vault path and what the installer manages).
   3. Merges its hook entries and the CLI permission into ~/.claude/settings.json, and removes
      the ones older versions put in <vault>/.claude/settings.json. Only entries it created
@@ -13,6 +15,12 @@ What it does:
   6. Points this repo's git hooks at agent_vault/githooks/ (main-branch protection); other repos
      get the installed copy in ~/.claude/agent-vault/githooks/ through `repo-init`.
 Hooks run with the Python that runs this installer. Standard library only.
+
+    python install.py --uninstall
+
+removes everything above that the installer manages (the code, the skills it installed, its
+settings entries and permission, the config, this repo's core.hooksPath) and leaves the vault's
+notes and <vault>/CLAUDE.md alone.
 """
 from __future__ import annotations
 

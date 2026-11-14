@@ -441,6 +441,12 @@ class InstallTest(unittest.TestCase):
         self.assertIn("restart", report[-1])
         self.assertIn("Claude sessions", report[-1])
 
+    def test_docs_describe_file_by_file_and_uninstall(self):  # T7 -> AC4, AC5
+        for text in (install.__doc__, (REPO / "README.md").read_text(encoding="utf-8"),
+                     (REPO / "CLAUDE.md").read_text(encoding="utf-8")):
+            self.assertIn("--uninstall", text)
+            self.assertIn("file by file", text)
+
     def test_rejects_non_vault(self):
         with self.assertRaises(SystemExit):
             install.install(self.root / "home", self.home)
