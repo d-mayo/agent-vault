@@ -824,6 +824,26 @@ class SetupSkillTest(AssertMentionsMixin, unittest.TestCase):  # T7 -> AC9 (#110
         self.assertMentions("`vault.py schema`", "`agent/setup.md` if it exists")
 
 
+class SetupDocsTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC10 (#110)
+    def test_three_docs_name_the_note_and_the_command(self):
+        for path in (REPO / "CLAUDE.md", REPO / "README.md", REPO / "templates" / "vault-CLAUDE.md"):
+            with self.subTest(path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("Setup.md", text)
+                self.assertRegex(text, r"(vault\.py|\{\{CLI\}\}) setup")
+                self.assertRegex(text, r"`(skills/)?setup/?`")     # the setup skill
+
+    def test_guide_says_the_tracker_decides(self):
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertMentions("the setup's tracker decides how issues are read and filed", text=guide)
+
+    def test_claude_md_bullet_and_usage(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        bullet = next(ln for ln in text.splitlines() if ln.startswith("- `skills/setup/`"))
+        self.assertMentions("not a pipeline skill", text=bullet)
+        self.assertIn("\n  setup --tracker github|jira", vault.__doc__)
+
+
 class HandoffDocsTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC14 (#78)
     def test_claude_md_bullet(self):
         text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")

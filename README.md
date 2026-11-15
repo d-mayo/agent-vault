@@ -56,6 +56,23 @@ the vault and ask it to quote the context it was given at session start: it shou
 begin with "Vault context". (The app doesn't display that context; it goes straight
 into Claude's context.)
 
+## Work setup
+
+Each vault can say how its stories and PRs work in a setup note, `Agent/Setup.md`: the tracker
+(GitHub issues or Jira tickets), the merge style, whether PRs need approvals, whether `repo-init`
+manages a repo's settings or only checks them, the branch-name pattern with the words for a story and
+a bug, and, for Jira, the connector's name, the issue types and the planned label. The note holds the
+same values on every machine, so it has no path in it. A vault with no setup note works exactly as
+before: GitHub issues, squash merges, no required approvals, settings managed by `repo-init`,
+branches `{type}/{issue}-{slug}`.
+
+After `install.py`, start Claude Code in the vault and say "set up this vault" (the `setup` skill):
+it interviews you on each value, shows exactly what it will write, and runs `vault.py setup` only
+after you say yes. `vault.py setup` refuses an incomplete or contradictory setup, and refuses to
+overwrite an existing note without `--replace`; `validate` checks the note and `schema` lists its
+fields. Nothing reads the setup to change behaviour yet; that comes with the later stories of the
+work-setup design.
+
 ## Git conventions
 
 - Never commit to `main`. Use a branch named `<type>/<issue>-<slug>`, for example
