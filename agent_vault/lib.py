@@ -129,6 +129,7 @@ FEATURE_LABEL = ("feature", "5319e7", "A design's feature issue; its stories are
 BUG_LABEL = ("bug", "d73a4a", "Something isn't working")          # GitHub's own default colour and description
 HOOK_MARKER = "agent-vault-hook: pre-push"        # in githooks/pre-push; repo-init recognises the hook by it
 LOG_HEADING = "## Log"
+STANDING_SHOWN = 10                     # how many of the newest active records the SessionStart hook lists
 STANDING = "Standing decisions"            # the project overview section generated from the active records
 LASTING_SUFFIX = " (lasting)"              # ends a plan decision line that is a lasting decision
 NONE_LINE = "None"

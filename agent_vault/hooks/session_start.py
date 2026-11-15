@@ -4,8 +4,9 @@ Whatever this prints is added to Claude's context. The session's kind comes from
   vault  inside the vault: project one-liners, the last 10 daily lines and the `validate`
          results (which also catch phone-side edits, that bypass every other hook);
          creates today's daily note.
-  repo   inside a clone whose `origin` is a registered repo: the project overview, the
-         branch's issue and its stage, the project's last 5 daily lines, its open ideas,
+  repo   inside a clone whose `origin` is a registered repo: the project overview (its
+         `Standing decisions` shortened to the count, the newest few records and the command
+         that lists them all; the note itself is untouched), the branch's issue and its stage, the project's last 5 daily lines, its open ideas,
          and the repo's `claudemd-lint` failures and stale-section count.
   else   nothing.
 
@@ -97,11 +98,30 @@ def claudemd_lines(root: str) -> list[str]:
     return out
 
 
+def short_standing(body: str, pid: str, records: list[dict]) -> str:
+    """`body` with its Standing decisions section replaced by the active-record count, the last
+    lib.STANDING_SHOWN active records' lines and the command listing them all. A body with no such
+    section, or a project with no active record, comes back unchanged."""
+    active = sorted((r for r in records if r["fm"].get("status") == "active"), key=lambda r: r["n"])
+    if not active:
+        return body
+    shown = lib.standing_lines(active[-lib.STANDING_SHOWN:])
+    lines = [f"{len(active)} active decision record(s); the {len(shown)} most recent:" if len(active) > len(shown)
+             else f"{len(active)} active decision record(s):",
+             *shown, f"All of them: `{lib.CLI} decisions --project {pid}`"]
+    text = vault.with_standing_lines(body, lines)
+    return body if text is None else text.rstrip()
+
+
 def repo_context(info: dict, cwd: str) -> list[str]:
     index = lib.Index()
     pid = info["project"]
     fm, body, _ = lib.split_frontmatter(lib.read_text(index.projects[pid]))
     repos = [r.split("/")[-1] for r in (fm or {}).get("repos") or []]
+    try:
+        body = short_standing(body, pid, index.decisions.get(pid, []))
+    except Exception:       # the overview as it is beats no overview
+        pass
     branch = github.git("rev-parse", "--abbrev-ref", "HEAD", cwd=cwd, check=False)
     ideas = sum(1 for _, ifm in vault.all_ideas()
                 if ifm.get("status") == "open" and ifm.get("project") == pid)
