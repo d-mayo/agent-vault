@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # --- Locations ---------------------------------------------------------------
@@ -352,10 +353,34 @@ def read_text(path: Path) -> str:
         return f.read()
 
 
-def write_text(path: Path, text: str) -> None:
+def write_bytes(path: Path, data: bytes) -> None:
+    """Atomic write: a hidden temporary file in the target's folder, renamed over it."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:   # a sync engine or Obsidian may hold the target open
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def write_text(path: Path, text: str) -> None:
+    write_bytes(path, text.encode("utf-8"))
 
 
 # --- Paths -------------------------------------------------------------------

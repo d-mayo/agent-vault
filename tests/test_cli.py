@@ -915,5 +915,58 @@ class LintCliTest(CliCase):                                        # T3-T5, T8 -
         self.assertIn("lint", self.cli("--help").stdout)
 
 
+class AtomicWriteTest(unittest.TestCase):                           # T1 -> AC1 (#85)
+    def setUp(self):
+        self._t = tmpdir()
+        self.dir = Path(self._t.name)
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def leftovers(self):
+        return [p.name for p in self.dir.iterdir() if p.name.endswith(".tmp")]
+
+    def test_final_content_and_no_temp_file(self):
+        p = self.dir / "sub" / "n.md"
+        lib.write_text(p, "a\nb\r\n")
+        self.assertEqual(p.read_bytes(), b"a\nb\r\n")
+        lib.write_text(p, "new\n")
+        self.assertEqual(p.read_bytes(), b"new\n")
+        self.assertEqual(list(p.parent.glob(".*")), [])
+
+    def test_failed_write_keeps_old_content(self):
+        p = self.dir / "n.md"
+        lib.write_text(p, "old\n")
+        with mock.patch("os.fsync", side_effect=OSError("disk")):
+            with self.assertRaises(OSError):
+                lib.write_text(p, "new\n")
+        self.assertEqual(p.read_text(encoding="utf-8"), "old\n")
+        self.assertEqual(self.leftovers(), [])
+
+    def test_retries_on_permission_error(self):
+        p = self.dir / "n.md"
+        real = lib.os.replace
+        calls = []
+
+        def flaky(a, b):
+            calls.append(1)
+            if len(calls) < 3:
+                raise PermissionError("held")
+            return real(a, b)
+
+        with mock.patch("os.replace", side_effect=flaky), mock.patch("time.sleep"):
+            lib.write_bytes(p, b"x")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(p.read_bytes(), b"x")
+
+    def test_gives_up_after_retries_and_cleans_up(self):
+        p = self.dir / "n.md"
+        with mock.patch("os.replace", side_effect=PermissionError("held")), mock.patch("time.sleep"):
+            with self.assertRaises(PermissionError):
+                lib.write_bytes(p, b"x")
+        self.assertFalse(p.exists())
+        self.assertEqual(self.leftovers(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
