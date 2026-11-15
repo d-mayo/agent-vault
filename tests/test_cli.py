@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -1048,6 +1050,92 @@ class SnapshotTest(unittest.TestCase):                              # T2, T6, T7
         github.DEADLINE = None
         lib.snapshot("s1")
         self.assertIsNone(github.DEADLINE)
+
+
+class RestoreTest(CliCase):                                         # T4, T6, T8 -> AC3, AC6 (#85)
+    def setUp(self):
+        super().setUp()
+        for patcher in (mock.patch.object(lib, "CONFIG", self.cfg), mock.patch.object(lib, "VAULT", self.vault)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.note = self.put("Agent/Ideas/a.md", "---\ntype: idea\nstatus: open\n---\n# A\r\nold\n")
+        self.old = self.note.read_bytes()
+        self.first = lib.snapshot("s1")
+
+    def tree(self):
+        return sorted(p.relative_to(self.vault).as_posix() for p in self.vault.rglob("*"))
+
+    def damage(self, data=b"damaged\n"):
+        self.note.write_bytes(data)
+        return lib.snapshot("s2")
+
+    def test_restores_the_newest_snapshot_byte_for_byte(self):
+        self.note.write_bytes(b"changed after the snapshot\n")
+        r = self.cli("restore", "Agent/Ideas/a.md")
+        self.assertEqual(self.note.read_bytes(), self.old)
+        self.assertIn("restored Ideas/a.md", r.stdout)
+        self.assertEqual([p for p in self.note.parent.iterdir() if p.name.endswith(".tmp")], [])
+
+    def test_snapshot_option_and_absolute_path(self):
+        second = self.damage()
+        self.assertNotEqual(second, self.first)
+        self.cli("restore", str(self.note), "--snapshot", second)
+        self.assertEqual(self.note.read_bytes(), b"damaged\n")
+        self.cli("restore", "Agent/Ideas/a.md", "--snapshot", self.first[:10])
+        self.assertEqual(self.note.read_bytes(), self.old)
+
+    def test_a_deleted_note_comes_back(self):
+        self.note.unlink()
+        self.cli("restore", "Agent/Ideas/a.md")
+        self.assertEqual(self.note.read_bytes(), self.old)
+
+    def test_list_shows_the_snapshots_where_it_changed(self):
+        second = self.damage()
+        lib.snapshot("s3")                                          # nothing changed: no new snapshot
+        out = self.cli("restore", "Agent/Ideas/a.md", "--list").stdout.splitlines()
+        self.assertEqual([ln.split()[0] for ln in out], [second[:12], self.first[:12]])
+        self.assertIn("s1", out[1])
+
+    def test_vault_holds_exactly_the_same_files_after_a_restore(self):  # T6 -> AC6
+        before = self.tree()
+        self.damage()
+        self.cli("restore", "Agent/Ideas/a.md", "--snapshot", self.first)
+        self.assertEqual(self.tree(), before)
+
+    def test_refusals(self):
+        self.refused("restore", "README.md", why="not inside")
+        self.refused("restore", "Agent", why="not inside")
+        self.refused("restore", str(self.root / "elsewhere.md"), why="not inside")
+        self.refused("restore", "Agent/Ideas/never.md", why="does not hold")
+        self.refused("restore", "Agent/Ideas/never.md", "--list", why="no snapshot holds")
+        self.refused("restore", "Agent/Ideas/a.md", "--snapshot", "f" * 40, why="does not hold")
+
+    def test_no_history_is_refused(self):
+        shutil.rmtree(self.root / "agent-vault-history.git", onerror=lambda f, p, e: (os.chmod(p, 0o700), f(p)))
+        self.refused("restore", "Agent/Ideas/a.md", why="no history")
+
+    def test_a_snapshot_that_is_not_hex_never_reaches_git(self):    # T8 -> AC3
+        for bad in ("HEAD", "main~1", "--all", "abc", "xyz1234", "a" * 41, "HEAD:Agent"):
+            self.refused("restore", "Agent/Ideas/a.md", f"--snapshot={bad}", why="not a snapshot id")
+
+    def test_a_decision_record_gets_the_reminder(self):
+        rec = self.put("Agent/Decisions/demo/demo-d1-x.md", "---\ntype: decision\nstatus: active\n---\n# X\n")
+        lib.snapshot("s4")
+        rec.write_bytes(b"x")
+        r = self.cli("restore", "Agent/Decisions/demo/demo-d1-x.md")
+        self.assertIn("validate", r.stdout)
+        self.assertIn("status change", r.stdout)
+        self.assertNotIn("validate", self.cli("restore", "Agent/Ideas/a.md").stdout)
+
+    def test_a_sealed_design_gets_the_reminder_a_draft_does_not(self):
+        self.put("Agent/Designs/demo/demo-design-1-x.md", "---\ntype: design\nstatus: sealed\n---\n# X\n")
+        self.put("Agent/Designs/demo/demo-design-2-y.md", "---\ntype: design\nstatus: draft\n---\n# Y\n")
+        lib.snapshot("s4")
+        self.assertIn("sealed design", self.cli("restore", "Agent/Designs/demo/demo-design-1-x.md").stdout)
+        self.assertNotIn("validate", self.cli("restore", "Agent/Designs/demo/demo-design-2-y.md").stdout)
+
+    def test_usage_lists_restore(self):
+        self.assertIn("\n  restore <note>", vault.__doc__)
 
 
 if __name__ == "__main__":
