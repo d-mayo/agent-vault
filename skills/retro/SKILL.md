@@ -180,8 +180,15 @@ until a later PR issue's retro confirms them.
    - `- dropped: <why>`.
 
    A line settling a left-open finding ends in its number, e.g.
-   `- dropped: cosmetic only (R2)` or `- idea [[<idea>]] (R2, R3)`; one
-   finding, one line. `seal retro` refuses while one is unsorted.
+   `- dropped: cosmetic only (R2)` or `- idea [[<idea>]] (R2, R3)`; each
+   finding is named on exactly one line. `seal retro` refuses while one is
+   unsorted.
+
+   Batch small leftovers: left-open findings that are small and share a
+   theme are settled by one idea, added with `vault.py idea add`, titled for
+   the theme, with one line naming every finding, e.g.
+   `- idea [[<idea>]] (R2, R3, R5)`. A finding that stands alone gets its own
+   idea line or is dropped.
 2. Check the project's open ideas (`vault.py ideas --project <id>`, same
    `<id>`) and propose dropping, with `vault.py idea drop <file> --reason
    "..."`, the ones this issue resolved, each
