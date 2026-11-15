@@ -633,6 +633,11 @@ class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#3
         self.assertMentions("links a design", "`[[<design>]] s<n>`", "agent/designs/<project>/", "the story `s<n>`",
                             text=read("plan-story", "SKILL.md"))
 
+    def test_vault_guide_names_ideas_review_age_and_grouping(self):  # T5 -> AC5 (#90)
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("--older-than", guide)
+        self.assertIn("grouped by project", guide)
+
     def test_vault_guide_names_designs(self):
         guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
         self.assertMentions("designs/<project>/<project>-design-<n>-<slug>.md", "new design <project>",
