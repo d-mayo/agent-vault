@@ -189,6 +189,12 @@ class GlobCheckTest(ClaudemdCase):           # T1 -> AC1
         self.commit("init")
         self.assertTrue(any("src/**" in e and "matches no file" in e for e in self.lint().errors))
 
+    def test_glob_matching_only_under_node_modules_is_an_error(self):  # T5 -> AC5
+        self.write("node_modules/pkg/a.js", "x\n")
+        self.claude("# demo\n\n## Layout\n<!-- covers: **/a.js -->\n- nothing here yet.\n")
+        self.commit("init")
+        self.assertTrue(any("a.js" in e and "matches no file" in e for e in self.lint().errors))
+
     def test_glob_matching_something_passes(self):
         self.write("src/a.py", "x\n")
         self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n<!-- covers: src/** -->\n- `src/a.py`: the code.\n")

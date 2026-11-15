@@ -133,6 +133,8 @@ LOG_HEADING = "## Log"
 STANDING_SHOWN = 10                     # how many of the newest active records the SessionStart hook lists
 STANDING = "Standing decisions"            # the project overview section generated from the active records
 LASTING_SUFFIX = " (lasting)"              # ends a plan decision line that is a lasting decision
+NO_PR = "none"                  # a plan's (and then its retro's) `pr:` when the issue ends without a pull request
+CLOSING = "Closing comment"     # the retro section holding the comment `seal retro` closes a no-PR issue with
 NONE_LINE = "None"
 ISSUE_SECTIONS = {                         # GitHub issue body: `##` sections, in order, with a hint each
     "Problem": "What is wrong or missing today, and for whom.",
@@ -724,7 +726,8 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
     if ntype == "idea":
         if scalar("source") and not IDEA_SOURCE_RE.match(scalar("source")):
             res.add("FM-FORMAT", "source must be 'retro <repo>#<n>', 'phone:<path>' or 'session'")
-        elif scalar("source") and scalar("source").startswith("phone:")                 and not (VAULT / scalar("source")[6:]).is_file():
+        elif (scalar("source") and scalar("source").startswith("phone:")
+                and not (VAULT / scalar("source")[6:]).is_file()):
             res.add("FM-FORMAT", f"source path {scalar('source')[6:]!r} doesn't exist on the phone side")
         if scalar("project") and not ID_RE.match(scalar("project")):
             res.add("FM-FORMAT", "project is a plain project id, not a link")
@@ -745,7 +748,8 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
         for key in ("replaces", "superseded_by"):
             if fm.get(key) not in (None, "") and not link_target(fm.get(key)):
                 res.add("FM-FORMAT", f"'{key}' must be one link, quoted: {key}: \"[[<record>]]\"")
-        if (status == "superseded") != (fm.get("superseded_by") not in (None, ""))                 and status in STATUSES["decision"]:
+        if ((status == "superseded") != (fm.get("superseded_by") not in (None, ""))
+                and status in STATUSES["decision"]):
             res.add("FM-COND", "superseded_by must be set if and only if status is superseded")
     if ntype == "design":
         if scalar("project") and not ID_RE.match(scalar("project")):
@@ -764,8 +768,6 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
             res.add("FM-MATCH", f"'{key}' is {fm[key]!r} but the file name says {want!r}")
 
 
-NO_PR = "none"                  # a plan's (and then its retro's) `pr:` when the issue ends without a pull request
-CLOSING = "Closing comment"     # the retro section holding the comment `seal retro` closes a no-PR issue with
 
 
 def sections_for(ntype: str, fm: dict) -> list:
@@ -1195,6 +1197,21 @@ def save_state(session_id: str, state: dict) -> None:
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         _state_file(session_id).write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def prune_state(keep_session_id: str = "", days: int = 7) -> None:
+    """Delete hook state files not modified for `days` days, never the given session's. Never raises."""
+    try:
+        keep = _state_file(keep_session_id).name
+        cutoff = time.time() - days * 86400
+        for path in STATE_DIR.glob("*.json"):
+            try:
+                if path.name != keep and path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except Exception:
+                pass
     except Exception:
         pass
 

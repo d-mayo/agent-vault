@@ -272,14 +272,6 @@ def cmd_new_design(args) -> None:
     print("created " + lib.rel(path))
 
 
-def set_fields(path: Path, **fields) -> None:
-    """Update frontmatter fields in place. Only hooks/stop_check.py uses this (#5 owns that hook)."""
-    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
-    fm = fm or {}
-    fm.update(fields)
-    lib.write_text(path, lib.render_frontmatter(fm) + body.lstrip("\n"))
-
-
 # --- git and GitHub commands (design §4, §10) ------------------------------------------
 REPO_SETTINGS = {"allow_squash_merge": True, "allow_merge_commit": False,
                  "allow_rebase_merge": False, "delete_branch_on_merge": True}
@@ -369,10 +361,10 @@ def cmd_seal_plan(args) -> None:
     errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
     if errors:
         die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
-    add_planned_label(slug, args.issue)     # a label never changes `edited` (D1), so `info` still holds
     sha = github.head_sha(slug, github.default_branch(slug))[:7]
     update_note(path, status="sealed", issue_updated=info["edited"], base_sha=sha)
     log_event(args.repo, args.issue, "planned")
+    add_planned_label(slug, args.issue)     # after the seal: a sealed note without the label is a handled state (a rerun adds it)
     print(f"sealed {lib.rel(path)} (issue_updated {info['edited']}, base_sha {sha}); "
           f"added the '{name}' label")
 

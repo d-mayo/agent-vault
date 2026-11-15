@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -572,6 +573,41 @@ class SessionStartTest(HookCase):
         tmp.mkdir(exist_ok=True)
         self.env.update(TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
         return lambda sid: json.loads((tmp / "obsidian-agent-hooks" / f"{sid}.json").read_text(encoding="utf-8"))
+
+    def aged_state(self, name, days):
+        folder = self.root / "tmp" / "obsidian-agent-hooks"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / name
+        path.write_text("{}", encoding="utf-8")
+        old = time.time() - days * 86400
+        os.utime(path, (old, old))
+        return path
+
+    def test_old_state_files_are_pruned_on_every_start(self):  # T4 -> AC4
+        self.isolated()
+        for cwd in (self.vault, self.repo):
+            old = self.aged_state("old-" + uuid.uuid4().hex + ".json", 8)
+            recent = self.aged_state("recent-" + uuid.uuid4().hex + ".json", 1)
+            self.sid = uuid.uuid4().hex
+            self.start(cwd)
+            self.assertFalse(old.exists())
+            self.assertTrue(recent.exists())
+            mine = self.aged_state(self.sid + ".json", 30)           # the current session's own file stays
+            old = self.aged_state("old-" + uuid.uuid4().hex + ".json", 8)
+            self.start(cwd)                                          # a resume
+            self.assertFalse(old.exists())
+            self.assertTrue(mine.exists())
+
+    def test_an_unremovable_state_entry_does_not_stop_the_session(self):  # T4 -> AC4
+        self.isolated()
+        stuck = self.aged_state("x.json", 8)
+        stuck.unlink()
+        stuck.mkdir()
+        old = self.aged_state("old.json", 8)
+        out = self.start(self.vault)
+        self.assertIn("# Vault context", out)
+        self.assertTrue(stuck.is_dir())
+        self.assertFalse(old.exists())
 
     def test_vault_and_repo_sessions_record_a_snapshot(self):  # T3 -> AC2
         state = self.isolated()

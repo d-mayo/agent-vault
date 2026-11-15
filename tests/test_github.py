@@ -298,6 +298,41 @@ class SealPlanTest(GhCase):  # T1 -> AC1, AC11
         self.assertRegex(self.daily(), r"- \d\d:\d\d widget#7 planned\n")
         self.assert_valid()
 
+    def test_a_failed_label_edit_leaves_the_plan_sealed(self):  # T6 -> AC6
+        self.new_plan()
+        self.state["fail_label_edit"] = True
+        self.save()
+        r = self.cli("seal", "plan", "widget", "7")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.fm(self.note("plan"))["status"], "sealed")
+        self.assertRegex(self.daily(), r"- \d\d:\d\d widget#7 planned\n")
+        self.assertNotIn("planned", self.load()["issues"]["7"]["labels"])
+        self.state.pop("fail_label_edit")
+        self.save()
+        r = self.ok(self.cli("seal", "plan", "widget", "7"))
+        self.assertIn("already sealed", r.stdout + r.stderr)
+        self.assertIn("planned", self.load()["issues"]["7"]["labels"])
+
+    def test_an_unwritable_note_gets_no_label(self):  # T6 -> AC6
+        self.new_plan()
+        note = self.note("plan")
+        locked = [note] if sys.platform == "win32" else [note, note.parent]
+        modes = [(p, p.stat().st_mode) for p in locked]
+        for p in locked:
+            os.chmod(p, 0o444 if p.is_file() else 0o555)
+        try:
+            if os.access(note, os.W_OK) and sys.platform == "win32":
+                self.skipTest("the note stays writable here")
+            r = self.cli("seal", "plan", "widget", "7")
+            if self.fm(note)["status"] == "sealed":
+                self.skipTest("the note stays writable here (running as an administrator?)")
+        finally:
+            for p, mode in modes:
+                os.chmod(p, mode)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.calls("issue", "edit"), [])
+        self.assertEqual(self.fm(note)["status"], "draft")
+
     def test_a_feature_is_never_planned(self):     # T8 -> AC7
         self.issue()["labels"] = ["feature"]
         self.save()
