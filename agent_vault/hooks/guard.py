@@ -75,6 +75,9 @@ def main() -> None:
     folder = parts[1] if len(parts) > 1 else ""
     if len(parts) == 1:
         return
+    if parts[1:] == [lib.SETUP_FILE.lower()]:
+        block("the setup note is written only by the CLI, which checks the whole setup first: run the `setup` "
+              f"skill, or `{CLI} setup --tracker github|jira ... --replace` with every value you want kept.")
     if len(parts) == 2:
         block("no loose files at the top of Agent/. Use Projects/, Work/, Ideas/ or Daily/.")
     if folder == lib.FOLDERS["daily"].lower():
