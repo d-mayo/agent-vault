@@ -31,6 +31,11 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   phone pull "<phone path>" [--project <id>]
   log "what happened" [--project <id>]
   restore <note> [--snapshot <id>] [--list]   (put a note under Agent/ back from the history of Agent/)
+  setup --tracker github|jira [--merge squash|merge|rebase] [--approvals required|none]
+      [--repo-settings managed|checked] [--branch <pattern>] [--branch-feature <word>] [--branch-bug <word>]
+      [--jira-feature-type <type>] [--jira-story-type <type>] [--jira-bug-type <type>]
+      [--jira-planned-label <label>|none] [--jira-connector <name>] [--replace]
+      (writes Agent/Setup.md, every field explicit; refuses to overwrite one without --replace)
   repo-init <path>
   claudemd-lint [<repo path>]
   lint
@@ -1859,6 +1864,40 @@ def cmd_schema(_args) -> None:
     print(lib.schema_text())
 
 
+def cmd_setup(args) -> None:
+    """Write Agent/Setup.md from flags: every field, defaults filled in; refuse anything incomplete."""
+    path = AGENT / lib.SETUP_FILE
+    existed = path.exists()
+    if existed and not args.replace:
+        die(f"{lib.rel(path)} already exists; rerun with --replace to rewrite it "
+            "(the setup skill shows what changes first)")
+    values = {"tracker": args.tracker}
+    for key, default in lib.SETUP_DEFAULTS.items():
+        if key != "tracker":
+            given = getattr(args, key)
+            values[key] = default if given is None else given
+    for key in lib.SETUP_JIRA:
+        if getattr(args, key) is not None:
+            values[key] = getattr(args, key)
+    problems = lib.setup_problems(values)
+    if problems:
+        die("refused, nothing written:\n  " + "\n  ".join(problems))
+    if args.tracker != "jira":
+        index = lib.Index()
+        keyed = []
+        for pid, ppath in sorted(index.projects.items()):
+            fm, _, _ = lib.split_frontmatter(lib.read_text(ppath))
+            if (fm or {}).get("jira_project") not in (None, ""):
+                keyed.append(pid)
+        if keyed:
+            die(f"refused, nothing written: project(s) {', '.join(keyed)} have jira_project, "
+                f"which only a Jira setup allows; remove it from them or choose --tracker jira")
+    commit_note(path, lib.render_frontmatter({"type": "setup", **values}))
+    print(("rewrote " if existed else "wrote ") + lib.rel(path) + ":")
+    for key, val in values.items():
+        print(f"  {key}: {val}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="vault.py", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1983,6 +2022,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project")
     p.add_argument("--all", action="store_true")
     p.set_defaults(fn=cmd_decisions)
+
+    p = sub.add_parser("setup", help="write Agent/Setup.md: how this vault's stories and PRs work")
+    p.add_argument("--tracker", required=True, choices=lib.SETUP_CHOICES["tracker"])
+    p.add_argument("--merge", choices=lib.SETUP_CHOICES["merge"])
+    p.add_argument("--approvals", choices=lib.SETUP_CHOICES["approvals"])
+    p.add_argument("--repo-settings", dest="repo_settings", choices=lib.SETUP_CHOICES["repo_settings"])
+    p.add_argument("--branch", metavar="PATTERN", help="built from {type}, {issue} and {slug}")
+    p.add_argument("--branch-feature", dest="branch_feature", metavar="WORD")
+    p.add_argument("--branch-bug", dest="branch_bug", metavar="WORD")
+    for key in lib.SETUP_JIRA:
+        p.add_argument("--" + key.replace("_", "-"), dest=key,
+                       metavar="LABEL|none" if key == "jira_planned_label" else "NAME")
+    p.add_argument("--replace", action="store_true", help="rewrite an existing setup note")
+    p.set_defaults(fn=cmd_setup)
 
     p = sub.add_parser("log")
     p.add_argument("text")
