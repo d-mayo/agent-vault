@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # --- Locations ---------------------------------------------------------------
@@ -352,10 +353,34 @@ def read_text(path: Path) -> str:
         return f.read()
 
 
-def write_text(path: Path, text: str) -> None:
+def write_bytes(path: Path, data: bytes) -> None:
+    """Atomic write: a hidden temporary file in the target's folder, renamed over it."""
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:   # a sync engine or Obsidian may hold the target open
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def write_text(path: Path, text: str) -> None:
+    write_bytes(path, text.encode("utf-8"))
 
 
 # --- Paths -------------------------------------------------------------------
@@ -1172,6 +1197,94 @@ def save_state(session_id: str, state: dict) -> None:
         _state_file(session_id).write_text(json.dumps(state), encoding="utf-8")
     except Exception:
         pass
+
+
+# --- History of Agent/ (snapshots outside the vault, #85) ---------------------------
+HISTORY_NAME = "agent-vault-history.git"
+SNAPSHOT_SECONDS = 5
+_HISTORY_EXCLUDE = "__pycache__/\n.*.tmp\n"
+
+
+def history_dir() -> Path:
+    """The history repository: beside the config, never in the vault. Read at call time."""
+    return CONFIG.parent / HISTORY_NAME
+
+
+def _inside(path: Path, root: Path) -> bool:
+    a, r = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(root))
+    try:
+        return os.path.commonpath([a, r]) == r
+    except ValueError:
+        return False
+
+
+def _hgit(*args: str, check: bool = True, raw: bool = False, proc: bool = False):
+    """One git call against the history with `Agent/` as its work tree. Generic identity, no
+    signing, no newline conversion, so a snapshot holds the notes byte for byte (D6)."""
+    import github
+    hist, agent = history_dir(), VAULT / "Agent"
+    argv = ["git", "--git-dir", str(hist), "--work-tree", str(agent),
+            "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "-c", "core.longpaths=true",
+            "-c", "core.quotepath=false", "-c", "user.name=agent-vault",
+            "-c", "user.email=agent-vault@localhost", "-c", "commit.gpgsign=false",
+            "--literal-pathspecs", *args]
+    done = github.run(argv, cwd=agent, check=check, raw=raw)
+    return done if proc else done.stdout if raw else done.stdout.strip()
+
+
+def snapshot(session_id: str = "") -> str | None:
+    """Record the state of `Agent/` in the history when it changed since the last snapshot and return
+    the id of the newest one, or None when that isn't possible (history inside the vault, no git, a
+    git error, no time left). Never raises; takes at most SNAPSHOT_SECONDS (D4, D10)."""
+    import github
+    if VAULT is None or not (VAULT / "Agent").is_dir():
+        return None
+    hist = history_dir()
+    if _inside(hist, VAULT):
+        return None
+    before = github.DEADLINE
+    github.DEADLINE = time.monotonic() + SNAPSHOT_SECONDS
+    try:
+        if not hist.is_dir():
+            hist.parent.mkdir(parents=True, exist_ok=True)
+            github.run(["git", "init", "--bare", "-q", str(hist)])
+            (hist / "info").mkdir(exist_ok=True)
+            write_text(hist / "info" / "exclude", _HISTORY_EXCLUDE)
+        _hgit("add", "-A")
+        head = _hgit("rev-parse", "--verify", "-q", "HEAD", check=False) or None
+        if head is None or _hgit("diff", "--cached", "--quiet", check=False, proc=True).returncode:
+            _hgit("commit", "-q", "--no-verify", "--no-gpg-sign", "--allow-empty",
+                  "-m", f"session {session_id or 'unknown'}")
+            head = _hgit("rev-parse", "HEAD")
+        return head
+    except Exception as e:
+        if getattr(e, "kind", "") == "timeout":
+            try:
+                (hist / "index.lock").unlink()
+            except OSError:
+                pass
+        return None
+    finally:
+        github.DEADLINE = before
+
+
+def newest_snapshot() -> str | None:
+    """The id of the newest snapshot, or None when there is none or git can't say."""
+    try:
+        return _hgit("rev-parse", "--verify", "-q", "HEAD", check=False) or None if history_dir().is_dir() else None
+    except Exception:
+        return None
+
+
+def snapshots_of(rel: str) -> list[tuple[str, str, str]]:
+    """(id, date, subject) of each snapshot in which `rel` (posix, relative to `Agent/`) changed, newest first."""
+    out = _hgit("log", "--format=%H%x1f%cI%x1f%s", "--", rel)
+    return [tuple(line.split("\x1f", 2)) for line in out.splitlines() if line]
+
+
+def snapshot_content(snapshot_id: str, rel: str) -> bytes:
+    """`rel`'s bytes as the snapshot held them; github.CmdError when it didn't hold the note."""
+    return _hgit("show", f"{snapshot_id}:{rel}", raw=True)
 
 
 def read_hook_input() -> dict:

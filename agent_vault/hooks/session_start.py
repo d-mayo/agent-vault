@@ -16,7 +16,8 @@ network, only `main`'s committed tree); its one line, if any, is printed first. 
 `source` (installed by an older install.py) or an install that is current adds nothing.
 
 Vault and repo sessions also record what Stop needs: when the session started, the
-fingerprints of sealed and closed notes, and (repo) the git state.
+fingerprints of sealed and closed notes, and (repo) the git state. A first start also snapshots
+`Agent/` into the history beside the config (5 seconds at most, silent on failure) and keeps the id.
 GitHub gets 5 seconds in total; nothing here may block a session from starting.
 """
 from __future__ import annotations
@@ -37,6 +38,7 @@ import vault  # noqa: E402
 MAX_PROBLEMS = 15
 GITHUB_SECONDS = 5
 CLAUDEMD_SECONDS = 3
+SNAPSHOT_SECONDS = lib.SNAPSHOT_SECONDS
 
 
 def git_state(root: str) -> dict:
@@ -158,6 +160,17 @@ def vault_context() -> list[str]:
     return out
 
 
+def take_snapshot(sid: str):
+    """The id of the snapshot of `Agent/` taken now, or None. Time-boxed, silent, never raises (#85)."""
+    github.DEADLINE = time.monotonic() + SNAPSHOT_SECONDS
+    try:
+        return lib.snapshot(sid)
+    except Exception:
+        return None
+    finally:
+        github.DEADLINE = None
+
+
 def main() -> None:
     lib.setup_io()
     try:
@@ -185,6 +198,7 @@ def main() -> None:
         if info["kind"] == "repo":
             state.update(repo=info["repo"], project=info["project"], root=info["root"],
                          git=git_state(info["root"]))
+        state["snapshot"] = take_snapshot(sid)
         lib.save_state(sid, state)
     out = vault_context() if info["kind"] == "vault" else repo_context(info, cwd)
     print("\n".join(out))

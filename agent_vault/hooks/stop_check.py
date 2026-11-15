@@ -7,7 +7,8 @@ and registered-repo sessions (as recorded by SessionStart) and blocks at most on
    this session counts as logging.
 2. Shell-write check: sealed notes, decision records (all but their status and
    superseded_by lines) and closed daily notes are fingerprinted at session start. The guard only sees the edit tools, so one that changed anyway was written
-   through the shell; Claude must tell the user, not fix it.
+   through the shell; Claude must tell the user, not fix it. Each listed note comes with the snapshot
+   of Agent/ that SessionStart took and the exact `restore` command that puts it back from it.
 
 Vault changes are found by file modification time; repo changes by git (HEAD moved, or a
 path in `git status` was touched, or the status differs from the one at session start).
@@ -72,6 +73,17 @@ def logged_since_start(state: dict, daily: Path, repo: str | None) -> bool:
     return any(pat.match(ln) for ln in new)
 
 
+def restore_lines(note: str, snapshot: str | None) -> str:
+    """The list entry for a note changed through the shell: the snapshot of Agent/ taken at this
+    session's start and the command that puts the note back from it (named only, never run)."""
+    if not snapshot:
+        return (f"- {note}\n    no snapshot of Agent/ was taken at this session's start, "
+                "so there is nothing to restore it from")
+    shown = f'"{note}"' if re.search(r"\s", note) else note
+    return (f"- {note}\n    snapshot at this session's start: {snapshot}\n"
+            f"    put it back with: {lib.CLI} restore {shown} --snapshot {snapshot}")
+
+
 def main() -> None:
     lib.setup_io()
     if lib.VAULT is None:
@@ -90,9 +102,9 @@ def main() -> None:
         problems.append(
             "These sealed or closed notes, or decision records, changed during this session, so something wrote them "
             "through the shell (the edit guard can't see that):\n"
-            + "\n".join(f"- {n}" for n in tampered[:MAX_LISTED])
-            + "\nDon't try to fix them. Tell the user which notes changed and how, so they can "
-              "review or restore them.")
+            + "\n".join(restore_lines(n, state.get("snapshot")) for n in tampered[:MAX_LISTED])
+            + "\nDon't try to fix them or run a restore yourself. Tell the user which notes changed and how, "
+              "so they can review or restore them.")
 
     daily = lib.daily_path()
     repo = state.get("repo")

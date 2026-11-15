@@ -29,6 +29,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   phone list
   phone pull "<phone path>" [--project <id>]
   log "what happened" [--project <id>]
+  restore <note> [--snapshot <id>] [--list]   (put a note under Agent/ back from the history of Agent/)
   repo-init <path>
   claudemd-lint [<repo path>]
   lint
@@ -1746,6 +1747,53 @@ def cmd_phone_pull(args) -> None:
     print(f"pulled {rel_path} -> {lib.rel(idea)}")
 
 
+def restore_target(given: str) -> str:
+    """`given` (a path inside Agent/, relative to the vault or absolute) as a posix path relative to Agent/."""
+    p = Path(given)
+    p = p if p.is_absolute() else VAULT / p
+    rel = os.path.relpath(os.path.realpath(p), os.path.realpath(AGENT))
+    if rel == "." or rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+        die(f"'{given}' is not inside {AGENT.name}/; only notes under it can be restored")
+    return Path(rel).as_posix()
+
+
+def cmd_restore(args) -> None:
+    rel = restore_target(args.note)
+    if args.snapshot and not lib.SHA_RE.match(args.snapshot):
+        die(f"'{args.snapshot}' is not a snapshot id (a hex id, 7 to 40 characters; `restore {args.note} --list` shows them)")
+    if not lib.history_dir().is_dir():
+        die("there is no history of Agent/ yet: a snapshot is taken when a vault or repo session starts")
+    try:
+        if args.list:
+            found = lib.snapshots_of(rel)
+            if not found:
+                die(f"no snapshot holds a change of '{rel}'")
+            for sid, date, subject in found:
+                print(f"{sid[:12]}  {date}  {subject}")
+            return
+        sid = args.snapshot or lib.newest_snapshot()
+        if not sid:
+            die("there is no snapshot yet")
+        try:
+            data = lib.snapshot_content(sid, rel)
+        except github.CmdError as e:
+            if e.kind == "missing":
+                raise
+            die(f"snapshot {sid[:12]} does not hold '{rel}'; `restore {args.note} --list` shows the ones that do")
+    except github.CmdError as e:
+        die(str(e))
+    lib.write_bytes(AGENT / rel, data)
+    print(f"restored {rel} from snapshot {sid[:12]}")
+    top = rel.split("/")[0].lower()
+    sealed = False
+    if top == lib.FOLDERS["design"].lower():
+        fm, _, _ = lib.split_frontmatter(data.decode("utf-8", errors="replace"))
+        sealed = (fm or {}).get("status") == "sealed"
+    if top == lib.FOLDERS["decision"].lower() or sealed:
+        print(f"This is a {'decision record' if top == lib.FOLDERS['decision'].lower() else 'sealed design'}: "
+              f"run `{lib.CLI} validate`, and reapply by hand any status change made after that snapshot.")
+
+
 # --- validate / status / schema ---------------------------------------------------------
 def cmd_validate(_args) -> None:
     errors, warnings = lib.validate_all()
@@ -1924,6 +1972,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("text")
     p.add_argument("--project")
     p.set_defaults(fn=cmd_log)
+
+    p = sub.add_parser("restore", help="put a note under Agent/ back from the history of Agent/")
+    p.add_argument("note")
+    p.add_argument("--snapshot", metavar="ID", help="a hex snapshot id (default: the newest snapshot)")
+    p.add_argument("--list", action="store_true", help="the snapshots in which the note changed")
+    p.set_defaults(fn=cmd_restore)
 
     phone = sub.add_parser("phone", help="list or pull phone-side notes").add_subparsers(
         dest="action", required=True, metavar="list|pull")

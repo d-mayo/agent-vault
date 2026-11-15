@@ -66,8 +66,10 @@ def _sub_issue_unsupported(low: str) -> bool:
     return False
 
 
-def run(argv: list[str], cwd: Path | str | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    """Run a command; raise CmdError on failure when `check`. argv[0] is 'gh' or 'git'."""
+def run(argv: list[str], cwd: Path | str | None = None, check: bool = True,
+        raw: bool = False) -> subprocess.CompletedProcess:
+    """Run a command; raise CmdError on failure when `check`. argv[0] is 'gh' or 'git'.
+    `raw` keeps stdout and stderr as bytes."""
     tool = argv[0]
     if tool == "gh":
         argv = gh_command() + argv[1:]
@@ -80,8 +82,11 @@ def run(argv: list[str], cwd: Path | str | None = None, check: bool = True) -> s
             raise CmdError("GitHub did not answer in time", "timeout")
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0", GH_NO_UPDATE_NOTIFIER="1")
     try:
-        proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=timeout)
+        if raw:
+            proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, timeout=timeout)
+        else:
+            proc = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         raise CmdError("GitHub did not answer in time", "timeout")
     except FileNotFoundError:
@@ -89,7 +94,10 @@ def run(argv: list[str], cwd: Path | str | None = None, check: bool = True) -> s
             raise CmdError("git was not found on PATH", "missing")
         raise CmdError(f"could not run gh ({argv[0]})", "missing")
     if check and proc.returncode != 0:
-        err = (proc.stderr or proc.stdout).strip()
+        err = proc.stderr or proc.stdout
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", errors="replace")
+        err = err.strip()
         low = err.lower()
         if tool == "gh" and (proc.returncode == 4 or any(h in low for h in SIGNED_OUT_HINTS)):
             raise CmdError("gh is not signed in to GitHub; run `gh auth login` and retry",
@@ -116,6 +124,11 @@ def gh_json(*args: str, cwd=None):
 
 def git(*args: str, cwd=None, check: bool = True) -> str:
     return run(["git", *args], cwd, check).stdout.strip()
+
+
+def git_bytes(*args: str, cwd=None) -> bytes:
+    """Raw stdout of a git call (a file's content, byte for byte)."""
+    return run(["git", *args], cwd, raw=True).stdout
 
 
 def archive(cwd, ref: str, out: Path | str) -> None:

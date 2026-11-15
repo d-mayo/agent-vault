@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -564,6 +565,80 @@ class SessionStartTest(HookCase):
         self.assertIn("self-update check failed", r.stdout)
         self.assertIn("# Vault context", r.stdout)
 
+    # --- the snapshot of Agent/ (#85) ---
+    def isolated(self):
+        """Hook state in this test's own folder, and where a session's state file is."""
+        tmp = self.root / "tmp"
+        tmp.mkdir(exist_ok=True)
+        self.env.update(TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
+        return lambda sid: json.loads((tmp / "obsidian-agent-hooks" / f"{sid}.json").read_text(encoding="utf-8"))
+
+    def test_vault_and_repo_sessions_record_a_snapshot(self):  # T3 -> AC2
+        state = self.isolated()
+        self.start(self.vault)
+        first = state(self.sid)["snapshot"]
+        self.assertRegex(first, r"^[0-9a-f]{40}$")
+        self.assertTrue((self.root / "agent-vault-history.git").is_dir())
+        self.assertFalse((self.vault / "agent-vault-history.git").exists())
+        self.sid = uuid.uuid4().hex
+        self.start(self.repo)
+        self.assertEqual(state(self.sid)["snapshot"], first)        # nothing changed: no new snapshot
+        self.cli("idea", "add", "A new idea")
+        self.sid = uuid.uuid4().hex
+        self.start(self.repo)
+        self.assertNotEqual(state(self.sid)["snapshot"], first)
+
+    def test_a_resumed_session_takes_no_snapshot(self):  # T3 -> AC2
+        state = self.isolated()
+        self.start(self.vault)
+        first = state(self.sid)["snapshot"]
+        self.cli("idea", "add", "Changed mid-session")
+        self.start(self.vault)                                      # resume or compact: same session
+        self.assertEqual(state(self.sid)["snapshot"], first)
+        log = subprocess.run(["git", "--git-dir", str(self.root / "agent-vault-history.git"), "rev-list", "--count",
+                              "HEAD"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(log, "1")
+
+    def failing_git(self, cwd, how):
+        script = self.root / "no_snapshot.py"
+        script.write_text(textwrap.dedent(f"""
+            import sys
+            sys.path[:0] = [{str(CODE)!r}, {str(HOOKS)!r}]
+            import session_start, lib, github
+            real = github.run
+            def run(argv, *a, **k):
+                if "--git-dir" in argv or argv[1:2] == ["init"]:
+                    {how}
+                return real(argv, *a, **k)
+            github.run = run
+            lib.run_hook(session_start.main, "SessionStart", stream=sys.stdout)
+        """), encoding="utf-8")
+        return run_py(script, stdin={"session_id": self.sid, "cwd": str(cwd)}, config=self.cfg, env=self.env)
+
+    def test_a_failing_git_changes_nothing_else(self):  # T3, T7 -> AC5
+        state = self.isolated()
+        for cwd, marker in ((self.vault, "# Vault context"), (self.repo, "Build widgets.")):
+            for how in ('raise github.CmdError("no git", "missing")', 'raise github.CmdError("slow", "timeout")',
+                        'raise RuntimeError("boom")'):
+                self.sid = uuid.uuid4().hex
+                r = self.failing_git(cwd, how)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(marker, r.stdout)
+                self.assertNotIn("failed", r.stdout)
+                self.assertEqual(r.stderr, "")
+                self.assertIsNone(state(self.sid)["snapshot"])
+                self.assertIn("started", state(self.sid))
+
+    def test_a_vault_session_without_git_on_the_path(self):  # T3 -> AC5
+        state = self.isolated()
+        empty = self.root / "nopath"
+        empty.mkdir()
+        self.env["PATH"] = str(empty)
+        r = self.hook("session_start.py", {"cwd": str(self.vault)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("# Vault context", r.stdout)
+        self.assertIn("snapshot", state(self.sid))
+
 
 class StopTest(HookCase):
     def test_vault_session_unlogged_work_blocks_once(self):  # T7 -> AC8
@@ -683,6 +758,52 @@ class StopTest(HookCase):
         self.assertIn("Tell the user", r.stderr)
         self.assertNotIn(time.strftime("%Y-%m-%d"), r.stderr)       # today's note isn't in the list
         self.assertEqual(self.stop(active=True).returncode, 0)
+
+    def state_file(self):
+        tmp = self.root / "tmp"
+        tmp.mkdir(exist_ok=True)
+        self.env.update(TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
+        return tmp / "obsidian-agent-hooks" / f"{self.sid}.json"
+
+    def test_the_message_names_the_snapshot_and_the_restore_command(self):  # T5 -> AC4, AC3
+        state = self.state_file()
+        note = self.agent("Work/widget/widget-7-plan.md")
+        self.seal(note)
+        original = note.read_bytes().replace(b"\n", b"\r\n")        # CRLF must come back byte for byte
+        note.write_bytes(original)
+        self.start(self.vault)
+        snap = json.loads(state.read_text(encoding="utf-8"))["snapshot"]
+        self.assertRegex(snap, r"^[0-9a-f]{40}$")
+        self.tick()
+        note.write_bytes(b"sneaky\n")
+        self.cli("log", "logged", "--project", "demo")
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(snap, r.stderr)
+        m = re.search(r"put it back with: (.*)$", r.stderr, re.M)
+        self.assertIsNotNone(m, r.stderr)
+        self.assertEqual(m.group(1), f'"{Path(sys.executable).as_posix()}" "{(CODE / "vault.py").as_posix()}" '
+                         f"restore Agent/Work/widget/widget-7-plan.md --snapshot {snap}")
+        self.assertEqual(note.read_bytes(), b"sneaky\n")             # the hook only names the command
+        self.cli("restore", "Agent/Work/widget/widget-7-plan.md", "--snapshot", snap)
+        self.assertEqual(note.read_bytes(), original)
+
+    def test_with_no_snapshot_the_message_says_none_was_taken(self):  # T5 -> AC4
+        state = self.state_file()
+        note = self.agent("Work/widget/widget-7-plan.md")
+        self.seal(note)
+        self.start(self.vault)
+        data = json.loads(state.read_text(encoding="utf-8"))
+        data["snapshot"] = None
+        state.write_text(json.dumps(data), encoding="utf-8")
+        self.tick()
+        note.write_text(note.read_text(encoding="utf-8") + "sneaky\n", encoding="utf-8", newline="\n")
+        self.cli("log", "logged", "--project", "demo")
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Work/widget/widget-7-plan.md", r.stderr)
+        self.assertIn("no snapshot", r.stderr)
+        self.assertNotIn("restore Agent", r.stderr)
 
     def decision_session(self):
         self.cli("decision", "add", "demo", "Keep it small", "--decision", "d", "--why", "w", "--source", "session")
