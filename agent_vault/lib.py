@@ -43,7 +43,7 @@ AGENT = VAULT / "Agent" if VAULT else None
 PHONE_LOG = AGENT / ".phone-log.json" if AGENT else None
 
 # --- Schema (design-v1.md §6-7) ----------------------------------------------
-TYPES = ["project", "plan", "impl", "retro", "idea", "decision", "design", "daily"]
+TYPES = ["project", "plan", "impl", "retro", "idea", "decision", "design", "daily", "setup"]
 FOLDERS = {                                # folder key -> folder under Agent/
     "project": "Projects",
     "work": "Work",
@@ -61,7 +61,31 @@ PATHS = {                                  # note type -> layout (for `schema`)
     "decision": "Decisions/<project>/<project>-d<n>-<slug>.md",
     "design": "Designs/<project>/<project>-design-<n>-<slug>.md",
     "daily": "Daily/<YYYY-MM-DD>.md",
+    "setup": "Setup.md",
 }
+
+# --- Setup note (design 4): how this vault's stories and PRs work -----------------
+SETUP_FILE = "Setup.md"                   # at the top of Agent/; written only by `vault.py setup`
+SETUP_CHOICES = {                          # field -> allowed values
+    "tracker": ["github", "jira"],
+    "merge": ["squash", "merge", "rebase"],
+    "approvals": ["required", "none"],
+    "repo_settings": ["managed", "checked"],
+}
+SETUP_DEFAULTS = {                         # what a vault with no setup note means (today's behaviour)
+    "tracker": "github",
+    "merge": "squash",
+    "approvals": "none",
+    "repo_settings": "managed",
+    "branch": "{type}/{issue}-{slug}",
+    "branch_feature": "feat",
+    "branch_bug": "fix",
+}
+SETUP_JIRA = ["jira_feature_type", "jira_story_type", "jira_bug_type", "jira_planned_label", "jira_connector"]
+SETUP_PLACEHOLDERS = ["type", "issue", "slug"]          # the only {...} a branch pattern may hold
+TYPE_WORD_RE = re.compile(r"^[a-z0-9-]+$")
+JIRA_PROJECT_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
 REQUIRED = {
     "project": ["type", "id", "status", "repos"],
     "plan": ["type", "repo", "issue", "status"],
@@ -71,9 +95,10 @@ REQUIRED = {
     "decision": ["type", "project", "status", "created", "source"],
     "design": ["type", "project", "status", "created"],
     "daily": ["type", "date"],
+    "setup": ["type", *SETUP_DEFAULTS],
 }
 OPTIONAL = {
-    "project": ["audited"],
+    "project": ["audited", "jira_project"],
     "plan": ["issue_updated", "base_sha", "pr"],
     "impl": ["branch", "pr"],
     "retro": [],
@@ -81,6 +106,7 @@ OPTIONAL = {
     "decision": ["replaces", "superseded_by"],
     "design": ["sealed", "extends", "replaces"],
     "daily": [],
+    "setup": list(SETUP_JIRA),
 }
 CONDITIONAL = {                            # shown by `schema`; enforced by FM-COND / PLAN-SEALED
     "plan": "issue_updated and base_sha are required when status is sealed; pr, if present, is none (the issue ends without a pull request)",
@@ -88,6 +114,7 @@ CONDITIONAL = {                            # shown by `schema`; enforced by FM-C
     "idea": "promoted_to is required if and only if status is promoted",
     "decision": "superseded_by is required if and only if status is superseded",
     "design": "sealed is required if and only if status is sealed; extends and replaces each link a sealed design of the same project",
+    "setup": "the jira_* fields are required if and only if tracker is jira; frontmatter only (see Setup note below)",
 }
 ALWAYS_ALLOWED = ["tags", "aliases"]
 STATUSES = {
@@ -113,6 +140,7 @@ SECTIONS = {                               # required `##` sections, in order
     "design": ["Problem", "Goals", "Non-goals", "Ideas", "Options considered", "Chosen design",
                "Decisions", "Stories", "Open questions"],
     "daily": ["Log"],
+    "setup": [],
 }
 SIZE_CAPS = {"project": 60, "impl": 80, "retro": 40, "idea": 8, "decision": 12}   # body lines; errors
 WARN_LINES = {"plan": 400, "design": 400}                        # body lines; warning
@@ -282,6 +310,9 @@ RULES = {
     "X-DECISION-ACTIVE": ("error", "An active record must not be replaced by another record"),
     "X-STANDING": ("error", "A project's 'Standing decisions' lists exactly its active records, in number order, as '- <title> [[<record>]]' lines (or None)"),
     "X-LINK": ("error", "Every [[link]] in Agent/ resolves (links in code are ignored)"),
+    "SETUP": ("error", "The setup note has allowed values, a valid branch pattern and type words, the jira_* fields if and only if tracker is jira (no path in them), and no body"),
+    "X-JIRA-PROJECT": ("error", "A project's jira_project is allowed only when the vault's setup has tracker: jira"),
+    "X-JIRA-MISSING": ("warning", "In a Jira setup, a project with repos has a jira_project"),
 }
 
 def setup_io() -> None:
@@ -487,6 +518,106 @@ def plan_lasting_decisions(body: str) -> list[tuple[int, str | None]]:
     return out
 
 
+# --- Setup note ------------------------------------------------------------------
+def git_branch_ok(name: str) -> bool:
+    """Git's ref-name rules for a branch name, checked without calling git."""
+    if not name or name == "@" or name.startswith(("/", ".", "-")) or name.endswith(("/", ".", ".lock")):
+        return False
+    if any(s in name for s in ("..", "//", "@{")):
+        return False
+    if any(c in " ~^:?*[\\" or ord(c) < 32 or ord(c) == 127 for c in name):
+        return False
+    return all(part and not part.startswith(".") and not part.endswith(".lock") for part in name.split("/"))
+
+
+def _branch_pattern_problems(pattern: str, words: list[str]) -> list[str]:
+    names = re.findall(r"\{([^{}]*)\}", pattern)
+    out = []
+    for key, low, high in (("issue", 1, 1), ("type", 1, 1), ("slug", 0, 1)):
+        n = names.count(key)
+        if not low <= n <= high:
+            want = "exactly once" if low == high else "at most once"
+            out.append(f"the branch pattern must contain {{{key}}} {want} (it has {n})")
+    unknown = sorted({n for n in names if n not in SETUP_PLACEHOLDERS})
+    if unknown:
+        out.append("the branch pattern may only use {type}, {issue} and {slug}, not "
+                   + ", ".join("{" + n + "}" for n in unknown))
+    if "}{" in pattern:
+        out.append("two placeholders in the branch pattern need something between them")
+    if out:
+        return out
+    if "{" in re.sub(r"\{[^{}]*\}", "", pattern) or "}" in re.sub(r"\{[^{}]*\}", "", pattern):
+        return ["the branch pattern has an unmatched '{' or '}'"]
+    for word in words:
+        for issue in ("12", "PROJ-12"):
+            name = pattern.replace("{type}", word).replace("{issue}", issue).replace("{slug}", "some-slug")
+            if not git_branch_ok(name):
+                return [f"the branch pattern doesn't make a valid git branch name (e.g. {name!r})"]
+    return []
+
+
+def _free_text_problem(key: str, val) -> str | None:
+    if not isinstance(val, str) or not val.strip():
+        return f"'{key}' must not be empty"
+    if "/" in val or "\\" in val or val.startswith("~"):
+        return f"'{key}' must not hold a path ('/', '\\' or a leading '~'): {val!r}"
+    return None
+
+
+def setup_problems(values: dict) -> list[str]:
+    """What is wrong with a setup's values and their combination; [] when it is fine. Fields of
+    SETUP_DEFAULTS that are absent are left to FM-REQUIRED (validate) or filled in (vault.py setup)."""
+    out = []
+    for key, allowed in SETUP_CHOICES.items():
+        val = values.get(key)
+        if val not in (None, "") and val not in allowed:
+            out.append(f"'{key}' must be one of {', '.join(allowed)} (got {val!r})")
+    words = []
+    for key in ("branch_feature", "branch_bug"):
+        val = values.get(key)
+        if val in (None, ""):
+            continue
+        if not isinstance(val, str) or not TYPE_WORD_RE.match(val):
+            out.append(f"'{key}' must be a lowercase word of a-z, 0-9 and '-' (got {val!r})")
+        elif val == "hotfix":
+            out.append(f"'{key}' can't be hotfix (d81)")
+        else:
+            words.append(val)
+    if values.get("branch_feature") not in (None, "") and values.get("branch_feature") == values.get("branch_bug"):
+        out.append("'branch_feature' and 'branch_bug' must differ")
+    pattern = values.get("branch")
+    if isinstance(pattern, str) and pattern:
+        out += _branch_pattern_problems(pattern, words or [SETUP_DEFAULTS["branch_feature"]])
+    elif pattern not in (None, ""):
+        out.append("'branch' must be a single pattern")
+    jira = values.get("tracker") == "jira"
+    for key in SETUP_JIRA:
+        present = key in values and values[key] is not None
+        if jira and (not present or values[key] == ""):
+            out.append(f"a Jira setup needs '{key}'")
+        elif jira:
+            problem = _free_text_problem(key, values[key])
+            if problem:
+                out.append(problem)
+        elif present:
+            out.append(f"'{key}' belongs only to a Jira setup (tracker is {values.get('tracker')!r})")
+    return out
+
+
+def read_setup() -> dict:
+    """The vault's effective setup: Agent/Setup.md's values over SETUP_DEFAULTS, or just the defaults
+    when there is no note. Every reader of the setup goes through here (D6 of #110)."""
+    out = dict(SETUP_DEFAULTS)
+    path = AGENT / SETUP_FILE if AGENT else None
+    if path is None or not path.is_file():
+        return out
+    fm, _, _ = split_frontmatter(read_text(path))
+    for key, val in (fm or {}).items():
+        if key in SETUP_DEFAULTS or key in SETUP_JIRA:
+            out[key] = val
+    return out
+
+
 # --- Vault index ---------------------------------------------------------------
 class Index:
     """Everything a link, project or repo reference could resolve to."""
@@ -528,6 +659,7 @@ class Index:
                 for slug in repos if isinstance(repos, list) else []:
                     self.repos.setdefault(slug.split("/")[-1], []).append(p.stem)
                     self.slugs.setdefault(slug.split("/")[-1], slug)
+        self.setup = read_setup()
 
     def resolves(self, target: str) -> bool:
         name = target.strip().replace("\\", "/").split("/")[-1].lower()
@@ -633,6 +765,8 @@ def classify(parts: tuple[str, ...]):
 
     if stem is None:
         return None, {}, stray
+    if depth == 1 and name == SETUP_FILE:
+        return "setup", {}, None
     if top == FOLDERS["project"] and depth == 2:
         if not ID_RE.match(stem):
             return bad_name(PATHS["project"])
@@ -713,6 +847,9 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
             pass
         elif scalar(key) and not NUMBER_RE.match(scalar(key)):
             res.add("FM-FORMAT", f"'{key}' must be a number like 12")
+    if ntype == "project" and fm.get("jira_project") not in (None, "") \
+            and not (scalar("jira_project") and JIRA_PROJECT_RE.match(scalar("jira_project"))):
+        res.add("FM-FORMAT", f"jira_project is a Jira project key like PROJ (got {fm.get('jira_project')!r})")
     if scalar("base_sha") and not SHA_RE.match(scalar("base_sha")):
         res.add("FM-FORMAT", "base_sha must be a 7-40 character lowercase hex sha")
     repos = fm.get("repos")
@@ -1072,6 +1209,11 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
         _check_plan(res, secs, draft=fm.get("status") == "draft")
     if etype == "design":
         _check_design(res, body, draft=fm.get("status") != "sealed")
+    if etype == "setup":
+        if body.strip():
+            res.add("SETUP", "the setup note is frontmatter only; remove its body")
+        for msg in setup_problems(fm):
+            res.add("SETUP", msg)
 
     n_lines = len(body.splitlines())
     if etype == "project":      # the generated Standing decisions lines don't count toward the cap
@@ -1103,6 +1245,12 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
         res.add("FM-FORMAT", f"promoted_to [[{link_target(fm['promoted_to'])}]] is not a design in Agent/Designs")
     if etype == "project":
         _check_standing(res, path.stem, secs, index)
+        tracker = index.setup.get("tracker")
+        if fm.get("jira_project") not in (None, "") and tracker != "jira":
+            res.add("X-JIRA-PROJECT", f"jira_project is set but the vault's setup has tracker: {tracker}; "
+                                      "remove it, or switch the setup to jira (vault.py setup)")
+        if tracker == "jira" and fm.get("repos") and fm.get("jira_project") in (None, ""):
+            res.add("X-JIRA-MISSING", "this is a Jira setup, so a project with repos needs jira_project: <KEY>")
     seen = set()
     for ln in lines:
         for target in WIKILINK_RE.findall(re.sub(r"(`+).+?\1", "", ln)):
@@ -1162,6 +1310,21 @@ def schema_text() -> str:
                f"({', '.join(DESIGN_SOFT)}). A sealed design has `sealed`, an existing project, a record per "
                "decision with source 'design <design> D<n>' and each listed idea promoted to it; "
                "`seal design` does all of that. An idea's promoted_to is an issue URL or a link to a design.")
+    out.append(f"Setup note (Agent/{SETUP_FILE}, type: setup, frontmatter only, written by `vault.py setup`; "
+               "it always holds every field, defaults included):")
+    for key, default in SETUP_DEFAULTS.items():
+        allowed = " | ".join(SETUP_CHOICES[key]) if key in SETUP_CHOICES else (
+            "a pattern" if key == "branch" else "a lowercase word (a-z, 0-9, -), not hotfix")
+        out.append(f"  {key}: {allowed} (default {default})")
+    out.append(f"  Jira only (required if and only if tracker is jira): {', '.join(SETUP_JIRA)}; "
+               "each non-empty, with no '/', '\\' or leading '~'; jira_planned_label may be none.")
+    out.append("  branch: {issue} and {type} exactly once each, {slug} at most once, no other {...}, "
+               "something between two placeholders, and a valid git branch name once filled in; "
+               "branch_feature and branch_bug differ.")
+    out.append("  No setup note means the defaults above: tracker github, merge squash, approvals none, "
+               "repo_settings managed (today's behaviour).")
+    out.append("  A project note may hold jira_project: <KEY> ([A-Z][A-Z0-9_]*) only in a Jira setup; "
+               "there a project with repos should have one.")
     out.append("Line formats (a line under these sections must match; 'None' where noted):")
     for t, secs in SECTION_LINES.items():
         for sec, (rule, none_ok) in secs.items():
