@@ -30,9 +30,11 @@ SKILLS = {
     "issue": (r"file an issue for", None),
     "design": (r"design a \.\.\.", "design-reviewer.md"),
     "handoff": (r"handoff #\d", None),
+    "setup": (r"set up this vault", None),
 }
-# the five skills that carry the shared approvals section (handoff is an orchestrator, not one)
-PIPELINE_SKILLS = [s for s in SKILLS if s != "handoff"]
+# the five skills that carry the shared approvals section (handoff is an orchestrator and setup a
+# one-time interview, not stages of a story)
+PIPELINE_SKILLS = [s for s in SKILLS if s not in ("handoff", "setup")]
 
 
 def read(skill: str, name: str) -> str:
@@ -792,6 +794,34 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
         for bad in ("start_session", "mcp__ccd", "AskUserQuestion"):
             self.assertNotIn(bad, self.skill)
         self.assertEqual(PIPELINE_SKILLS, ["implement-story", "plan-story", "retro", "issue", "design"])
+
+
+class SetupSkillTest(AssertMentionsMixin, unittest.TestCase):  # T7 -> AC9 (#110)
+    def setUp(self):
+        self.skill = read("setup", "SKILL.md")
+
+    def test_not_a_pipeline_skill(self):
+        self.assertNotIn("setup", PIPELINE_SKILLS)
+        self.assertNotIn("## Approvals, pings and the closing summary", self.skill)
+        for bad in ("the approval prompt", "AskUserQuestion", "PushNotification"):
+            self.assertNotIn(bad, self.skill)
+        self.assertMentions("not a pipeline skill", "no push notification")
+
+    def test_interviews_each_field_in_prose(self):
+        self.assertMentions("one topic at a time", "open-ended prose", "never multiple choice",
+                            "tracker", "merge style", "approvals", "repo settings", "branch names",
+                            "`branch_feature`", "`branch_bug`", "never `hotfix`",
+                            "jira connector", "has tools from a server of that name",
+                            "issue types", "planned label", "jira key")
+
+    def test_shows_values_and_waits_for_a_yes(self):
+        self.assertMentions("`vault.py setup --tracker github|jira`", "every field, defaults included",
+                            "only on an explicit yes", "old value → new value", "`--replace`",
+                            "never pass `--replace` before you have shown the user what changes",
+                            "`jira_project: <key>`", "`vault.py validate`")
+
+    def test_reads_the_current_setup(self):
+        self.assertMentions("`vault.py schema`", "`agent/setup.md` if it exists")
 
 
 class HandoffDocsTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC14 (#78)
