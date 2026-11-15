@@ -357,6 +357,11 @@ class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-A
     def test_preflight_needs_a_pr_and_the_right_branch(self):  # AC1, AC7
         self.assertMentions("## preflight", "no `pr:`", "check out the impl note's", "branch")
 
+    def test_batches_small_leftovers_into_one_idea(self):  # T5 -> AC3 (#90)
+        self.assertMentions("batch small leftovers", "share a theme", "one idea",
+                            "titled for the theme", "(R2, R3, R5)",
+                            "each finding is named on exactly one line")
+
     def test_audit_runs_lint_new_retro_and_reads_context(self):  # AC2
         self.assertMentions("vault.py claudemd-lint", "vault.py new retro", "resume",
                              "gh pr diff", "the issue", "the sealed plan", "the impl note")
@@ -514,7 +519,7 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 273)
+        self.assertLessEqual(len(text.splitlines()), 278)
 
 
 class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC9, AC10 (#36)
@@ -627,6 +632,11 @@ class DesignDocsTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC14 (#3
     def test_plan_story_reads_the_design(self):
         self.assertMentions("links a design", "`[[<design>]] s<n>`", "agent/designs/<project>/", "the story `s<n>`",
                             text=read("plan-story", "SKILL.md"))
+
+    def test_vault_guide_names_ideas_review_age_and_grouping(self):  # T5 -> AC5 (#90)
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("--older-than", guide)
+        self.assertIn("grouped by project", guide)
 
     def test_vault_guide_names_designs(self):
         guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")

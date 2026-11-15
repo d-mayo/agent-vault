@@ -25,7 +25,8 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   decision add <project> "<title>" --decision "..." --why "..." --source "..." [--replaces <record>]
   decisions [--project <id>] [--all]
   ideas [--project <id>] [--status open|promoted|dropped]
-  ideas review
+  ideas review [--older-than <days>] [--project <id>]
+      (open ideas older than <days>, default 90, grouped by project, oldest first)
   phone list
   phone pull "<phone path>" [--project <id>]
   log "what happened" [--project <id>]
@@ -1344,11 +1345,24 @@ def print_ideas(rows: list[tuple[Path, dict]]) -> None:
         print(f"{p.stem}  {fm.get('status', '?')}  project:{proj}  created {fm.get('created', '?')}")
 
 
+def days_arg(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a whole number of days (0 or more)")
+    return n
+
+
 def cmd_ideas(args) -> None:
     rows = [(p, fm) for p, fm in all_ideas()
             if not args.project or fm.get("project") == args.project]
+    if args.older_than is not None and args.action != "review":
+        die("`--older-than` needs `ideas review`")
     if args.action == "review":
-        cutoff = lib.today() - dt.timedelta(days=REVIEW_DAYS)
+        days = REVIEW_DAYS if args.older_than is None else args.older_than
+        cutoff = lib.today() - dt.timedelta(days=days)
         old = []
         for p, fm in rows:
             try:
@@ -1356,8 +1370,16 @@ def cmd_ideas(args) -> None:
             except ValueError:
                 continue
             if fm.get("status") == "open" and created < cutoff:
-                old.append((p, fm))
-        print_ideas(old)
+                old.append((created, p, fm))
+        if not old:
+            print("no ideas")
+        groups: dict = {}
+        for created, p, fm in sorted(old, key=lambda t: (t[0], t[1].name)):
+            groups.setdefault(fm.get("project") or "(no project)", []).append((p, fm))
+        for name in sorted(groups):
+            print(name)
+            for p, fm in groups[name]:
+                print(f"  {p.stem}  created {fm.get('created', '?')}")
         return
     print_ideas([(p, fm) for p, fm in rows if fm.get("status") == args.status])
 
@@ -1938,6 +1960,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", nargs="?", choices=["review"])
     p.add_argument("--project")
     p.add_argument("--status", default="open", choices=lib.STATUSES["idea"])
+    p.add_argument("--older-than", type=days_arg, metavar="DAYS",
+                   help="with `review`: only ideas older than this many days (default 90)")
     p.set_defaults(fn=cmd_ideas)
 
     dec = sub.add_parser("decision", help="record a decision").add_subparsers(

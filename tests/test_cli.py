@@ -294,6 +294,40 @@ class IdeasListTest(CliCase):
         self.assertNotIn("2026-01-03-new", out)
         self.assertNotIn("2026-01-04-gone", out)
 
+    def test_older_than_flag(self):                       # T1 -> AC1
+        self.idea("2026-01-01-a", created=self.ago(31))
+        self.idea("2026-01-02-b", created=self.ago(30))
+        self.idea("2026-01-03-c", created=self.ago(1))
+        out = self.cli("ideas", "review", "--older-than", "30").stdout
+        self.assertIn("2026-01-01-a", out)
+        self.assertNotIn("2026-01-02-b", out)
+        out = self.cli("ideas", "review", "--older-than", "0").stdout
+        self.assertIn("2026-01-03-c", out)
+        self.assertEqual(self.cli("ideas", "review").stdout.strip(), "no ideas")
+
+    def test_older_than_refuses_bad_values(self):         # T1 -> AC1
+        for bad in ("-1", "abc"):
+            r = run_py(CLI, ["ideas", "review", "--older-than", bad], config=self.cfg)
+            self.assertNotEqual(r.returncode, 0, bad)
+            self.assertNotIn("Traceback", r.stderr)
+
+    def test_older_than_needs_review(self):               # T6 -> AC6
+        self.refused("ideas", "--older-than", "30", why="needs `ideas review`")
+
+    def test_review_groups_by_project(self):              # T2 -> AC2
+        self.idea("2026-01-01-d1", created=self.ago(100), extra="project: demo\n")
+        self.idea("2026-01-02-o1", created=self.ago(120), extra="project: other\n")
+        self.idea("2026-01-03-d0", created=self.ago(200), extra="project: demo\n")
+        self.idea("2026-01-04-n", created=self.ago(150))
+        out = self.cli("ideas", "review").stdout.splitlines()
+        heads = [ln for ln in out if not ln.startswith(" ")]
+        self.assertEqual(heads, ["(no project)", "demo", "other"])
+        self.assertLess(out.index(next(x for x in out if "d0" in x)),
+                        out.index(next(x for x in out if "d1" in x)))
+        only = self.cli("ideas", "review", "--project", "other").stdout.splitlines()
+        self.assertEqual(only[0], "other")
+        self.assertEqual(len(only), 2)
+
     def test_never_reads_bodies(self):                    # T8 -> AC8
         p = self.idea("2026-01-01-broken", created=self.ago(120))
         p.write_bytes(p.read_bytes() + b"\xff\xfe not utf-8 \x00\n")

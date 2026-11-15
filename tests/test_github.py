@@ -841,6 +841,17 @@ class SealRetroTest(GhCase):  # T5-T9 -> AC5, AC6, AC7, AC9
         git("switch", "-q", "-c", "feat/9-other", cwd=self.clone)
         self.ok(self.cli("seal", "retro", "widget", "7"))
 
+    def test_seals_when_one_idea_line_settles_several_findings(self):    # T4 -> AC3
+        self.prep()
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        self.add_findings("- R1 (minor): Review 1: odd name → left open",
+                          "- R2 (major): Review 1: bug → fixed in abc1234",
+                          "- R3 (minor): Review 1: odd spacing → left open")
+        name = self.idea("--project", "widgets")
+        self.set_follow_ups(f"- idea [[{name}]] (R1, R3)")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
     def test_refuses_finding_settled_twice(self):    # T4 -> AC3
         self.unsorted_prep("- dropped: cosmetic only (R1)", "- dropped: also cosmetic (R1)")
         self.refused(self.cli("seal", "retro", "widget", "7"), "more than one", "R1")
