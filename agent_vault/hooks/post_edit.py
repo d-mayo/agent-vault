@@ -21,7 +21,7 @@ def main() -> None:
     if not target:
         return
     parts = lib.vault_parts(target, data.get("cwd"))
-    if not parts or parts[0] != lib.AGENT.name.lower() or len(parts) < 2 or parts[1] == "_system":
+    if not parts or parts[0] != lib.AGENT.name.lower() or len(parts) < 2:
         return
     path = Path(target)
     if not path.is_absolute():

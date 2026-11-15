@@ -272,14 +272,6 @@ def cmd_new_design(args) -> None:
     print("created " + lib.rel(path))
 
 
-def set_fields(path: Path, **fields) -> None:
-    """Update frontmatter fields in place. Only hooks/stop_check.py uses this (#5 owns that hook)."""
-    fm, body, _ = lib.split_frontmatter(lib.read_text(path))
-    fm = fm or {}
-    fm.update(fields)
-    lib.write_text(path, lib.render_frontmatter(fm) + body.lstrip("\n"))
-
-
 # --- git and GitHub commands (design §4, §10) ------------------------------------------
 REPO_SETTINGS = {"allow_squash_merge": True, "allow_merge_commit": False,
                  "allow_rebase_merge": False, "delete_branch_on_merge": True}

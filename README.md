@@ -86,5 +86,4 @@ python -m unittest discover -s tests -t .     # the tests, classes in parallel; 
 ```
 
 The pre-push hook runs `vault.py lint` before any push that creates or updates a branch, and
-implement-story runs it before every review. After pulling this change, rerun `install.py`: the
-hook needs the `python` field it now writes to the config.
+implement-story runs it before every review.

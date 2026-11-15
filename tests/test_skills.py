@@ -954,6 +954,17 @@ class AutoInstallDocsTest(unittest.TestCase):  # T7 -> AC7 (#98)
             self.assertRegex(text, r"(?i)once by hand|one manual")
 
 
+class CleanupTest(unittest.TestCase):
+    def test_dead_code_is_gone(self):
+        for path in [*(REPO / "agent_vault").glob("*.py"), *(REPO / "agent_vault" / "hooks").glob("*.py")]:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("set_fields", text, path.name)
+            self.assertNotIn("_system", text, path.name)
+
+    def test_readme_has_no_stale_install_note(self):
+        self.assertNotIn("After pulling this change", (REPO / "README.md").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
 
