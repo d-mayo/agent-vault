@@ -361,10 +361,10 @@ def cmd_seal_plan(args) -> None:
     errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
     if errors:
         die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
-    add_planned_label(slug, args.issue)     # a label never changes `edited` (D1), so `info` still holds
     sha = github.head_sha(slug, github.default_branch(slug))[:7]
     update_note(path, status="sealed", issue_updated=info["edited"], base_sha=sha)
     log_event(args.repo, args.issue, "planned")
+    add_planned_label(slug, args.issue)     # after the seal: a sealed note without the label is a handled state (a rerun adds it)
     print(f"sealed {lib.rel(path)} (issue_updated {info['edited']}, base_sha {sha}); "
           f"added the '{name}' label")
 

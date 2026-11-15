@@ -17,7 +17,8 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
   `issue create` also adds the new issue to "issues". An issue may also have "parent": "<url of its parent issue>" (set by `issue create --parent` and
   `issue edit --add-sub-issue`) and "sub_summary": {"total": n, "completed": n} (else counted from the
   issues whose parent is it). State keys: "old_gh": true makes the sub-issue flags and JSON fields fail
-  like gh before 2.94.0; "refuse_sub_issue": {"<sub-issue url>": "<GitHub's reason>"} refuses that link.
+  like gh before 2.94.0; "refuse_sub_issue": {"<sub-issue url>": "<GitHub's reason>"} refuses that link;
+  "fail_label_edit": true makes every `issue edit --add-label` fail.
   "fail_sub_query": "<error text>" fails only the sub-issues GraphQL query (`feature_view`).
    "calls": [[...args of every call...]]}
 Unknown repos are created with defaults on first use. Tests read and edit the file directly.
@@ -191,6 +192,8 @@ def main():
         issue = repo["issues"][args[2]]
         label = opt(args, "--add-label")
         if label:
+            if state.get("fail_label_edit"):
+                fail("failed to update: simulated label edit failure")
             if label not in repo["labels"]:
                 fail(f"failed to update: '{label}' not found")
             if label not in issue["labels"]:
