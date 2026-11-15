@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -757,6 +758,52 @@ class StopTest(HookCase):
         self.assertIn("Tell the user", r.stderr)
         self.assertNotIn(time.strftime("%Y-%m-%d"), r.stderr)       # today's note isn't in the list
         self.assertEqual(self.stop(active=True).returncode, 0)
+
+    def state_file(self):
+        tmp = self.root / "tmp"
+        tmp.mkdir(exist_ok=True)
+        self.env.update(TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
+        return tmp / "obsidian-agent-hooks" / f"{self.sid}.json"
+
+    def test_the_message_names_the_snapshot_and_the_restore_command(self):  # T5 -> AC4, AC3
+        state = self.state_file()
+        note = self.agent("Work/widget/widget-7-plan.md")
+        self.seal(note)
+        original = note.read_bytes().replace(b"\n", b"\r\n")        # CRLF must come back byte for byte
+        note.write_bytes(original)
+        self.start(self.vault)
+        snap = json.loads(state.read_text(encoding="utf-8"))["snapshot"]
+        self.assertRegex(snap, r"^[0-9a-f]{40}$")
+        self.tick()
+        note.write_bytes(b"sneaky\n")
+        self.cli("log", "logged", "--project", "demo")
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(snap, r.stderr)
+        m = re.search(r"put it back with: (.*)$", r.stderr, re.M)
+        self.assertIsNotNone(m, r.stderr)
+        self.assertEqual(m.group(1), f'"{Path(sys.executable).as_posix()}" "{(CODE / "vault.py").as_posix()}" '
+                         f"restore Agent/Work/widget/widget-7-plan.md --snapshot {snap}")
+        self.assertEqual(note.read_bytes(), b"sneaky\n")             # the hook only names the command
+        self.cli("restore", "Agent/Work/widget/widget-7-plan.md", "--snapshot", snap)
+        self.assertEqual(note.read_bytes(), original)
+
+    def test_with_no_snapshot_the_message_says_none_was_taken(self):  # T5 -> AC4
+        state = self.state_file()
+        note = self.agent("Work/widget/widget-7-plan.md")
+        self.seal(note)
+        self.start(self.vault)
+        data = json.loads(state.read_text(encoding="utf-8"))
+        data["snapshot"] = None
+        state.write_text(json.dumps(data), encoding="utf-8")
+        self.tick()
+        note.write_text(note.read_text(encoding="utf-8") + "sneaky\n", encoding="utf-8", newline="\n")
+        self.cli("log", "logged", "--project", "demo")
+        r = self.stop()
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Work/widget/widget-7-plan.md", r.stderr)
+        self.assertIn("no snapshot", r.stderr)
+        self.assertNotIn("restore Agent", r.stderr)
 
     def decision_session(self):
         self.cli("decision", "add", "demo", "Keep it small", "--decision", "d", "--why", "w", "--source", "session")
