@@ -968,5 +968,87 @@ class AtomicWriteTest(unittest.TestCase):                           # T1 -> AC1 
         self.assertEqual(self.leftovers(), [])
 
 
+class SnapshotTest(unittest.TestCase):                              # T2, T6, T7 -> AC2, AC5, AC6 (#85)
+    def setUp(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        self.vault = make_vault(self.root)
+        self.agent = self.vault / "Agent"
+        (self.agent / "Ideas").mkdir(parents=True)
+        (self.agent / "Ideas" / "a.md").write_bytes(b"one\r\ntwo\n")
+        self.cfg = write_config(self.root, self.vault)
+        for patcher in (mock.patch.object(lib, "CONFIG", self.cfg), mock.patch.object(lib, "VAULT", self.vault)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def tree(self):
+        return sorted(p.relative_to(self.vault).as_posix() for p in self.vault.rglob("*"))
+
+    def test_first_call_creates_history_outside_the_vault(self):
+        before = self.tree()
+        sid = lib.snapshot("s1")
+        self.assertRegex(sid, r"^[0-9a-f]{40}$")
+        self.assertTrue((self.root / "agent-vault-history.git").is_dir())
+        self.assertEqual(self.tree(), before)
+
+    def test_unchanged_gives_same_id_and_a_change_a_new_one(self):
+        first = lib.snapshot("s1")
+        self.assertEqual(lib.snapshot("s2"), first)
+        (self.agent / "Ideas" / "a.md").write_bytes(b"changed\n")
+        second = lib.snapshot("s3")
+        self.assertNotEqual(second, first)
+        self.assertEqual(lib.newest_snapshot(), second)
+
+    def test_content_is_byte_for_byte_and_listing_shows_changes(self):
+        first = lib.snapshot("s1")
+        self.assertEqual(lib.snapshot_content(first, "Ideas/a.md"), b"one\r\ntwo\n")
+        (self.agent / "Ideas" / "b.md").write_bytes(b"other\n")
+        second = lib.snapshot("s2")
+        self.assertEqual([r[0] for r in lib.snapshots_of("Ideas/a.md")], [first])
+        self.assertEqual([r[0] for r in lib.snapshots_of("Ideas/b.md")], [second])
+        self.assertIn("s1", lib.snapshots_of("Ideas/a.md")[0][2])
+
+    def test_hidden_files_in_and_pycache_and_tmp_out(self):
+        (self.agent / ".phone-log.json").write_bytes(b"{}")
+        (self.agent / "__pycache__").mkdir()
+        (self.agent / "__pycache__" / "x.pyc").write_bytes(b"x")
+        (self.agent / "Ideas" / ".a.md.123.tmp").write_bytes(b"t")
+        sid = lib.snapshot("s1")
+        files = lib._hgit("ls-tree", "-r", "--name-only", sid).splitlines()
+        self.assertIn(".phone-log.json", files)
+        self.assertIn("Ideas/a.md", files)
+        self.assertEqual([f for f in files if "pycache" in f or f.endswith(".tmp")], [])
+
+    def test_history_inside_the_vault_is_refused(self):
+        before = self.tree()
+        with mock.patch.object(lib, "CONFIG", self.vault / "agent-vault.json"):
+            self.assertIsNone(lib.snapshot("s1"))
+        self.assertEqual(self.tree(), before)
+        self.assertFalse((self.vault / "agent-vault-history.git").exists())
+
+    def test_git_failure_gives_none(self):
+        import github
+        with mock.patch.object(github, "run", side_effect=github.CmdError("no git", "missing")):
+            self.assertIsNone(lib.snapshot("s1"))
+
+    def test_timeout_removes_a_left_index_lock(self):
+        import github
+        lib.snapshot("s1")
+        lock = self.root / "agent-vault-history.git" / "index.lock"
+        lock.write_text("", encoding="utf-8")
+        with mock.patch.object(github, "run", side_effect=github.CmdError("slow", "timeout")):
+            self.assertIsNone(lib.snapshot("s2"))
+        self.assertFalse(lock.exists())
+
+    def test_the_callers_deadline_is_put_back(self):
+        import github
+        github.DEADLINE = None
+        lib.snapshot("s1")
+        self.assertIsNone(github.DEADLINE)
+
+
 if __name__ == "__main__":
     unittest.main()
