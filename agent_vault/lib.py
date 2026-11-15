@@ -1201,6 +1201,21 @@ def save_state(session_id: str, state: dict) -> None:
         pass
 
 
+def prune_state(keep_session_id: str = "", days: int = 7) -> None:
+    """Delete hook state files not modified for `days` days, never the given session's. Never raises."""
+    try:
+        keep = _state_file(keep_session_id).name
+        cutoff = time.time() - days * 86400
+        for path in STATE_DIR.glob("*.json"):
+            try:
+                if path.name != keep and path.stat().st_mtime < cutoff:
+                    path.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 # --- History of Agent/ (snapshots outside the vault, #85) ---------------------------
 HISTORY_NAME = "agent-vault-history.git"
 SNAPSHOT_SECONDS = 5

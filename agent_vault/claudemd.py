@@ -252,10 +252,11 @@ def run_lint_command(top: Path) -> list:
 
 # --- covers globs and the line cap ----------------------------------------------
 def all_repo_files(repo: Path):
-    """Repo-relative, forward-slash paths of every tracked-looking file (skips .git)."""
+    """Repo-relative, forward-slash paths of every tracked-looking file (skips .git and node_modules)."""
     for dirpath, dirnames, filenames in os.walk(repo):
-        if ".git" in dirnames:
-            dirnames.remove(".git")
+        for skip in (".git", "node_modules"):
+            if skip in dirnames:
+                dirnames.remove(skip)
         for fn in filenames:
             yield (Path(dirpath) / fn).relative_to(repo).as_posix()
 

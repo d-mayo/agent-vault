@@ -182,6 +182,7 @@ def main() -> None:
     if lib.VAULT is None:
         return
     data = lib.read_hook_input()
+    lib.prune_state(data.get("session_id", ""))     # every start, first or resumed
     cwd = data.get("cwd")
     info = lib.session_kind(cwd)
     if info["kind"] is None:
