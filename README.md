@@ -42,6 +42,15 @@ code, the skills it installed, its entries and permission in the settings files,
 clone's `core.hooksPath`, and leaves the vault's notes and `<vault>/CLAUDE.md` alone; then restart
 open Claude sessions.
 
+**A history of `Agent/`.** Every note write is atomic (a hidden temporary file renamed over the note),
+and the first SessionStart of a vault or repo session snapshots `Agent/` (when something changed
+since the last snapshot) into a git repository kept beside the config,
+`~/.claude/agent-vault-history.git`, never in the vault. `vault.py restore <note> [--snapshot <id>]`
+puts a note back byte for byte from the newest snapshot or a named one, and `restore <note> --list`
+shows the snapshots in which it changed. The Stop hook's message about a note changed through the
+shell names the snapshot taken at the session's start and the exact `restore` command. The history
+only grows, and nothing in it is cleaned up.
+
 **To verify:** run the `check:` command it prints last. Then start Claude Code in
 the vault and ask it to quote the context it was given at session start: it should
 begin with "Vault context". (The app doesn't display that context; it goes straight

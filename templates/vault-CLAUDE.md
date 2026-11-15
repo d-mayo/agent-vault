@@ -41,5 +41,6 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what 
 - `{{CLI}} ideas [--project <id>] [--status open]` lists ideas; `{{CLI}} ideas review` lists open ideas older than 90 days.
 - `{{CLI}} phone list` and `{{CLI}} phone pull "<path>" [--project <id>]`
 - `{{CLI}} log "<text>" [--project <id>]`
+- `{{CLI}} restore <note> [--snapshot <id>] [--list]`: puts a note under `Agent/` back byte for byte from the history of `Agent/` (a snapshot taken at the first session start of every vault or repo session, kept outside the vault); `--list` shows the snapshots where the note changed. The Stop hook names this command when a sealed note changed through the shell: tell me, and only run it if I ask.
 
 `{{CLI}} lint` (run inside a clone) runs `claudemd-lint` and then the repo's declared `Lint:` command; it fails rather than skip a missing tool. `{{CLI}} schema` prints the full note rules. `{{CLI}} status` lists projects and the open idea count. `{{CLI}} validate` checks everything.
