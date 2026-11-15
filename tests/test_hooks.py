@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -269,6 +270,120 @@ class SessionStartTest(HookCase):
         self.assertIn("first thing", out)
         self.assertIn("Open ideas for demo: 1", out)
         self.assertNotIn("Other idea", out)
+
+    # --- the shortened Standing decisions (#82) ---
+    WORDS = ["Alpha", "Bravo", "Carol", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",
+             "Kilo", "Lima"]
+
+    def records(self, titles, status="active"):
+        """Decision records written straight to the vault, numbered on from the existing ones."""
+        folder = self.vault / "Agent" / "Decisions" / "demo"
+        folder.mkdir(parents=True, exist_ok=True)
+        start = len(list(folder.glob("*.md"))) + 1
+        for n, title in enumerate(titles, start):
+            (folder / f"demo-d{n}-{title.split()[0].lower()}.md").write_text(
+                f"---\ntype: decision\nproject: demo\nstatus: {status}\ncreated: 2026-09-26\nsource: session\n---\n"
+                f"# {title}\n\n## Decision\nx.\n\n## Why\ny.\n",
+                encoding="utf-8", newline="\n")
+
+    def standing(self, out):
+        lines = out.split("\n")
+        i = lines.index("## Standing decisions")
+        end = next((j for j in range(i + 1, len(lines)) if lines[j] == "" or lines[j].startswith("## ")), len(lines))
+        return lines[i + 1:end]
+
+    def sections(self, out):
+        """The overview's sections as printed, by heading, without blank lines."""
+        text = out.split("## Project overview: [[demo]]\n", 1)[1].split("\nBranch ", 1)[0]
+        got, key = {}, None
+        for ln in text.split("\n"):
+            if ln.startswith("## "):
+                key = ln
+                got[key] = []
+            elif ln.strip() and key:
+                got[key].append(ln)
+        return got
+
+    def test_standing_decisions_are_shortened(self):  # T1 -> AC1
+        titles = [f"{w} rule" for w in self.WORDS]
+        self.records(titles)
+        out = self.start(self.repo)
+        section = self.standing(out)
+        self.assertIn("12 active", section[0])
+        self.assertEqual(len(section), 12)
+        for i, t in enumerate(titles[2:]):
+            self.assertTrue(section[1 + i].startswith(f"- {t} [["), section[1 + i])
+        self.assertTrue(section[-1].endswith(" decisions --project demo`"), section[-1])
+        for t in titles[:2]:
+            self.assertNotIn(t, out)
+        # the other sections print as the overview holds them
+        text = (self.vault / "Agent" / "Projects" / "demo.md").read_text(encoding="utf-8").split("\n---\n", 1)[1]
+        expect, key = {}, None
+        for ln in text.split("\n"):
+            if ln.startswith("## "):
+                key = ln
+                expect[key] = []
+            elif ln.strip() and key:
+                expect[key].append(ln)
+        got = self.sections(out)
+        for heading, lines in expect.items():
+            if heading != "## Standing decisions":
+                self.assertEqual(got[heading], lines)
+        self.assertIn("Build widgets.", out)
+
+    def test_the_size_does_not_grow_with_the_records(self):  # T2 -> AC2
+        self.records([f"{w} rule" for w in self.WORDS[:10]])
+        ten = self.standing(self.start(self.repo))
+        self.records([f"Zz{i:03d} rule" for i in range(90)])
+        out = self.start(self.repo)
+        self.assertEqual(len(self.standing(out)), len(ten))
+        self.assertNotIn("Alpha rule", out)
+        self.assertNotIn("Zz000 rule", out)
+        self.assertIn("Zz089 rule", out)
+
+    def test_few_or_no_records_and_no_heading(self):  # T3 -> AC3, AC5
+        self.records(["Alpha rule", "Bravo rule", "Carol rule"])
+        section = self.standing(self.start(self.repo))
+        self.assertEqual(len(section), 5)
+        self.assertIn("3 active", section[0])
+        self.assertIn("decisions --project demo", section[-1])
+        for t in ("Alpha", "Bravo", "Carol"):
+            self.assertTrue(any(ln.startswith(f"- {t} rule") for ln in section))
+        shutil.rmtree(self.vault / "Agent" / "Decisions" / "demo")
+        out = self.start(self.repo)
+        self.assertEqual(self.standing(out), ["None"])
+        self.assertNotIn("active decision", out)
+        self.assertNotIn("decisions --project", out)
+        path = self.vault / "Agent" / "Projects" / "demo.md"
+        text = path.read_text(encoding="utf-8").replace("## Standing decisions", "## Other things")
+        path.write_text(text, encoding="utf-8", newline="\n")
+        self.records(["Alpha rule"])
+        out = self.start(self.repo)
+        self.assertIn("## Other things", out)
+        self.assertNotIn("active decision", out)
+        self.assertNotIn("decisions --project", out)
+
+    def test_overview_untouched_superseded_skipped_and_failure_falls_back(self):  # T4 -> AC4, AC5
+        add = ("decision", "add")
+        self.cli(*add, "demo", "Alpha rule", "--decision", "a", "--why", "b", "--source", "session")
+        self.cli(*add, "demo", "Bravo rule", "--decision", "a", "--why", "b", "--source", "session")
+        self.cli(*add, "demo", "Carol rule", "--decision", "a", "--why", "b", "--source", "session",
+                 "--replaces", "demo-d1-alpha-rule")
+        overview = self.vault / "Agent" / "Projects" / "demo.md"
+        before = overview.read_bytes()
+        out = self.start(self.repo)
+        self.assertEqual(overview.read_bytes(), before)
+        section = self.standing(out)
+        self.assertIn("2 active", section[0])
+        self.assertNotIn("Alpha rule", "\n".join(section))
+        self.assertEqual(len(section), 4)
+        r = run_py(CLI, ["validate"], config=self.cfg, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.crashing("session_start", "session_start.short_standing", cwd=self.repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Bravo rule [[", r.stdout)
+        self.assertNotIn("active decision", r.stdout)
+        self.assertIn("Stage:", r.stdout)
 
     def test_a_feature_branch_shows_the_feature_stage(self):     # T9 -> AC7
         self.set_gh({"issues": {"7": {"state": "OPEN", "title": "T", "created": "2026-09-01T00:00:00Z",
