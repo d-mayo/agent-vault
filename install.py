@@ -55,12 +55,17 @@ REPLACE_TRIES, REPLACE_PAUSE = 6, 0.25          # about 1.5 seconds in all
 CLI = "~/.claude/agent-vault/bin/vault"      # the same text on every machine (D1 of #44); the shell expands ~
 
 
+BLOCKING_HOOKS = ("guard.py", "push_guard.py")   # the PreToolUse guards: a missing Python blocks the tool call
+
+
 def python_cmd() -> str:
     return f'"{Path(sys.executable).as_posix()}"'
 
 
 def hook_cmd(install_dir: Path, script: str) -> str:
-    return f'{python_cmd()} "{(install_dir / "hooks" / script).as_posix()}"'
+    """The hook launcher reads the Python from the config at run time, so no Python path is in the command."""
+    blocking = " --blocking" if script in BLOCKING_HOOKS else ""
+    return f'"{(install_dir / "bin" / "hook").as_posix()}" {script}{blocking}'
 
 
 def user_hooks(install_dir: Path) -> dict:
@@ -292,8 +297,9 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
     home = home.resolve()
     report: list[str] = []
     if sys.prefix != sys.base_prefix:
-        report.append("warning: running inside a virtualenv; hooks will use its Python and stop "
-                      "working if it's deleted. Prefer rerunning with your system Python.")
+        report.append("warning: running inside a virtualenv; hooks will use its Python, and "
+                      "if it's deleted tool calls stay blocked until install.py is rerun. Prefer rerunning "
+                      "with your system Python.")
     claude = home / ".claude"
     install_dir = claude / "agent-vault"
     cli = CLI
@@ -305,9 +311,9 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
     migrate_phone_log(vault, report)
     clear_staging(claude / STAGING)
     copy_tree(REPO / "agent_vault", install_dir, claude / STAGING / "_code")
-    launcher = install_dir / "bin" / "vault"
-    if launcher.is_file():
-        launcher.chmod(launcher.stat().st_mode | 0o111)
+    for launcher in sorted((install_dir / "bin").glob("*")):
+        if launcher.is_file():
+            launcher.chmod(launcher.stat().st_mode | 0o111)
     report.append(f"installed code to {install_dir}")
     install_skills(claude, report)
     clear_staging(claude / STAGING)

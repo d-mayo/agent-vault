@@ -59,6 +59,53 @@ class InstallTest(unittest.TestCase):
         (self.repo / ".git").mkdir(parents=True, exist_ok=True)
         return install.install(self.vault, self.home, repo=self.repo)
 
+    def our_hook_commands(self):
+        us = json.loads((self.home / ".claude" / "settings.json").read_text())
+        return [(g, h["command"]) for ev in us["hooks"].values() for g in ev for h in g["hooks"]
+                if "/.claude/agent-vault/" in h["command"]]
+
+    def test_hooks_call_the_launcher(self):  # T2 -> AC2
+        self.run_install()
+        launcher = self.home / ".claude" / "agent-vault" / "bin" / "hook"
+        cmds = [c for _, c in self.our_hook_commands()]
+        self.assertEqual(len(cmds), 5)
+        for c in cmds:
+            self.assertTrue(c.startswith('"'), c)
+            quoted, _, _rest = c[1:].partition('" ')       # the temp path may be spelled differently
+            self.assertTrue(os.path.samefile(quoted, launcher), c)
+            self.assertNotIn(Path(sys.executable).as_posix(), c)
+            self.assertEqual(c.endswith(" --blocking"), "guard.py" in c, c)
+        self.assertEqual(sum(c.endswith(" --blocking") for c in cmds), 2)
+
+    def test_reinstall_replaces_python_path_hooks_keeps_foreign(self):  # T2 -> AC2
+        self.run_install()
+        us_path = self.home / ".claude" / "settings.json"
+        us = json.loads(us_path.read_text())
+        old = f'{install.python_cmd()} "{(self.home / ".claude" / "agent-vault" / "hooks" / "stop_check.py").as_posix()}"'
+        us["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": old}]})
+        us_path.write_text(json.dumps(us))
+        self.run_install()
+        cmds = [h["command"] for ev in json.loads(us_path.read_text())["hooks"].values()
+                for g in ev for h in g["hooks"]]
+        self.assertNotIn(old, cmds)
+        self.assertIn(FOREIGN["command"], cmds)
+        self.assertEqual(len([c for c in cmds if "/.claude/agent-vault/" in c]), 5)
+
+    @unittest.skipUnless(find_bash(), "needs bash")
+    def test_installed_hook_commands_run(self):  # T2 -> AC2: each command, end to end
+        self.run_install()
+        env = dict(os.environ, HOME=str(self.home),
+                   AGENT_VAULT_CONFIG=str(self.home / ".claude" / "agent-vault.json"))
+        for _, cmd in self.our_hook_commands():
+            out = subprocess.run([find_bash(), "-c", cmd], input="{}", capture_output=True, text=True, env=env)
+            self.assertEqual(out.returncode, 0, (cmd, out.stderr))
+
+    def test_readme_and_warning_say_what_a_deleted_python_does(self):  # T5 -> AC5
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("Hooks run with the same Python", readme)
+        self.assertIn("install.py", readme.split("Hooks run with")[1].split("\n\n")[0])
+        self.assertIn("rerun", (REPO / "install.py").read_text(encoding="utf-8").split("virtualenv")[1][:400])
+
     def test_fresh_install(self):  # T1 -> AC1, AC4
         self.run_install()
         inst = self.home / ".claude" / "agent-vault"
@@ -78,8 +125,8 @@ class InstallTest(unittest.TestCase):
             self.assertEqual(out.stdout, cfg["python"])
         us = json.loads((self.home / ".claude" / "settings.json").read_text())
         ours = [h["command"] for g in sum(us["hooks"].values(), []) for h in g["hooks"]
-                if "/.claude/agent-vault/hooks/" in h["command"]]
-        self.assertEqual(sorted(Path(c.split('" "')[1].rstrip('"')).name for c in ours),
+                if "/.claude/agent-vault/bin/hook" in h["command"]]
+        self.assertEqual(sorted(c.split('" ')[1].split()[0] for c in ours),
                          sorted(["session_start.py", "guard.py", "push_guard.py", "post_edit.py",
                                  "stop_check.py"]))
         self.assertEqual([a for a in us["permissions"]["allow"] if "agent-vault" in a],
@@ -594,6 +641,96 @@ class LauncherTest(unittest.TestCase):
         (repo / ".git").mkdir(parents=True)
         install.install(vault, home, repo=repo)
         launcher = home / ".claude" / "agent-vault" / "bin" / "vault"
+        self.assertTrue(launcher.is_file())
+        self.assertNotIn(b"\r", launcher.read_bytes())
+        if sys.platform != "win32":
+            self.assertTrue(os.access(launcher, os.X_OK))
+
+
+@unittest.skipUnless(find_bash(), "needs bash")
+class HookLauncherTest(unittest.TestCase):
+    def setUp(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        self.inst = self.root / "agent-vault"
+        (self.inst / "bin").mkdir(parents=True)
+        (self.inst / "hooks").mkdir()
+        shutil.copyfile(REPO / "agent_vault" / "bin" / "hook", self.inst / "bin" / "hook")
+        (self.inst / "hooks" / "x.py").write_text(
+            "import sys\nprint('stdin=' + sys.stdin.read())\nprint('argv=' + repr(sys.argv[1:]))\nsys.exit(3)\n",
+            encoding="utf-8")
+        (self.inst / "hooks" / "session_start.py").write_text("print('started')\n", encoding="utf-8")
+        self.home = self.root / "home"
+        self.home.mkdir()
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def run_hook(self, config, *args, stdin="{}"):
+        env = dict(os.environ, HOME=str(self.home))
+        env.pop("AGENT_VAULT_CONFIG", None)
+        if config is not None:
+            env["AGENT_VAULT_CONFIG"] = str(config)
+        return subprocess.run([find_bash(), (self.inst / "bin" / "hook").as_posix(), *args],
+                              capture_output=True, text=True, env=env, input=stdin)
+
+    def config(self, python, field=True):
+        cfg = self.root / "agent-vault.json"
+        data = {"vault": "x"}
+        if field:
+            data["python"] = python
+        cfg.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        return cfg
+
+    def test_pass_through(self):  # T1 -> AC1, T4 -> AC4
+        cfg = self.config(Path(sys.executable).as_posix())
+        for extra in ([], ["--blocking"]):
+            out = self.run_hook(cfg, "x.py", *extra, stdin='{"a": 1}')
+            self.assertEqual(out.returncode, 3)
+            self.assertIn('stdin={"a": 1}', out.stdout)
+            self.assertIn("argv=[]", out.stdout)       # --blocking is the launcher's own
+
+    def test_python_gone(self):  # T3 -> AC3
+        for cfg in (self.config((self.root / "nope" / "python").as_posix()), self.config("", field=False)):
+            blocked = self.run_hook(cfg, "x.py", "--blocking")
+            self.assertEqual(blocked.returncode, 2)
+            self.assertIn("rerun install.py", blocked.stderr)
+            soft = self.run_hook(cfg, "x.py")
+            self.assertEqual(soft.returncode, 1)
+            self.assertIn("rerun install.py", soft.stderr)
+            self.assertEqual(soft.stdout, "")
+
+    def test_python_gone_with_a_large_payload(self):  # R1
+        big = "x" * (2 * 1024 * 1024)
+        cfg = self.config((self.root / "nope" / "python").as_posix())
+        for args, code in ((["x.py", "--blocking"], 2), (["x.py"], 1), (["session_start.py"], 0)):
+            out = self.run_hook(cfg, *args, stdin=big)
+            self.assertEqual(out.returncode, code, args)
+            self.assertIn("rerun install.py", out.stderr + out.stdout)
+
+    def test_session_start_reports_in_hook_json(self):  # T3 -> AC3
+        for missing in ("nope/python", 'a dir/with "quote"/python'):
+            out = self.run_hook(self.config((self.root / missing).as_posix()), "session_start.py")
+            self.assertEqual(out.returncode, 0)
+            data = json.loads(out.stdout)
+            self.assertIn("rerun install.py", data["systemMessage"])
+            self.assertIn(missing.split('"')[0], data["systemMessage"])   # the config spells a quote escaped
+            self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "SessionStart")
+            self.assertEqual(data["hookSpecificOutput"]["additionalContext"], data["systemMessage"])
+
+    def test_no_config(self):  # T4 -> AC4: the default config path, under an empty HOME
+        for args in (["x.py"], ["x.py", "--blocking"], ["session_start.py"]):
+            out = self.run_hook(None, *args)
+            self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "", ""))
+
+    def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
+        home = self.root / "inst-home"
+        (home / ".claude").mkdir(parents=True)
+        vault = make_vault(self.root)
+        repo = self.root / "repo"
+        (repo / ".git").mkdir(parents=True)
+        install.install(vault, home, repo=repo)
+        launcher = home / ".claude" / "agent-vault" / "bin" / "hook"
         self.assertTrue(launcher.is_file())
         self.assertNotIn(b"\r", launcher.read_bytes())
         if sys.platform != "win32":
