@@ -49,7 +49,7 @@ def git_state(root: str) -> dict:
 
 def project_lines(pid: str, repos: list[str], n: int) -> list[str]:
     names = "|".join(re.escape(r) for r in repos)
-    pat = re.compile(rf"\[\[{re.escape(pid)}\]\]" + (rf"|\b(?:{names})#\d+ " if repos else ""))
+    pat = re.compile(rf"\[\[{re.escape(pid)}\]\]" + (rf"|\b(?:{names})#{lib.ISSUE_ID_RE.pattern[1:-1]} " if repos else ""))
     return lib.daily_log_lines(n, lambda ln: bool(pat.search(ln)))
 
 

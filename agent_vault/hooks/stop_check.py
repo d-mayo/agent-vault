@@ -68,7 +68,7 @@ def logged_since_start(state: dict, daily: Path, repo: str | None) -> bool:
     """A pipeline event line for this repo, appended to today's daily note during the session."""
     if not repo or not daily.exists():
         return False
-    pat = re.compile(rf"^- \S+ {re.escape(repo)}#[1-9]\d* (?:{'|'.join(lib.EVENTS)})\b")
+    pat = re.compile(rf"^- \S+ {re.escape(repo)}#{lib.ISSUE_ID_RE.pattern[1:-1]} (?:{'|'.join(lib.EVENTS)})\b")
     new = lib.read_text(daily).splitlines()[state.get("daily_lines", 0):]
     return any(pat.match(ln) for ln in new)
 

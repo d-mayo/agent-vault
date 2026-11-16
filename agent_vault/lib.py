@@ -178,16 +178,28 @@ ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 NUMBER_RE = re.compile(r"^[1-9]\d*$")
+ISSUE_NUMBER_RE = NUMBER_RE                                        # a GitHub issue number
+ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[0-9]+$")             # a Jira ticket key such as PROJ-12
+ISSUE_ID_RE = re.compile(r"^(?:[1-9]\d*|[A-Z][A-Z0-9_]*-[0-9]+)$")  # an issue identity: either form
+_ISSUE_ID = r"(?:[1-9]\d*|[A-Z][A-Z0-9_]*-[0-9]+)"                 # the same, unanchored, for larger patterns
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 IDEA_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$")
-WORK_FILE_RE = re.compile(r"^(?P<repo>[A-Za-z0-9._-]+?)-(?P<n>[1-9]\d*)-(?P<kind>plan|impl|retro)"
-                          r"(?P<seq>(?<=retro)-(?:[2-9]|[1-9]\d+))?$")   # seq: a follow-up retro's -<k>, k >= 2
-IDEA_SOURCE_RE = re.compile(r"^(?:retro [A-Za-z0-9._-]+#[1-9]\d*|phone:\S.*|session)$")
-DECISION_SOURCE_RE = re.compile(r"^(?:plan [A-Za-z0-9._-]+#[1-9]\d* D[1-9]\d*|design [a-z0-9]+(?:-[a-z0-9]+)* D[1-9]\d*"
-                                r"|(?:issue|retro) [A-Za-z0-9._-]+#[1-9]\d*|session)$")
-UNIQUE_SOURCE_RE = re.compile(r"^(?:plan [A-Za-z0-9._-]+#[1-9]\d*|design [a-z0-9]+(?:-[a-z0-9]+)*) D[1-9]\d*$")  # one record each
+_WORK_TAIL = (rf"-(?P<n>{_ISSUE_ID})-(?P<kind>plan|impl|retro)"
+              r"(?P<seq>(?<=retro)-(?:[2-9]|[1-9]\d+))?$")   # seq: a follow-up retro's -<k>, k >= 2
+IDEA_SOURCE_RE = re.compile(rf"^(?:retro [A-Za-z0-9._-]+#{_ISSUE_ID}|phone:\S.*|session)$")
+DECISION_SOURCE_RE = re.compile(rf"^(?:plan [A-Za-z0-9._-]+#{_ISSUE_ID} D[1-9]\d*|design [a-z0-9]+(?:-[a-z0-9]+)* D[1-9]\d*"
+                                rf"|(?:issue|retro) [A-Za-z0-9._-]+#{_ISSUE_ID}|session)$")
+UNIQUE_SOURCE_RE = re.compile(rf"^(?:plan [A-Za-z0-9._-]+#{_ISSUE_ID}|design [a-z0-9]+(?:-[a-z0-9]+)*) D[1-9]\d*$")  # one record each
+
+
+def work_file_match(stem: str, repo: str):
+    """Match a work note's name (`<repo>-<issue>-plan|impl|retro[-<k>]`) against its folder's repo,
+    which is the known prefix: the issue may be a key, so the repo can't be found from the name alone."""
+    return re.match(rf"^(?P<repo>{re.escape(repo)}){_WORK_TAIL}", stem)
+
+
 ISSUE_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/issues/[1-9]\d*$")
 DESIGN_SLUG_RE = re.compile(r"^[1-9]\d*-[a-z0-9]+(?:-[a-z0-9]+)*$")      # after '<project>-design-'
 DESIGN_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*-design-[1-9]\d*-[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -240,7 +252,7 @@ LINE_FORMATS = {
                       re.compile(r"^- dropped: (?!\(R\d+(?:, R\d+)*\)$)\S"))],
     "DAILY-LINE": [
         ("- HH:MM <repo>#<n> <event>[ — <detail>]",
-         re.compile(rf"^- {_TIME} [A-Za-z0-9._-]+#[1-9]\d* (?:{'|'.join(EVENTS)})(?: — \S.*)?$")),
+         re.compile(rf"^- {_TIME} [A-Za-z0-9._-]+#{_ISSUE_ID} (?:{'|'.join(EVENTS)})(?: — \S.*)?$")),
         ("- HH:MM session — <summary>[ [[<project>]]]",
          re.compile(rf"^- {_TIME} session — \S.*?(?: \[\[[^\]]+\]\])?$")),
         ("- HH:MM idea-added|idea-promoted — <title> [[<idea>]]",
@@ -791,9 +803,10 @@ def classify(parts: tuple[str, ...]):
             return bad_name(PATHS["design"])
         return "design", {"project": parts[1]}, None
     if top == FOLDERS["work"] and depth == 3:
-        m = WORK_FILE_RE.match(stem)
-        if not m or m.group("repo") != parts[1]:
-            return bad_name(f"{parts[1]}-<n>-plan|impl|retro.md (a follow-up retro: {parts[1]}-<n>-retro-<k>.md, k >= 2)")
+        m = work_file_match(stem, parts[1])
+        if not m:
+            return bad_name(f"{parts[1]}-<issue>-plan|impl|retro.md (a follow-up retro: {parts[1]}-<issue>-retro-<k>.md, k >= 2; "
+                            "<issue> is a number or a Jira ticket key)")
         return m.group("kind"), {"repo": m.group("repo"), "issue": m.group("n")}, None
     return None, {}, stray
 
@@ -848,7 +861,9 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
                 res.add("PLAN-PR", f"a plan's 'pr' can only be '{NO_PR}' (got {fm.get(key)!r}); omit it when the issue ends in a PR")
         elif key == "pr" and ntype == "retro" and scalar(key) == NO_PR:
             pass
-        elif scalar(key) and not NUMBER_RE.match(scalar(key)):
+        elif key == "issue" and scalar(key) and not ISSUE_ID_RE.match(scalar(key)):
+            res.add("FM-FORMAT", "'issue' must be a number like 12 or a Jira ticket key like PROJ-12")
+        elif key == "pr" and scalar(key) and not NUMBER_RE.match(scalar(key)):
             res.add("FM-FORMAT", f"'{key}' must be a number like 12")
     if ntype == "project" and fm.get("jira_project") not in (None, "") \
             and not (scalar("jira_project") and JIRA_PROJECT_RE.match(scalar("jira_project"))):
@@ -1235,7 +1250,7 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
             if len(owners) > 1 or (len(owners) == 1 and owners[0] != path.stem):
                 res.add("X-REPO-DUP", f"repo '{slug.split('/')[-1]}' is listed by more than one project: "
                         f"{', '.join(sorted(set(owners) | {path.stem}))}")
-    seq = WORK_FILE_RE.match(path.stem)
+    seq = work_file_match(path.stem, path.parent.name)
     if etype == "retro" and seq and seq.group("seq"):
         k = int(seq.group("seq")[1:])
         prev = f"{seq.group('repo')}-{seq.group('n')}-retro" + (f"-{k - 1}" if k > 2 else "")
@@ -1307,7 +1322,9 @@ def schema_text() -> str:
                + ", ".join("## " + n for n in ISSUE_SECTIONS)
                + f"; once each, none empty ({NONE_LINE} counts), nothing before the first.")
     out.append("Formats: dates YYYY-MM-DD; timestamps like 2026-09-26T21:04:00Z; "
-               "repos entries owner/name; repo, issue, pr are plain values; ids are lowercase-kebab-case.")
+               "repos entries owner/name; repo, issue, pr are plain values; ids are lowercase-kebab-case. "
+               "An issue is a number (12) or a Jira ticket key (PROJ-12): notes, log lines "
+               "('<repo>#PROJ-12 planned') and sources ('retro <repo>#PROJ-12') carry it as is; a pr is always a number.")
     out.append("Idea source: retro <repo>#<n> | phone:<path> | session. "
                "Wikilinks in frontmatter must be quoted.")
     out.append("Decision source: plan <repo>#<n> D<k> | design <design> D<k> | issue <repo>#<n> | retro <repo>#<n> | session. "
@@ -1523,7 +1540,7 @@ def session_kind(cwd) -> dict:
 
 def is_sealed_note(path: Path) -> bool:
     """A plan, impl or retro note, or a design, whose frontmatter says `status: sealed`."""
-    if not (WORK_FILE_RE.match(path.stem) or DESIGN_NAME_RE.match(path.stem)) or not path.is_file():
+    if not (work_file_match(path.stem, path.parent.name) or DESIGN_NAME_RE.match(path.stem)) or not path.is_file():
         return False
     fm, _, _ = split_frontmatter(read_text(path))
     return (fm or {}).get("status") == "sealed"

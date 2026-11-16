@@ -413,6 +413,13 @@ class SessionStartTest(HookCase):
                      "prs": [{"number": 3, "headRefName": "feat/7-thing", "url": "u/3"}]})
         self.assertIn("Stage: feature (2 of 2 sub-issues open).", self.start(self.repo))
 
+    def test_repo_session_shows_a_ticket_key_log_line(self):     # T2 -> AC2
+        self.cli("log", "seed", "--project", "demo")
+        daily = next((self.vault / "Agent" / "Daily").glob("*.md"))
+        with open(daily, "a", encoding="utf-8", newline="\n") as f:
+            f.write("- 12:00 widget#PROJ-7 planned\n")
+        self.assertIn("widget#PROJ-7 planned", self.start(self.repo))
+
     def test_repo_session_last_five_lines_only(self):
         for i in range(7):
             self.cli("log", f"line number {i}", "--project", "demo")
@@ -776,6 +783,20 @@ class StopTest(HookCase):
         with open(daily, "a", encoding="utf-8", newline="\n") as f:
             f.write("- 12:00 widget#7 pr-opened\n")
         (self.repo / "a.txt").write_text("more work\n", encoding="utf-8")   # after the event line
+        self.assertEqual(self.stop(cwd=self.repo).returncode, 0)
+
+    def test_pipeline_event_for_a_ticket_key_counts_as_logged(self):     # T2 -> AC2
+        self.start(self.repo)
+        self.tick()
+        self.cli("log", "seed", "--project", "demo")
+        daily = next((self.vault / "Agent" / "Daily").glob("*.md"))
+        self.tick()
+        (self.repo / "a.txt").write_text("work\n", encoding="utf-8")
+        self.tick()
+        self.assertEqual(self.stop(cwd=self.repo).returncode, 2)
+        with open(daily, "a", encoding="utf-8", newline="\n") as f:
+            f.write("- 12:00 widget#PROJ-7 pr-opened\n")
+        (self.repo / "a.txt").write_text("more work\n", encoding="utf-8")
         self.assertEqual(self.stop(cwd=self.repo).returncode, 0)
 
     def test_pipeline_event_for_another_repo_does_not_count(self):
