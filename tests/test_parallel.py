@@ -43,6 +43,16 @@ class B(unittest.TestCase):
         self.assertTrue(False)
 """
 
+SUBSKIP = """
+import unittest
+
+
+class S(unittest.TestCase):
+    def test_skips_in_a_subtest(self):
+        with self.subTest(case="x"):
+            self.skipTest("nothing here")
+"""
+
 PIDS = """
 import os
 import time
@@ -142,6 +152,14 @@ class ParallelRunTest(RunnerCase):
                 self.assertIn("1 != 2 : the failing message", out)
                 self.assertIn('raise ValueError("the error message")', out)
                 self.assertIn("ValueError: the error message", out)
+
+    def test_a_skip_inside_a_subtest_is_reported_as_a_skip(self):
+        pkg = self.package(SUBSKIP)
+        proc, out = self.run_pkg(pkg, **{WORKERS: "2"})
+        self.assertEqual(proc.returncode, 0, out)
+        self.assertNotIn("KeyError", out)
+        self.assertIn("Ran 1 test", out)
+        self.assertIn("skipped=1", out)
 
     def test_classes_run_in_different_worker_processes(self):         # T4 -> AC1
         pkg = self.package(PIDS)
