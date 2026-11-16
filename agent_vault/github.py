@@ -288,22 +288,41 @@ def unpassed_checks(rollup: list) -> list[str]:
 
 def pr_closing(slug: str, number: str) -> dict:
     """state, `closes` (the (issue number, owner/name) pairs GitHub says merging the PR closes, D1), `head`
-    (its head commit) and `unpassed` (the checks that haven't passed, see `unpassed_checks`)."""
+    (its head commit), `unpassed` (the checks that haven't passed, see `unpassed_checks`), `checks` (how many
+    checks the head has) and `decision` (its reviewDecision: APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED or
+    '' when no review is required)."""
     data = gh_json("pr", "view", str(number), "--repo", slug, "--json",
-                   "state,headRefOid,statusCheckRollup,closingIssuesReferences")
+                   "state,headRefOid,statusCheckRollup,closingIssuesReferences,reviewDecision")
     closes = []
     for ref in data.get("closingIssuesReferences") or []:
         repo = ref.get("repository") or {}
         owner = (repo.get("owner") or {}).get("login", "")
         closes.append((str(ref["number"]), f"{owner}/{repo.get('name', '')}"))
     return {"state": data["state"], "closes": closes, "head": data.get("headRefOid") or "",
-            "unpassed": unpassed_checks(data.get("statusCheckRollup"))}
+            "unpassed": unpassed_checks(data.get("statusCheckRollup")),
+            "checks": len(data.get("statusCheckRollup") or []),
+            "decision": data.get("reviewDecision") or ""}
 
 
-def squash_merge(slug: str, number: str, sha: str) -> None:
-    """Squash-merge the PR, only if its head is still `sha`; raises CmdError with GitHub's reason (#51 D1).
-    No --delete-branch, --admin or --auto: GitHub's own settings decide those."""
-    gh("pr", "merge", str(number), "--repo", slug, "--squash", "--match-head-commit", sha)
+MERGE_STYLES = {"squash": "allow_squash_merge", "merge": "allow_merge_commit", "rebase": "allow_rebase_merge"}
+
+
+def merge_allowed(slug: str, style: str) -> bool:
+    """Whether the repo's settings allow this merge style (squash, merge or rebase)."""
+    return gh_json("api", f"repos/{slug}").get(MERGE_STYLES[style]) is True
+
+
+def has_workflows(slug: str) -> bool:
+    """Whether the repo has any GitHub Actions workflow (so its checks may not be listed yet, D11)."""
+    return (gh_json("api", f"repos/{slug}/actions/workflows").get("total_count") or 0) > 0
+
+
+def merge_pr(slug: str, number: str, sha: str, style: str) -> None:
+    """Merge the PR the given way (squash, merge or rebase), only if its head is still `sha`; raises CmdError
+    with GitHub's reason (#51 D1). No --delete-branch, --admin or --auto: GitHub's own settings decide those."""
+    if style not in MERGE_STYLES:
+        raise ValueError(f"unknown merge style {style!r}")
+    gh("pr", "merge", str(number), "--repo", slug, f"--{style}", "--match-head-commit", sha)
 
 
 def close_issue(slug: str, number: str, comment: str) -> None:

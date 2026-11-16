@@ -17,7 +17,7 @@ What it does:
      get the installed copy in ~/.claude/agent-vault/githooks/ through `repo-init`.
 Hooks run with the Python that runs this installer. Standard library only.
 
-After this one manual run, the install keeps itself current: `seal retro` (after a merge) and every
+After this one manual run, the install keeps itself current: `vault.py merge` (after a merge) and every
 session start run agent_vault/selfupdate.py, which exports `main` of `source` with `git archive` and
 runs that copy's install.py with --commit when `main` is newer than the installed commit. An install
 made before `source` was recorded needs this one manual run first.

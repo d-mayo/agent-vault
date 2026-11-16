@@ -7,9 +7,14 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
        "prs": [{"number": 1, "headRefName": "feat/1-x", "url": "...", "state": "OPEN",
                 "closes": [{"number": 7, "repo": "owner/name"}],
                 "checks": [{"__typename": "CheckRun", "name": "ci", "status": "COMPLETED",
-                            "conclusion": "SUCCESS"}]}],  (state/closes/checks optional)
+                            "conclusion": "SUCCESS"}],
+                "reviewDecision": "APPROVED"}],  (state/closes/checks/reviewDecision optional; the decision
+         defaults to "" like a repo that requires no review)
        "bare": "<path of the repo's bare remote>", "refuse_merge": "<GitHub's reason to refuse a merge>",
-         (both optional: `pr view` reports a PR's head and `pr merge` squashes it from that remote),
+         (both optional: `pr view` reports a PR's head and `pr merge` merges it into the default branch of
+         that remote the way `--squash` (one commit), `--merge` (a merge commit) or `--rebase` (the commits
+         replayed) say, refusing a style the repo's "settings" don't allow; a merged PR gets "merge_style"),
+       "workflows": 0 (the `total_count` of `repos/<slug>/actions/workflows`),
        "compare": {"total_commits": 0, "files": [{"filename": "a.py"}]},
        "issues": {"7": {"state": "OPEN", "title": "...", "created": "...Z", "body_edited": null,
                         "renamed": null, "labels": [...], "body": "..."}},   (body optional)
@@ -19,7 +24,8 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
   issues whose parent is it). State keys: "old_gh": true makes the sub-issue flags and JSON fields fail
   like gh before 2.94.0; "refuse_sub_issue": {"<sub-issue url>": "<GitHub's reason>"} refuses that link;
   "fail_label_edit": true makes every `issue edit --add-label` fail.
-  "fail_sub_query": "<error text>" fails only the sub-issues GraphQL query (`feature_view`).
+  "fail_sub_query": "<error text>" fails only the sub-issues GraphQL query (`feature_view`); "bad_sub_query": true
+  answers it with JSON of the wrong shape instead.
    "calls": [[...args of every call...]]}
 Unknown repos are created with defaults on first use. Tests read and edit the file directly.
 """
@@ -77,8 +83,13 @@ def merge_pr(repo, state, args):
     pr = next((p for p in repo["prs"] if str(p["number"]) == args[2]), None)
     if pr is None:
         fail(f"Could not resolve to a PullRequest with the number of {args[2]}")
-    if "--squash" not in args:
-        fail("fake gh: only --squash merges are supported")
+    styles = [f for f in ("--squash", "--merge", "--rebase") if f in args]
+    if len(styles) != 1:
+        fail("fake gh: exactly one of --squash, --merge and --rebase is needed")
+    style = styles[0][2:]
+    allowed = {"squash": "allow_squash_merge", "merge": "allow_merge_commit", "rebase": "allow_rebase_merge"}[style]
+    if not repo["settings"].get(allowed):
+        fail(f"{styles[0]} merges are not allowed on this repository.")
     for banned in ("--delete-branch", "--admin", "--auto"):
         if banned in args:
             fail(f"fake gh: {banned} is not supported")
@@ -94,12 +105,18 @@ def merge_pr(repo, state, args):
     try:
         git("clone", "-q", "--branch", repo["default_branch"], repo["bare"], work)
         git("fetch", "-q", "origin", pr["headRefName"], cwd=work)
-        git("merge", "--squash", "FETCH_HEAD", cwd=work)
-        git("commit", "-q", "--allow-empty", "-m", f"{pr['headRefName']} (#{pr['number']})", cwd=work)
+        if style == "squash":
+            git("merge", "--squash", "FETCH_HEAD", cwd=work)
+            git("commit", "-q", "--allow-empty", "-m", f"{pr['headRefName']} (#{pr['number']})", cwd=work)
+        elif style == "merge":
+            git("merge", "--no-ff", "-m", f"Merge pull request #{pr['number']}", "FETCH_HEAD", cwd=work)
+        else:
+            git("rebase", "FETCH_HEAD", cwd=work)
         git("push", "-q", "origin", repo["default_branch"], cwd=work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     pr["state"] = "MERGED"
+    pr["merge_style"] = style
     for c in pr.get("closes", []):
         issue = state["repos"].get(c["repo"], {}).get("issues", {}).get(str(c["number"]))
         if issue:
@@ -151,6 +168,9 @@ def graphql(args, state):
     if any("subIssues(" in a for a in args):
         if state.get("fail_sub_query"):
             fail(state["fail_sub_query"])
+        if state.get("bad_sub_query"):       # an answer of the wrong shape (no title, no subIssues)
+            print(json.dumps({"data": {"repository": {"issue": {"state": issue["state"]}}}}))
+            return
         url = f"https://github.com/{slug}/issues/{fields['number']}"
         subs = [(s, n, i) for s, r in state["repos"].items() for n, i in r["issues"].items() if i.get("parent") == url]
         print(json.dumps({"data": {"repository": {"issue": {
@@ -264,7 +284,8 @@ def main():
                                                        "owner": {"login": c["repo"].split("/")[0]}}}
                 for c in pr.get("closes", [])]
         print(json.dumps({"state": pr.get("state", "OPEN"), "closingIssuesReferences": refs,
-                          "headRefOid": pr_head(repo, pr), "statusCheckRollup": pr.get("checks", [])}))
+                          "headRefOid": pr_head(repo, pr), "statusCheckRollup": pr.get("checks", []),
+                          "reviewDecision": pr.get("reviewDecision", "")}))
     elif cmd == ["pr", "merge"]:
         merge_pr(repo, state, args)
     elif cmd[0] == "api":
@@ -288,6 +309,8 @@ def main():
                 print(json.dumps({"sha": repo["head_sha"]}))
             elif path[3] == "compare":
                 print(json.dumps(repo["compare"]))
+            elif path[3] == "actions":
+                print(json.dumps({"total_count": repo.get("workflows", 0), "workflows": []}))
             elif path[3] == "git":
                 print("\n".join(f"refs/heads/{b}" for b in repo["branches"]))
             else:

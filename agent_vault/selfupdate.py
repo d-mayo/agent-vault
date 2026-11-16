@@ -1,6 +1,6 @@
 """Keep the installed copy in ~/.claude/ current with the `main` of the clone it was installed from.
 
-`selfupdate()` is called at session start and after `seal retro` merges. It installs only what
+`selfupdate()` is called at session start and after `vault.py merge` merges. It installs only what
 `main` commits, never a branch or a working tree: `main` is exported with `git archive` into a
 temp folder and that copy's own `install.py` is run. It compares local refs only (no network),
 installs only when `main`'s tip has a newer committer time than the installed commit, and takes
