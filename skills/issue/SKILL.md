@@ -116,6 +116,19 @@ Before drafting, decide where the issue belongs.
 4. Report the issue URL, the last line the command prints, then send the push
    notification: the next stage is to plan the issue.
 
+## Jira setup
+
+Run `vault.py tracker <repo>` first. If it prints `tracker: jira`, the CLI posts
+nothing; it hands you the fields to post:
+
+- Run `vault.py issue create` with the approved placement flag (`--parent <KEY>`,
+  `--standalone` or `--bug`, a parent being a ticket key) exactly as at home. It checks
+  the body, writes a pending file and prints its path and the fields to post.
+- Post exactly the printed fields, unchanged, through the connector `vault.py tracker`
+  names, then run `vault.py issue record <repo> <KEY> --pending <file>` with the key the
+  connector returned. Never post anything that wasn't printed.
+- Never change a ticket's status; that is the user's.
+
 ## Stop and ask if
 
 - The repo isn't registered in any project, or you can't tell which repo

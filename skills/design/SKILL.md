@@ -246,6 +246,20 @@ Nothing refuses to continue while stories are unfiled; this skill is how they
 get filed. When the command shows the stories filed, send the push
 notification, naming a story to plan next (or which stories wait and why).
 
+## Jira setup
+
+Run `vault.py tracker <repo>` first. If it prints `tracker: jira`, File the stories
+changes only in how an issue is posted: the CLI posts nothing, it hands you the fields.
+
+- File the feature first: run `vault.py issue create <repo> --title "<title>"
+  --body-file <file> --feature <design>`, post exactly the printed fields, unchanged,
+  through the connector `vault.py tracker` names, then run `vault.py issue record <repo> <KEY>
+  --pending <file>` with the key the connector returned.
+- Then each story: `vault.py issue create` with `--parent <feature key>`, post the printed
+  fields unchanged, and `vault.py issue record` it. A story can't be filed before its feature
+  is recorded; `design stories` shows the keys.
+- Never post anything that wasn't printed, and never change a ticket's status.
+
 ## Stop and ask if
 
 - Research turns up something the idea doesn't cover, or a contradiction with

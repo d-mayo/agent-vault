@@ -76,6 +76,15 @@ changed ticket only warns), a story counts as merged when a PR carrying its key 
 a ticket's status. `vault.py tracker <repo>` prints the tracker and, for Jira, the connector, the
 project's key, the ticket file's fields and the issue types, so a skill learns them without reading the setup note.
 
+Filing works the same way in reverse. In a Jira setup `issue create` (with `--feature`, `--parent <KEY>`,
+`--standalone` or `--bug`) and `idea promote` run every body and placement check but post nothing: each
+writes a pending file, `Agent/.pending/<repo>-<n>.json`, with the exact fields to post (project, type,
+summary, description, parent, labels) and prints them. The skill posts those unchanged through the
+connector and runs `vault.py issue record <repo> <KEY> --pending <file>`, which records the new key in the
+ticket map (`Agent/.tickets.json`: what each ticket is, a design's feature or story, standalone or a bug),
+marks a promoted idea promoted to the key and deletes the pending file. `design stories` and `features`
+read that map and GitHub's merged PRs, never a ticket's status.
+
 After `install.py`, start Claude Code in the vault and say "set up this vault" (the `setup` skill):
 it interviews you on each value, shows exactly what it will write, and runs `vault.py setup` only
 after you say yes. `vault.py setup` refuses an incomplete or contradictory setup, and refuses to
