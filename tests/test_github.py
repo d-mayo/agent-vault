@@ -546,9 +546,7 @@ class BranchTest(GhCase):  # T3 -> AC3, AC11
         for t in ("feat", "chore"):
             self.refused(self.branch("--type", t), "bug", "fix/")
             self.no_branch_made()
-        r = self.branch("--type", "hotfix")
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("invalid choice: 'hotfix'", r.stderr)
+        self.refused(self.branch("--type", "hotfix"), "bug", "fix/")
         self.no_branch_made()
         self.ok(self.branch())
         self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-add-widget-frobbing")
@@ -565,9 +563,7 @@ class BranchTest(GhCase):  # T3 -> AC3, AC11
         self.sealed()
         self.refused(self.branch("--type", "fix"), "bug", "label")
         self.no_branch_made()
-        r = self.branch("--type", "hotfix")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("hotfix", r.stderr)
+        self.refused(self.branch("--type", "hotfix"), "hotfix")
         self.no_branch_made()
 
     def test_help_and_docstring(self):  # T3
@@ -601,6 +597,68 @@ class BranchTest(GhCase):  # T3 -> AC3, AC11
         git("remote", "set-url", "origin", "https://github.com/acme/other.git", cwd=self.clone)
         self.ok(self.cli("seal", "plan", "widget", "7"))
         self.refused(self.branch(), "acme/other", SLUG)
+
+
+class BranchPatternTest(GhCase):  # T3 -> AC3 (#113)
+    def setup_words(self, *extra):
+        self.ok(self.cli("setup", "--tracker", "github", "--branch", "{issue}/{type}-{slug}",
+                         "--branch-feature", "story", "--branch-bug", "bugfix", *extra))
+
+    def test_custom_pattern_and_words(self):
+        self.setup_words()
+        self.sealed()
+        self.ok(self.branch())
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "7/story-add-widget-frobbing")
+        self.assertEqual(self.fm(self.note("impl"))["branch"], "7/story-add-widget-frobbing")
+        self.assertRegex(self.daily(), r"widget#7 started")
+
+    def test_bug_gets_the_bug_word(self):
+        self.setup_words()
+        self.sealed()
+        self.issue()["labels"].append("bug")
+        self.save()
+        self.refused(self.branch("--type", "story"), "bug", "bugfix/")
+        self.ok(self.branch())
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "7/bugfix-add-widget-frobbing")
+
+    def test_type_option_follows_the_setup(self):
+        self.setup_words()
+        self.sealed()
+        for t in ("fix", "hotfix", "bugfix"):
+            self.refused(self.branch("--type", t), t)
+        self.refused(self.branch("--type", "nonsense"), "--type")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.ok(self.branch("--type", "docs", "--slug", "x"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "7/docs-x")
+
+    def test_existing_branch_blocks_by_pattern(self):
+        self.setup_words()
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["7/story-x"]
+        self.save()
+        self.refused(self.branch(), "already has a branch", "7/story-x")
+
+    def test_a_longer_issue_does_not_block(self):
+        self.ok(self.cli("setup", "--tracker", "github", "--branch", "{type}/{slug}-{issue}"))
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["feat/x-17", "feat/y-70"]
+        self.save()
+        self.ok(self.branch("--slug", "mine"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "feat/mine-7")
+
+    def test_feature_word_fix_makes_a_plain_issue_branch_fix(self):
+        self.ok(self.cli("setup", "--tracker", "github", "--branch-feature", "fix", "--branch-bug", "bug"))
+        self.sealed()
+        self.ok(self.branch("--slug", "x"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-x")
+
+    def test_stage_finds_the_pr_by_pattern(self):
+        self.setup_words()
+        self.sealed()
+        self.state["repos"][SLUG]["prs"] = [{"number": 3, "headRefName": "7/story-x", "url": "u/3"}]
+        self.state["repos"][SLUG]["branches"] = ["7/story-x"]
+        self.save()
+        self.assertIn("in review", self.ok(self.cli("stage", "widget", "7")).stdout)
 
 
 class OpenPrTest(GhCase):  # T4 -> AC4, AC11

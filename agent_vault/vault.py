@@ -14,7 +14,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   features [--project <id>]
   closes-feature <repo> <issue>
   preflight <repo> <issue>
-  branch <repo> <issue> [--type <type>] [--slug <slug>]   (type: fix for a bug-labelled issue, else feat)
+  branch <repo> <issue> [--type <type>] [--slug <slug>]   (type: the setup's bug word (fix) for a bug-labelled issue, else its feature word (feat))
   open-pr <repo> <issue> [--body-file <file>]
   stage <repo> <issue>
   idea add "<title>" [--project <id>] [--source <source>]
@@ -383,7 +383,8 @@ def load_impl(repo: str, issue: str) -> tuple[Path, dict]:
 
 
 def issue_branch_re(issue: str) -> re.Pattern:
-    return re.compile(rf"^[^/]+/{issue}-")
+    """Matches the branch names tied to `issue` under the setup's branch pattern (D3, D8 of #113)."""
+    return lib.branch_regex(lib.read_setup(), issue, prefix=True)
 
 
 def issue_context(args) -> str:
@@ -994,15 +995,26 @@ def default_slug(title: str) -> str:
     return lib.slugify(subject)[:BRANCH_SLUG_MAX].strip("-") or "work"
 
 
-def branch_type(requested, is_bug: bool) -> str:
+def branch_type(requested, is_bug: bool, setup: dict | None = None) -> str:
+    """The `{type}` word of an issue's branch (D5 of #113): a bug's is the setup's bug word; another issue's
+    is the feature word, or `requested` when it is a branch type other than hotfix, the bug word or `fix`."""
+    setup = setup or lib.read_setup()
+    feature, bug = setup["branch_feature"], setup["branch_bug"]
     if is_bug:
-        if requested not in (None, "fix"):
-            die(f"the issue is labelled `{lib.BUG_LABEL[0]}`, so its branch is `fix/`, not `{requested}/`")
-        return "fix"
-    if requested == "fix":
-        die(f"`fix/` branches are only for an issue labelled `{lib.BUG_LABEL[0]}`; "
+        if requested not in (None, bug):
+            die(f"the issue is labelled `{lib.BUG_LABEL[0]}`, so its branch is `{bug}/`, not `{requested}/`")
+        return bug
+    if requested is None:
+        return feature
+    if requested == "hotfix":
+        die("vault.py branch never creates a hotfix branch (d81)")
+    if requested == bug or (requested == "fix" and feature != "fix"):
+        die(f"`{requested}/` branches are only for an issue labelled `{lib.BUG_LABEL[0]}`; "
             f"if this issue is a bug, add the label on GitHub first")
-    return requested or "feat"
+    allowed = [t for t in lib.BRANCH_TYPES if t not in ("hotfix", "fix")] + [feature]
+    if requested not in allowed:
+        die(f"--type must be one of {', '.join(dict.fromkeys(allowed))} (got {requested!r})")
+    return requested
 
 
 def cmd_branch(args) -> None:
@@ -1011,12 +1023,13 @@ def cmd_branch(args) -> None:
     info, warnings = check_preflight(args.repo, args.issue, slug)
     for w in warnings:
         print(f"warning: {w}")
-    btype = branch_type(args.type, lib.BUG_LABEL[0] in info["labels"])
+    setup = lib.read_setup()
+    btype = branch_type(args.type, lib.BUG_LABEL[0] in info["labels"], setup)
     impl, _ = load_impl(args.repo, args.issue)
     top = require_clone(slug)
-    name = f"{btype}/{args.issue}-{args.slug or default_slug(info['title'])}"
-    if not lib.BRANCH_RE.match(name):
-        die(f"branch '{name}' must match <type>/<issue>-<slug> with a lowercase a-z0-9- slug")
+    name = lib.branch_name(setup, btype, args.issue, args.slug or default_slug(info['title']))
+    if not lib.branch_regex(setup, args.issue).match(name):
+        die(f"branch '{name}' must match the branch pattern {setup['branch']} with a lowercase a-z0-9- slug")
     pat = issue_branch_re(args.issue)
     local = github.git("for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=top).splitlines()
     found = [f"{b} (local)" for b in local if pat.match(b)]
@@ -2115,8 +2128,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("repo")
         p.add_argument("issue")
         if name == "branch":
-            p.add_argument("--type", choices=[t for t in lib.BRANCH_TYPES if t != "hotfix"],
-                           help="default: fix for an issue labelled bug, else feat")
+            p.add_argument("--type", help="default: the bug word (fix) for an issue labelled bug, else the "
+                                          "feature word (feat); checked against the setup")
             p.add_argument("--slug")
         if name == "open-pr":
             p.add_argument("--body-file")

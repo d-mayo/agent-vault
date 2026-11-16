@@ -153,7 +153,6 @@ DESIGN_EVENT = "design-sealed"                                      # '<event> โ
 DRAFT_SOFT = ["PLAN-AC", "PLAN-STEP", "PLAN-T", "PLAN-COVER", "PLAN-FULL"]
 DESIGN_SOFT = ["DESIGN-DEC", "DESIGN-STORY", "DESIGN-IDEA"]         # the same, for a draft design
 BRANCH_TYPES = ["feat", "fix", "chore", "docs", "refactor", "test", "perf", "hotfix"]   # design ยง4
-BRANCH_RE = re.compile(rf"^(?:{'|'.join(BRANCH_TYPES)})/[0-9]+-[a-z0-9-]+$")
 PLANNED_LABEL = ("planned", "0e8a16", "A sealed plan exists (set by agent-vault)")   # name, color, description
 FEATURE_LABEL = ("feature", "5319e7", "A design's feature issue; its stories are sub-issues (set by agent-vault)")
 BUG_LABEL = ("bug", "d73a4a", "Something isn't working")          # GitHub's own default colour and description
@@ -617,6 +616,49 @@ def setup_problems(values: dict) -> list[str]:
         elif present:
             out.append(f"'{key}' belongs only to a Jira setup (tracker is {values.get('tracker')!r})")
     return out
+
+
+_BRANCH_SLUG = "[a-z0-9-]+"
+
+
+def branch_regex(setup: dict, issue: str | None = None, prefix: bool = False) -> re.Pattern:
+    """The regex a branch name must match under the setup's `branch` pattern (D3 of #113). `{type}` is any of
+    BRANCH_TYPES or the setup's feature and bug words; `{issue}` is the setup tracker's form (a number, or
+    in a Jira setup a key), bounded so it can't start or end inside a longer issue, or just `issue` when one
+    is given; the issue is the group `issue`. `prefix` stops after `{issue}` and the separator after it (D8),
+    leaving the rest of the name free, which is how a branch is tied to its issue."""
+    jira = setup.get("tracker") == "jira"
+    words = sorted({*BRANCH_TYPES, setup["branch_feature"], setup["branch_bug"]})
+    core = re.escape(issue) if issue is not None else (r"[A-Z][A-Z0-9_]*-[0-9]+" if jira else "[0-9]+")
+    bound = r"(?<![A-Z0-9_])" if jira else r"(?<![0-9])"
+    pieces = {"type": "(?:" + "|".join(re.escape(w) for w in words) + ")",
+              "issue": f"{bound}(?P<issue>{core})(?![0-9])", "slug": _BRANCH_SLUG}
+    tokens = re.split(r"(\{[^{}]*\})", setup["branch"])
+    if not prefix:
+        return re.compile("^" + "".join(pieces[t[1:-1]] if t.startswith("{") else re.escape(t) for t in tokens if t) + "$")
+    out, past_issue = [], False
+    for tok in tokens:
+        if past_issue and not tok.startswith("{"):
+            out.append(re.escape(tok))          # the separator right after {issue}
+            break
+        if tok.startswith("{"):
+            out.append(pieces[tok[1:-1]])
+            past_issue = past_issue or tok == "{issue}"
+        elif tok:
+            out.append(re.escape(tok))
+    return re.compile("^" + "".join(out))
+
+
+def branch_name(setup: dict, btype: str, issue: str, slug: str) -> str:
+    """The branch name for an issue under the setup's pattern."""
+    return setup["branch"].replace("{type}", btype).replace("{issue}", issue).replace("{slug}", slug)
+
+
+def branch_issue(setup: dict, name: str) -> str | None:
+    """The issue a branch name is tied to under the setup's pattern (its start through `{issue}` and the
+    separator after it), or None."""
+    m = branch_regex(setup, prefix=True).match(name)
+    return m.group("issue") if m else None
 
 
 def read_setup() -> dict:

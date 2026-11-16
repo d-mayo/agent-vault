@@ -65,11 +65,14 @@ def notes_line(repo: str, issue: str) -> str:
 
 
 def stage_line(info: dict, branch: str) -> list[str]:
-    m = re.match(rf"^(?:{'|'.join(lib.BRANCH_TYPES)})/([0-9]+)-", branch)
-    if not m:
-        return [f"Branch {branch or '(none)'} isn't tied to an issue (branches are <type>/<issue>-<slug>)."]
-    issue = m.group(1)
+    setup = lib.read_setup()
+    issue = lib.branch_issue(setup, branch)
+    if issue is None:
+        return [f"Branch {branch or '(none)'} isn't tied to an issue (branches follow the pattern {setup['branch']})."]
     out = [f"Branch {branch} → {info['repo']}#{issue}. Notes: {notes_line(info['repo'], issue)}."]
+    if setup["tracker"] == "jira":     # stage_of reads the issue from GitHub, which can't answer for a key (D7 of #113)
+        out.append("Stage isn't available in a Jira setup yet.")
+        return out
     github.DEADLINE = time.monotonic() + GITHUB_SECONDS
     try:
         stage, why = vault.stage_of(info["slug"], info["repo"], issue)
