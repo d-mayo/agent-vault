@@ -247,6 +247,27 @@ class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
             with self.subTest(cmd=cmd):
                 self.assertEqual(self.code(cmd, cwd), 0)
 
+    def test_allows_vault_py_merge(self):                       # T11 -> AC13
+        """`vault.py merge <repo> <issue>` runs `gh pr merge` from Python, which the guard never sees (D8)."""
+        py = "C:/Users/me/AppData/Local/Programs/Python/Python312/python.exe"
+        cli = "C:/Users/me/.claude/agent-vault/vault.py"
+        c, e = self.clone, self.elsewhere
+        for cmd, tool in [
+            (f'"{py}" "{cli}" merge widget 7', "Bash"),
+            (f"{py} {cli} merge widget 7", "Bash"),
+            (f'"{py}" "{cli}" merge widget 7 2>&1 | tail -5', "Bash"),
+            (f'cd {c} && "{py}" "{cli}" merge widget 7', "Bash"),
+            (f'"{py}" "{cli}" seal retro widget 7 && "{py}" "{cli}" merge widget 7', "Bash"),
+            (f'& "{py}" "{cli}" merge widget 7', "PowerShell"),
+            (f'& "{py}" "{cli}" merge widget 7; & "{py}" "{cli}" closes-feature widget 7', "PowerShell"),
+            (f'Set-Location {c}; & "{py}" "{cli}" merge widget 7', "PowerShell"),
+        ]:
+            for cwd in (c, e):
+                with self.subTest(cmd=cmd, cwd=cwd.name):
+                    r = self.run_guard(cmd, cwd, tool=tool)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.code("gh issue create --title x", c, tool="PowerShell"), 2)   # the other rules stand
+
     def test_option_values_are_not_read_as_repo(self):
         r = self.run_guard('gh issue create --title "-Rx" --body y', self.clone)
         self.assertEqual(r.returncode, 2, r.stderr)
