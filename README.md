@@ -70,8 +70,10 @@ After `install.py`, start Claude Code in the vault and say "set up this vault" (
 it interviews you on each value, shows exactly what it will write, and runs `vault.py setup` only
 after you say yes. `vault.py setup` refuses an incomplete or contradictory setup, and refuses to
 overwrite an existing note without `--replace`; `validate` checks the note and `schema` lists its
-fields. Nothing reads the setup to change behaviour yet; that comes with the later stories of the
-work-setup design.
+fields. `merge`, `seal retro`'s next step and `repo-init` read it. `repo-init` sets the setup's merge
+style (allowing only that style) where repo settings are `managed`, and only checks that the repo
+allows it where they are `checked`, refusing and naming what to ask a repo admin for if not. In a
+Jira setup it creates no GitHub labels and writes no issue template.
 
 ## Git conventions
 

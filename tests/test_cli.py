@@ -913,6 +913,12 @@ class IssueDocsTest(CliCase):                                     # T11 -> AC11 
         self.assertIn("`issue` skill", guide)
         repo_init = next(ln for ln in guide.splitlines() if "repo-init <path>" in ln)
         self.assertIn(".github/ISSUE_TEMPLATE/issue.md", repo_init)
+        self.assertIn("setup", repo_init)
+        self.assertIn("as the vault setup says", self.cli("--help").stdout)
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("Nothing reads the setup", readme)
+        skill = (REPO / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertNotIn("settings and labels", " ".join(skill.split()))
 
 
 class LintCliTest(CliCase):                                        # T3-T5, T8 -> AC3-AC5, AC8 (#33)
