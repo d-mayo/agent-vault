@@ -1032,7 +1032,7 @@ def plan_files(body: str) -> list[str]:
 
 def ticket_changed(repo: str, issue: str, ticket: dict | None) -> list[str]:
     """A warning when a Jira ticket's hash differs from the sealed plan's `ticket_hash` (D2 of #114)."""
-    if not ticket:
+    if not ticket or not work_path(repo, issue, "plan").is_file():
         return []
     _, fm, _ = load_plan(repo, issue)
     if fm.get("ticket_hash") and fm["ticket_hash"] != lib.ticket_hash(ticket):
@@ -1182,15 +1182,20 @@ def cmd_open_pr(args) -> None:
             extra = Path(args.body_file).read_text(encoding="utf-8")
         except OSError as e:
             die(f"can't read --body-file: {e}")
-    info = github.issue_info(slug, args.issue)
+    ticket = args.ticket_data
+    for w in ticket_changed(args.repo, args.issue, ticket):
+        print(f"warning: {w}")
+    info = ticket or github.issue_info(slug, args.issue)
     github.git("push", "-u", "origin", branch, cwd=top)
     existing = [p for p in github.open_prs(slug) if p["headRefName"] == branch]
     if existing:
         url, verb = existing[0]["url"], "found the open PR"
     else:
-        body = f"Closes #{args.issue}\n" + (f"\n{extra.strip()}\n" if extra.strip() else "")
+        link = f"Ticket: {args.issue}" if ticket else f"Closes #{args.issue}"
+        title = f"{args.issue}: {info['title']}" if ticket else info["title"]
+        body = f"{link}\n" + (f"\n{extra.strip()}\n" if extra.strip() else "")
         url = create_with_body(["pr", "create", "--repo", slug, "--head", branch,
-                                "--base", github.default_branch(slug), "--title", info["title"]], body)
+                                "--base", github.default_branch(slug), "--title", title], body)
         verb = "opened"
     m = re.search(r"/pull/(\d+)", url)
     if not m:
@@ -1212,13 +1217,24 @@ def create_with_body(cmd: list[str], body: str) -> str:
     return out.strip().splitlines()[-1].strip()
 
 
-def stage_of(slug: str, repo: str, issue: str) -> tuple[str, str]:
-    """(stage, why) of an issue, derived from GitHub and the plan note (design §4)."""
-    info = github.issue_info(slug, issue)
-    if info["state"] != "OPEN":
-        return "done", f"issue #{issue} is {info['state'].lower()}"
-    if lib.FEATURE_LABEL[0] in info["labels"]:
-        return "feature", f"{info['sub_total'] - info['sub_completed']} of {info['sub_total']} sub-issues open"
+def stage_of(slug: str, repo: str, issue: str, ticket: dict | None = None) -> tuple[str, str]:
+    """(stage, why) of an issue, derived from GitHub and the plan note (design §4). In a Jira setup `ticket`
+    (the ticket file) stands for the issue, and a merged PR carrying the key means done (D3, D7 of #114)."""
+    setup = lib.read_setup()
+    if ticket:
+        if ticket["type"] == setup["jira_feature_type"]:
+            return "feature", f"ticket {issue} is a {ticket['type']}"
+        merged = merged_pr_for(slug, issue)
+        if merged:
+            return "done", f"PR #{merged['number']} ({merged['headRefName']}) is merged"
+        labels, label = ticket["labels"], setup["jira_planned_label"]
+    else:
+        info = github.issue_info(slug, issue)
+        if info["state"] != "OPEN":
+            return "done", f"issue #{issue} is {info['state'].lower()}"
+        if lib.FEATURE_LABEL[0] in info["labels"]:
+            return "feature", f"{info['sub_total'] - info['sub_completed']} of {info['sub_total']} sub-issues open"
+        labels, label = info["labels"], lib.PLANNED_LABEL[0]
     pat = issue_branch_re(issue)
     prs = [p for p in github.open_prs(slug) if pat.match(p["headRefName"])]
     branches = [b for b in github.remote_branches(slug) if pat.match(b)]
@@ -1227,22 +1243,25 @@ def stage_of(slug: str, repo: str, issue: str) -> tuple[str, str]:
     if plan.is_file():
         fm, _, _ = lib.split_frontmatter(lib.read_text(plan))
         sealed = (fm or {}).get("status") == "sealed"
-    label = lib.PLANNED_LABEL[0]
+    what = "ticket" if ticket else "issue"
     if prs:
         return "in review", f"PR {prs[0]['url']} is open for {prs[0]['headRefName']}"
     if branches:
         return "in progress", f"branch {branches[0]} exists and has no open PR"
-    if sealed and label in info["labels"]:
-        return "planned", f"the plan is sealed and the issue has the '{label}' label"
+    if sealed and (label == "none" or label in labels):
+        return "planned", (f"the plan is sealed and the {what} has the '{label}' label" if label != "none"
+                           else "the plan is sealed")
     if sealed:
-        return "backlog", (f"the plan is sealed but the issue lacks the '{label}' label; "
+        return "backlog", (f"the plan is sealed but the {what} lacks the '{label}' label; "
                            f"rerun `seal plan {repo} {issue}` to add it")
-    return "backlog", "the issue is open and has no sealed plan"
+    return "backlog", f"the {what} is open and has no sealed plan"
 
 
 def cmd_stage(args) -> None:
     slug = issue_context(args)
-    print("{}: {}".format(*stage_of(slug, args.repo, args.issue)))
+    for w in ticket_changed(args.repo, args.issue, args.ticket_data):
+        print(f"warning: {w}")
+    print("{}: {}".format(*stage_of(slug, args.repo, args.issue, args.ticket_data)))
 
 
 def read_issue_body(name: str) -> str:

@@ -2446,14 +2446,16 @@ class JiraPlanTest(JiraTicketBase):  # T2, T3, T4 -> AC2, AC3, AC4 (#114)
         self.seal_jira()
         changed = self.ticket("c.json", body="Something else.")
         crlf = self.ticket("crlf.json", body=self.TICKET["body"].replace(chr(10), chr(13) + chr(10)) + chr(10))
-        for cmd in (("preflight",),):
+        for cmd in (("preflight",), ("stage",)):
             with self.subTest(cmd):
                 out = self.ok(self.cli(*cmd, "widget", self.KEY, "--ticket", changed)).stdout
                 self.assertIn("ticket_hash differs", out)
                 same = self.ok(self.cli(*cmd, "widget", self.KEY, "--ticket", crlf)).stdout
                 self.assertNotIn("ticket_hash differs", same)
         out = self.ok(self.cli("branch", "widget", self.KEY, "--ticket", changed)).stdout
-        self.assertIn("warning", out)
+        self.assertIn("ticket_hash differs", out)
+        self.ok(self.cli("open-pr", "widget", self.KEY, "--ticket", self.ticket()))
+        self.assertIn("ticket_hash differs", self.cli("open-pr", "widget", self.KEY, "--ticket", changed).stdout)
 
     def test_a_merged_pr_on_the_key_refuses_preflight_and_branch(self):
         self.jira()
@@ -2480,6 +2482,62 @@ class JiraPlanTest(JiraTicketBase):  # T2, T3, T4 -> AC2, AC3, AC4 (#114)
 
     def test_branch_of_a_story_ticket(self):
         self.assertIn(f"feat/{self.KEY}-frob-widgets", self.branch_for("Story"))
+
+
+class JiraPrTest(JiraTicketBase):  # T4, T6 -> AC4, AC6 (#114)
+    def started(self, **changes):
+        self.jira()
+        self.seal_jira(**changes)
+        self.ok(self.cli("branch", "widget", self.KEY, "--ticket", self.ticket(**changes)))
+
+    def test_open_pr_titles_it_with_the_key_and_has_no_closes(self):
+        self.started()
+        out = self.ok(self.cli("open-pr", "widget", self.KEY, "--ticket", self.ticket())).stdout
+        pr = self.load()["created_prs"][-1]
+        self.assertEqual(pr["title"], "PROJ-12: Frob widgets")
+        self.assertIn("PROJ-12", pr["body"])
+        self.assertNotIn("Closes", pr["body"])
+        self.assertIn("pr: ", self.note_of("impl").read_text(encoding="utf-8"))
+        self.assertIn("opened", out)
+        self.assertEqual(self.calls("issue"), [])
+
+    def stage(self, **changes):
+        return self.ok(self.cli("stage", "widget", self.KEY, "--ticket", self.ticket(**changes))).stdout
+
+    def test_stage_feature_ticket(self):
+        self.jira()
+        self.assertTrue(self.stage(type="Epic").startswith("feature:"))
+
+    def test_stage_backlog_without_a_plan(self):
+        self.jira()
+        self.jira_plan()
+        self.assertTrue(self.stage().startswith("backlog:"))
+
+    def test_stage_planned_with_label_none(self):
+        self.jira()
+        self.seal_jira()
+        self.assertTrue(self.stage().startswith("planned:"))
+
+    def test_stage_needs_the_label_when_there_is_one(self):
+        self.jira(label="planned")
+        self.seal_jira()
+        self.assertTrue(self.stage().startswith("backlog:"))
+        self.assertTrue(self.stage(labels=["planned"]).startswith("planned:"))
+
+    def test_stage_in_progress_in_review_and_done(self):
+        self.started()
+        self.load()
+        self.state["repos"][SLUG]["branches"].append(f"feat/{self.KEY}-frob-widgets")
+        self.save()
+        self.assertTrue(self.stage().startswith("in progress:"))
+        self.ok(self.cli("open-pr", "widget", self.KEY, "--ticket", self.ticket()))
+        self.assertTrue(self.stage().startswith("in review:"))
+        self.load()
+        for pr in self.state["repos"][SLUG]["prs"]:
+            pr["state"] = "MERGED"
+        self.save()
+        self.assertTrue(self.stage().startswith("done:"))
+        self.assertEqual(self.calls("issue"), [])
 
 
 class GhHelperTest(GhCase):  # T10 -> AC10
