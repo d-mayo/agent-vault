@@ -1,14 +1,16 @@
 ---
 name: handoff
-description: 'Run stories from issue to merged PR in one top-level Opus session, asking the user only when unsure: plans each story, has a Sonnet subagent implement it, reviews, runs the retro and lets the retro merge. Takes one issue, several issues, or a feature. Use for requests like "handoff #78", "handoff #78 #79 #80", "handoff the feature #50", or "hand these issues off".'
+description: 'Run stories from issue to merged PR in one top-level Opus session, asking the user only when unsure: plans each story, has a Sonnet subagent implement it, reviews, runs the retro and merges the PR (where the vault needs no approvals). Takes one issue, several issues, or a feature. Use for requests like "handoff #78", "handoff #78 #79 #80", "handoff the feature #50", or "hand these issues off".'
 ---
 
 # handoff
 
 An orchestrator for stories the user hands over entirely. One top-level Opus
 session plans each story, has a Sonnet subagent implement it, runs the
-independent review, writes the retro and lets `seal retro` merge. The default
-path (plan-story, implement-story, retro, each with the user) is unchanged;
+independent review, writes the retro, which readies the PR, and merges it
+through `vault.py merge` (the merge skill's step) unless the vault requires
+approvals, where the run stops at ready. The default path (plan-story,
+implement-story, retro, merge, each with the user) is unchanged;
 this skill follows their procedures with the changes below. It is not a
 pipeline skill: it carries no shared approvals section, asks no yes/no
 approvals, and its pings are the ones named under "Asking the user".
@@ -21,9 +23,9 @@ plain repo name. Work inside the repo clone.
 
 - Never create or edit a GitHub issue on your own. Follow-ups become ideas or
   are dropped; anything that seems to need an issue is a question for the user.
-- Never merge except through `vault.py seal retro`, and never push to `main`.
+- Never merge except through `vault.py merge`, and never push to `main`.
 - Never run two stories at once.
-- Never run `install.py` yourself: only `seal retro` (after a merge) and session start install, and only from `main`.
+- Never run `install.py` yourself: only `vault.py merge` (after a merge) and session start install, and only from `main`.
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
 
 ## The run
@@ -35,22 +37,28 @@ plain repo name. Work inside the repo clone.
      open sub-issues in issue-number order.
    - List unfiled stories in the report and never file them: filing is the
      design skill's job.
-   - Skip closed issues and issues whose retro is sealed.
+   - Skip closed issues and issues whose impl note is sealed (merged).
 2. **Upfront scan.** Read every issue in the run before the first story and ask
    the user, in open-ended prose, any questions you can already tell you will
    need. Keep the answers in the session; when planning each story, record each
    as a user decision in that story's plan. Answers live only in the session: a
    resumed run asks them again where still needed.
 3. **One story at a time.** Take the stories in order, running **Plan**,
-   **Implement**, **Finish**, **Retro** for one before starting the next. Plan
-   the next story only after the previous one has merged, from the default
-   branch `seal retro` leaves checked out. When an earlier story contradicts a
+   **Implement**, **Finish**, **Retro**, **Merge** for one before starting the
+   next. Plan the next story only after the previous one has merged, from the
+   default branch `vault.py merge` leaves checked out: a later story may build
+   on it. Where the vault requires approvals the run stops when its current
+   story is ready (see **Merge**), so the stories not started wait for it.
+   When an earlier story contradicts a
    later issue, or an answer the user gave earlier, stop and ask rather than
    guessing, and say so in the report.
 4. **Resume.** Re-invoking handoff with the same issues resumes from the vault
-   notes. For each issue: retro sealed or issue closed: skip; impl note has a
-   `pr:`: the retro; plan sealed: implementation, the implementer resuming from
-   its commits; plan still a draft: drafting continues; no plan yet: planning.
+   notes. For each issue: impl note sealed or issue closed: skip; retro sealed,
+   impl note open: with approvals `none`, merge; with `required`, the run stops
+   there until it has merged; impl note has a `pr:` and no sealed retro: the
+   retro; plan sealed: implementation, the implementer resuming from its
+   commits; plan still a draft: drafting continues; no plan yet: planning.
+   Rerunning handoff once the user has merged resumes with the next story.
 5. At the end, send the final push notification and give the combined report.
 
 ## Plan
@@ -104,7 +112,7 @@ notification:
   counts as not sure, so ask.
 - Record lasting decisions and drop ideas the issue resolved without asking.
 - Run `vault.py closes-feature <repo> <issue>` and name any feature that
-  sealing will close in the report; `seal retro` closes it. If `seal retro`
+  the merge will close in the report; `vault.py merge` closes it. If it
   prints a feature-close warning, report the printed command and ask before
   running it.
 - Before sealing, comment on the PR (`gh pr comment`) with a condensed report:
@@ -112,10 +120,30 @@ notification:
   recorded, retro dispositions), deviations, left-open findings and how they
   were sorted, questions asked or re-asked with their answers, and any feature
   the merge closes.
-- Run `vault.py seal retro <repo> <issue>` without approval; it merges the PR.
-  If the PR's checks haven't finished, wait for them (`gh pr checks <pr> --watch`)
+- Run `vault.py seal retro <repo> <issue>` without approval; it readies the PR
+  (the bump pushed, the commit recorded in the retro) and merges nothing. If
+  the PR's checks haven't finished, wait for them (`gh pr checks <pr> --watch`)
   and retry. If a check fails, or `seal retro` refuses for any other reason,
   stop and ask.
+
+## Merge
+
+Learn the vault's approvals setting from the next step `seal retro` printed:
+never read `Agent/Setup.md` yourself.
+
+- `run vault.py merge` (approvals `none`): run `vault.py merge <repo> <issue>`
+  right away, without asking; merging is part of the handoff. If it refuses
+  over checks that haven't finished or haven't started, wait
+  (`gh pr checks <pr> --watch`) and run it again. If GitHub says the branch must
+  be up to date, or it refuses for any other reason, stop and ask: never update
+  the branch yourself.
+- `collect the approvals, then run` (approvals `required`): the run stops
+  here for this story. The PR is ready (retro sealed, PR open, the handoff
+  comment on it), so send the push notification asking the user to collect
+  approvals and run `merge #<issue>`, and end with the combined report, naming
+  the stories not started. The next story is planned only after this one has
+  merged, so none of them is touched. Rerunning handoff once the user has
+  merged resumes with the next story.
 
 ## Asking the user
 
@@ -128,5 +156,5 @@ pings: the stage-end pings of the skills followed here are skipped.
 
 The run ends with one report in chat covering every story: what merged, the
 decisions made without the user, deviations, left-open findings and their
-sorting, questions asked, features closed, unfiled stories, and anything that
-stopped the run.
+sorting, questions asked, features closed, unfiled stories, the stories not
+started and why, and anything that stopped the run.

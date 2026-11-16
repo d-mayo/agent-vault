@@ -27,12 +27,13 @@ SKILLS = {
     "implement-story": (r"implement (#\d|issue \d)", "reviewer.md"),
     "plan-story": (r"plan (#\d|issue \d)", "plan-reviewer.md"),
     "retro": (r"retro (#\d|issue \d)", None),
+    "merge": (r"merge (#\d|issue \d)", None),
     "issue": (r"file an issue for", None),
     "design": (r"design a \.\.\.", "design-reviewer.md"),
     "handoff": (r"handoff #\d", None),
     "setup": (r"set up this vault", None),
 }
-# the five skills that carry the shared approvals section (handoff is an orchestrator and setup a
+# the six skills that carry the shared approvals section (handoff is an orchestrator and setup a
 # one-time interview, not stages of a story)
 PIPELINE_SKILLS = [s for s in SKILLS if s not in ("handoff", "setup")]
 
@@ -384,34 +385,105 @@ class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-A
     def test_seal_after_validate_and_summary_approval(self):  # AC5
         self.assertMentions("vault.py validate", "plain-language summary", "vault.py seal retro")
 
-    def test_merging_is_seal_retros_alone_and_nothing_else_pushes_main_edits_sealed_or_installs(self):  # T6 -> AC6 (#51)
+    def test_merging_is_vault_py_merges_alone_and_nothing_else_pushes_main_edits_sealed_or_installs(self):  # T10 -> AC11 (#111)
         text = " ".join(self.skill.lower().split())
         self.assertNotIn("never merge a pr", text)
         never = " ".join(re.search(r"^## Never\n(.*?)^## ", self.skill, re.S | re.M).group(1).lower().split())
-        self.assertIn("merging is `seal retro`'s job alone", never)
+        self.assertIn("`seal retro` never merges", never)
+        self.assertIn("merging is `vault.py merge`'s job alone", never)
         self.assertIn("never `gh pr merge`", never)
         self.assertIn("github's merge button", never)
         self.assertMentions("never push to `main`", "never edit a sealed", "never run `install.py`")
         self.assertIn("never merge a pr", " ".join(read("implement-story", "SKILL.md").lower().split()))
 
-    def test_summary_approval_is_the_merge_approval_and_a_backfill_merges_nothing(self):  # T6 -> AC6 (#51)
+    def test_no_section_says_sealing_merges(self):  # T10 -> AC11 (#111)
+        text = " ".join(self.skill.lower().split())
+        for old in ("squash-merges", "sealing merges", "`seal retro` merges", "it merges the pr",
+                    "merging is `seal retro`'s job"):
+            self.assertNotIn(old, text)
+        desc = frontmatter(self.skill)["description"].lower()
+        self.assertNotIn("squash-merge", desc)
+        self.assertIn("readies the pr", desc)
+        intro = " ".join(self.skill.split("## Never")[0].lower().split())
+        self.assertIn("never merges", intro)
+        self.assertIn("`vault.py merge`'s job", intro)
+
+    def test_seal_readies_then_runs_merge_or_stops_by_approvals(self):  # T10 -> AC11 (#111)
         seal = " ".join(re.search(r"^## Seal\n(.*?)^## ", self.skill, re.S | re.M).group(1).lower().split())
-        self.assertIn("names the pr sealing merges; approving the summary approves that merge", seal)
+        for needle in ("names the pr to merge afterwards and any feature the merge closes",
+                       "where the setup needs no approvals", "approving the summary approves that merge",
+                       "seals the retro and merges nothing", "stays open until the merge",
+                       "prints the next step", "run vault.py merge", "run the merge skill straight away",
+                       "collect the approvals, then run", "stop at ready", "runs `merge #<issue>`"):
+            self.assertIn(needle, seal)
         backfill = " ".join(re.search(r"^## Backfill[^\n]*\n(.*?)^## ", self.skill, re.S | re.M)
                             .group(1).lower().split())
         self.assertIn("a backfill's approval merges nothing", backfill)
         self.assertIn("never merges a closed issue", backfill)
         stop = " ".join(re.search(r"^## Stop and ask if\n(.*)", self.skill, re.S | re.M).group(1).lower().split())
-        self.assertIn("refuses over the pr's checks or head, or github refuses the merge", stop)
+        self.assertIn("refuses over the pr's checks or head", stop)
         self.assertIn("never merge any other way", stop)
-        desc = frontmatter(self.skill)["description"].lower()
-        self.assertIn("squash-merges the pr", desc)
+        self.assertNotIn("github refuses the merge: report", stop)
+
+    def test_follow_up_retros_section(self):  # T10 -> AC11 (#111)
+        sec = " ".join(re.search(r"^## Follow-up retros\n(.*?)^## ", self.skill, re.S | re.M).group(1).lower().split())
+        for needle in ("`<repo>-<issue>-retro-<n>.md`", "judging only the commits since the previous retro's `commit:`",
+                       "already settled stays settled", "refuses a follow-up while the branch is still at the "
+                       "previous retro's commit"):
+            self.assertIn(needle, sec)
 
     def test_closed_issue_backfill_path(self):  # AC7
         self.assertMentions("## backfill", "closed", "no `branch:`", "dirty tree", "upstream")
 
     def test_stop_and_ask(self):
         self.assertMentions("## stop and ask if")
+
+
+class MergeSkillTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC10 (#111)
+    def setUp(self):
+        self.skill = read("merge", "SKILL.md")
+
+    def test_frontmatter_and_triggers(self):
+        desc = frontmatter(self.skill)["description"].lower()
+        for trigger in ('"merge #9"', '"merge issue 9"', '"merge agent-vault#9"'):
+            self.assertIn(trigger, desc)
+        self.assertIn("vault.py merge", desc)
+
+    def test_is_a_pipeline_skill_with_the_shared_section_after_never(self):
+        self.assertIn("merge", PIPELINE_SKILLS)
+        headings = re.findall(r"^## (.*)$", self.skill, re.M)
+        self.assertEqual(headings[headings.index("Never") + 1], "Approvals, pings and the closing summary")
+
+    def test_resolves_and_checks_the_feature(self):
+        self.assertMentions("git config --get remote.origin.url", "`vault.py closes-feature <repo> <issue>`",
+                            "whether the merge will also close", "the highest `<repo>-<issue>-retro-<n>.md`",
+                            "a plan with `pr: none`", "stop and say so")
+
+    def test_follow_up_retro_when_the_head_moved(self):
+        self.assertMentions("the pr's head (`gh pr view <pr> --json headrefoid`)", "moved past it",
+                            "follow-up retro with the retro skill", "just the commits since that commit",
+                            "`vault.py new retro <repo> <issue>`",
+                            "with `approvals: required`, stop", "collect approvals again",
+                            "with `approvals: none` carry on")
+
+    def test_asks_only_when_run_on_its_own(self):
+        self.assertMentions("run straight after an approved retro", "ask nothing more",
+                            "run on its own, show a short summary", "the readied commit", "the merge style",
+                            "the feature the merge closes", "ask the approval prompt", "only `yes` continues")
+        self.assertMentions("`vault.py merge <repo> <issue>`", "never `gh pr merge`", "never github's merge button")
+
+    def test_never_updates_the_branch_and_pings_once_merged(self):
+        self.assertMentions("never update the pr's branch yourself", "`gh pr update-branch`",
+                            "the branch must be up to date", "follow-up retro and, where approvals are required, "
+                            "new approvals", "never update it yourself")
+        step = " ".join(re.search(r"^6\. (.*?)(?=^## )", self.skill.split("## Merge")[1] + "\n## x\n", re.S | re.M)
+                        .group(1).lower().split())
+        self.assertIn("send the push notification", step)
+        self.assertIn("next issue", step)
+        self.assertEqual(self.skill.count("send the push notification"), 2)     # stop-for-approvals and merged
+
+    def test_stop_and_ask(self):
+        self.assertMentions("## stop and ask if", "feature-close warning", "never merge any other way")
 
 
 class SealRetroMergeDocsTest(unittest.TestCase):  # T7 -> AC7 (#51)
@@ -521,7 +593,7 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 278)
+        self.assertLessEqual(len(text.splitlines()), 310)
 
 
 class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC9, AC10 (#36)
@@ -753,7 +825,7 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
     def test_scan_and_order(self):  # T3
         self.assertMentions("vault.py design stories", "other open sub-issues in issue-number order",
                             "unfiled stories", "never file them", "skip closed issues",
-                            "retro is sealed", "upfront scan", "user decision", "one story at a time",
+                            "impl note is sealed", "upfront scan", "user decision", "one story at a time",
                             "only after the previous one has merged", "contradicts a later issue",
                             "stop and ask")
 
@@ -776,6 +848,24 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
                             "`vault.py closes-feature", "feature-close warning",
                             "`gh pr checks <pr> --watch`", "`vault.py seal retro", "without approval",
                             "stop and ask")
+        retro = self.skill.split("## Retro", 1)[1].split("## Merge", 1)[0]
+        self.assertMentions("readies the pr", "merges nothing", text=retro)
+
+    def test_merge_only_through_vault_py_merge_and_stops_at_ready_when_approvals_are_required(self):  # T10 -> AC12
+        self.assertMentions("never merge except through `vault.py merge`", "never run `install.py`")
+        self.assertNotIn("never merge except through `vault.py seal retro`", self.skill)
+        merge = self.skill.split("## Merge", 1)[1].split("## Asking the user", 1)[0]
+        self.assertMentions("next step `seal retro` printed", "never read `agent/setup.md`",
+                            "`run vault.py merge` (approvals `none`)", "run `vault.py merge <repo> <issue>` right away",
+                            "without asking", "never update the branch yourself",
+                            "`collect the approvals, then run` (approvals `required`)",
+                            "the run stops here for this story", "retro sealed, pr open, the handoff comment on it",
+                            "`merge #<issue>`", "naming the stories not started",
+                            "the next story is planned only after this one has merged",
+                            "rerunning handoff once the user has merged resumes", text=merge)
+        self.assertMentions("`gh pr comment`", "before sealing", text=self.skill.split("## Retro", 1)[1])
+        self.assertMentions("retro sealed, impl note open: with approvals `none`, merge; with `required`, the run "
+                            "stops there until it has merged")
 
     def test_pings_reports_resume(self):  # T7
         self.assertMentions("first send a push notification", "naming what you need",
@@ -785,7 +875,7 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
         retro = self.skill.split("## Retro", 1)[1].split("## Asking the user", 1)[0]
         self.assertMentions("`gh pr comment`", "before sealing", "decisions made without the user",
                             "deviations", "left-open findings", "questions asked", text=retro)
-        self.assertMentions("retro sealed or issue closed", "has a `pr:`",
+        self.assertMentions("impl note sealed or issue closed", "has a `pr:`",
                             "plan sealed", "plan still a draft", "no plan yet",
                             "asks them again")
         self.assertNotIn("the approval prompt", self.skill)
@@ -793,7 +883,7 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
     def test_no_desktop_tools_and_pipeline_set(self):  # T8
         for bad in ("start_session", "mcp__ccd", "AskUserQuestion"):
             self.assertNotIn(bad, self.skill)
-        self.assertEqual(PIPELINE_SKILLS, ["implement-story", "plan-story", "retro", "issue", "design"])
+        self.assertEqual(PIPELINE_SKILLS, ["implement-story", "plan-story", "retro", "merge", "issue", "design"])
 
 
 class SetupSkillTest(AssertMentionsMixin, unittest.TestCase):  # T7 -> AC9 (#110)
@@ -909,7 +999,7 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
 
     def test_section_identical_and_right_after_never(self):               # T1
         sections = {s: self.collapse(self.section(s, self.HEADING)) for s in PIPELINE_SKILLS}
-        self.assertEqual(len(set(sections.values())), 1, "the five copies differ")
+        self.assertEqual(len(set(sections.values())), 1, "the six copies differ")
         for skill in PIPELINE_SKILLS:
             headings = re.findall(r"^## (.*)$", read(skill, "SKILL.md"), re.M)
             self.assertEqual(headings[headings.index("Never") + 1], self.HEADING, skill)
@@ -931,6 +1021,7 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
                       ("Stop and ask if", "- `seal retro` prints a feature-close"),
                       ("Stop and ask if", "- `seal retro` refuses because the PR")],
             "issue": [("Approval", None), ("Create", 3)],
+            "merge": [("Merge", 4), ("Stop and ask if", "- `vault.py merge` prints a feature-close")],
         }
         for skill, items in checks.items():
             for heading, which in items:
@@ -943,7 +1034,7 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
         follow = self.step(self.section("retro", "Follow-ups"), 1)
         for prefix in ("`- issue #<n> created`", "`- issue #<n> amended`"):
             self.assertIn(need, self.collapse(self.item(follow, prefix, "   ")), prefix)
-        for skill in ("design", "plan-story", "retro", "issue"):
+        for skill in ("design", "plan-story", "retro", "issue", "merge"):
             self.assertIn(need, self.collapse(self.section(skill, self.HEADING)))
 
     def test_implement_story_asks_no_approval(self):                      # T2
@@ -963,6 +1054,9 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
             ("implement-story", "No-PR plan", 4, "retro #<issue>"),
             ("implement-story", "Address PR review", 4, "re-review"),
             ("retro", "Seal", 3, "next issue"),
+            ("retro", "Seal", 3, "merge #<issue>"),
+            ("merge", "Merge", 3, "merge #<issue>"),
+            ("merge", "Merge", 6, "next issue"),
             ("issue", "Create", 4, "plan"),
         ]
         for skill, heading, n, next_stage in points:
@@ -980,11 +1074,11 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
 
 
 class AutoInstallDocsTest(unittest.TestCase):  # T7 -> AC7 (#98)
-    RULE = ("never run `install.py` yourself: only `seal retro` (after a merge) and session start "
+    RULE = ("never run `install.py` yourself: only `vault.py merge` (after a merge) and session start "
             "install, and only from `main`.")
 
-    def test_three_skills_share_one_install_rule(self):
-        for skill in ("implement-story", "retro", "handoff"):
+    def test_four_skills_share_one_install_rule(self):
+        for skill in ("implement-story", "retro", "handoff", "merge"):
             with self.subTest(skill=skill):
                 text = " ".join(read(skill, "SKILL.md").lower().split())
                 self.assertEqual(text.count(self.RULE), 1)
