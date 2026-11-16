@@ -10,6 +10,7 @@ This vault has two sides.
   - `Decisions/<project>/<project>-d<n>-<slug>.md`: one decision record per lasting decision; never edited, only replaced by a later record.
   - `Designs/<project>/<project>-design-<n>-<slug>.md`: one design per larger piece of work, a draft until sealed; a sealed design is never edited, a later design extends or replaces it.
   - `Daily/<date>.md`: the log, one file per day.
+  - `Setup.md`: how this vault's stories and PRs work (tracker, merge style, approvals, repo settings, branch names, Jira specifics); written only by `{{CLI}} setup`. With no setup note the vault uses GitHub issues and works as it always has. The setup's tracker decides how issues are read and filed.
 
 The scripts live outside the vault, in `~/.claude/agent-vault/`, installed from the `d-mayo/agent-vault` repo; change them there, never in place. Code repos live outside the vault. A finished project gets `status: archived` in place.
 
@@ -25,6 +26,7 @@ Hooks in `~/.claude/settings.json` enforce these. If a hook blocks you, do what 
 
 ## Commands
 
+- To record or change how this vault's stories and PRs work, say "set up this vault" (the `setup` skill); it interviews me on each value and runs `{{CLI}} setup --tracker github|jira [--merge ...] [--approvals ...] [--repo-settings ...] [--branch <pattern>] [--branch-feature <word>] [--branch-bug <word>] [--jira-... ...] [--replace]` only after I approve the exact values. The command refuses an incomplete or contradictory setup and, without `--replace`, an existing note. In a Jira setup each project with repos gets `jira_project: <KEY>`.
 - `{{CLI}} new project <id> [--repo owner/name ...] [--purpose "..."]`
 - `{{CLI}} new design <project> "<title>"`: the next draft design of a project (the project may not exist yet). `{{CLI}} seal design <design>`: after I approve a design; creates a decision record for each of its decisions (source `design <design> D<k>`), promotes its listed ideas, rewrites `Standing decisions` and seals it, or refuses and changes nothing. `{{CLI}} design stories <design>` lists a sealed design's feature (`feature: <owner/name>#<n> (<state>)`, or `no feature yet`) and its stories with the issues filed for them, or "not filed", marking a story that isn't under the feature. `{{CLI}} closes-feature <repo> <issue>` says whether sealing an issue's retro closes its finished feature. `{{CLI}} features [--project <id>]` lists the open feature issues with how many of their sub-issues are open.
 - `{{CLI}} new plan <repo> <issue>`: a draft plan and an open impl note. `{{CLI}} new retro <repo> <issue>`: the retro, once the impl note has a `pr:`.

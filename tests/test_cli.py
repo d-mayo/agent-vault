@@ -1172,5 +1172,85 @@ class RestoreTest(CliCase):                                         # T4, T6, T8
         self.assertIn("\n  restore <note>", vault.__doc__)
 
 
+class SetupCommandTest(CliCase):
+    """`vault.py setup` writes Agent/Setup.md (#110)."""
+    JIRA = ("--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+            "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+
+    def setUp(self):
+        super().setUp()
+        self.project("demo", "me/demo")
+
+    def fm(self):
+        return lib.split_frontmatter(self.text("Setup.md"))[0]
+
+    def test_github_with_defaults(self):                          # T1 -> AC1
+        r = self.cli("setup", "--tracker", "github")
+        self.assertEqual(self.fm(), {"type": "setup", **lib.SETUP_DEFAULTS})
+        for key, val in lib.SETUP_DEFAULTS.items():
+            self.assertIn(f"  {key}: {val}", r.stdout)
+        self.assertEqual(self.text("Setup.md").split("---\n", 2)[2], "")
+        self.validate()
+
+    def test_jira_with_every_flag(self):                          # T1 -> AC1
+        r = self.cli("setup", *self.JIRA, "--merge", "rebase", "--approvals", "required",
+                     "--repo-settings", "checked", "--branch", "{issue}-{type}-{slug}",
+                     "--branch-feature", "story", "--branch-bug", "bugfix")
+        fm = self.fm()
+        self.assertEqual((fm["tracker"], fm["merge"], fm["approvals"], fm["repo_settings"], fm["branch"],
+                          fm["branch_feature"], fm["branch_bug"], fm["jira_connector"], fm["jira_planned_label"]),
+                         ("jira", "rebase", "required", "checked", "{issue}-{type}-{slug}", "story", "bugfix",
+                          "atlassian", "none"))
+        self.assertIn("  jira_story_type: Story", r.stdout)
+        out = self.validate()
+        self.assertIn("X-JIRA-MISSING", out)             # the demo project has no jira_project yet: a warning
+
+    def test_replace(self):                                       # T1 -> AC3
+        self.cli("setup", "--tracker", "github")
+        before = self.text("Setup.md")
+        self.refused("setup", "--tracker", "github", "--merge", "rebase", why="--replace")
+        self.assertEqual(self.text("Setup.md"), before)
+        r = self.cli("setup", "--tracker", "github", "--merge", "rebase", "--replace")
+        self.assertIn("rewrote", r.stdout)
+        self.assertEqual(self.fm()["merge"], "rebase")
+
+    def test_refusals_write_nothing(self):                        # T2 -> AC2
+        pairs = list(zip(self.JIRA[::2], self.JIRA[1::2]))
+        cases = {}
+        for key in lib.SETUP_JIRA:
+            flag = "--" + key.replace("_", "-")
+            cases[f"jira without {flag}"] = ([a for f, v in pairs if f != flag for a in (f, v)], f"needs '{key}'")
+        cases.update({
+            "jira flag in github": (["--tracker", "github", "--jira-connector", "x"], "only to a Jira setup"),
+            "no issue": (["--tracker", "github", "--branch", "{type}/{slug}"], "{issue} exactly once"),
+            "issue twice": (["--tracker", "github", "--branch", "{type}/{issue}-{issue}"], "{issue} exactly once"),
+            "no type": (["--tracker", "github", "--branch", "x/{issue}"], "{type} exactly once"),
+            "type twice": (["--tracker", "github", "--branch", "{type}/{type}-{issue}"], "{type} exactly once"),
+            "slug twice": (["--tracker", "github", "--branch", "{type}/{issue}-{slug}{slug}"], "{slug} at most once"),
+            "unknown": (["--tracker", "github", "--branch", "{type}/{issue}-{x}"], "not {x}"),
+            "adjacent": (["--tracker", "github", "--branch", "{type}/{issue}{slug}"], "something between"),
+            "bad ref": (["--tracker", "github", "--branch", "{type}/{issue}:{slug}"], "valid git branch name"),
+            "equal words": (["--tracker", "github", "--branch-bug", "feat"], "must differ"),
+            "hotfix": (["--tracker", "github", "--branch-bug", "hotfix"], "hotfix"),
+            "uppercase": (["--tracker", "github", "--branch-feature", "Feat"], "lowercase word"),
+            "path in jira": ([*self.JIRA, "--jira-connector", "a/b"], "must not hold a path"),
+        })
+        for label, (args, why) in cases.items():
+            with self.subTest(label):
+                self.refused("setup", *args, why=why)
+                self.assertFalse(self.path("Setup.md").exists())
+
+    def test_github_refused_while_a_project_has_jira_project(self):     # T2 -> AC2
+        p = self.path("Projects/demo.md")
+        p.write_text(p.read_text(encoding="utf-8").replace("status: active", "status: active\njira_project: DEMO"),
+                     encoding="utf-8", newline="\n")
+        self.refused("setup", "--tracker", "github", why="demo")
+        self.assertFalse(self.path("Setup.md").exists())
+        self.cli("setup", *self.JIRA)
+
+    def test_usage_lists_setup(self):                             # T8 -> AC10
+        self.assertIn("\n  setup --tracker github|jira", vault.__doc__)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -163,6 +163,14 @@ class GuardTest(HookCase):  # T5 -> AC5, AC6, T12
         self.blocked(self.agent("loose.md"), says="loose files")
         self.blocked(self.agent("loose.md"), tool="Edit", says="Projects/")
 
+    def test_setup_note_names_the_command(self):                      # T6 -> AC8
+        self.put(self.agent("Setup.md"), "---\ntype: setup\n---\n")
+        for tool in ("Write", "Edit", "MultiEdit"):
+            msg = self.blocked(self.agent("Setup.md"), tool=tool, says="vault.py\" setup --tracker")
+            self.assertIn("--replace", msg)
+            self.assertIn("`setup` skill", msg)
+            self.assertNotIn("loose files", msg)
+
     def test_decision_records_cannot_be_edited_or_created(self):      # T6 -> AC6
         self.cli("decision", "add", "demo", "Keep it small", "--decision", "d", "--why", "w", "--source", "session")
         msg = self.blocked(self.agent("Decisions/demo/demo-d1-keep-it-small.md"), tool="Edit", says="decision add")

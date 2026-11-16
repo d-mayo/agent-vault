@@ -215,7 +215,7 @@ class LayoutAndFrontmatterTest(VaultCase):
         for p in (self.vault / "Agent").rglob("*.md"):
             fm, _, _ = lib.split_frontmatter(p.read_text(encoding="utf-8"))
             types.add(fm["type"])
-        self.assertEqual(types, set(lib.TYPES) - {"decision"})     # records have their own fixtures
+        self.assertEqual(types, set(lib.TYPES) - {"decision", "setup"})   # these have their own fixtures
 
     def test_stray_and_wrong_names(self):         # T3 -> AC3
         idea = (self.vault / "Agent/Ideas/2026-09-26-an-idea.md").read_text(encoding="utf-8")
@@ -727,6 +727,92 @@ class DesignNoteTest(VaultCase):
         self.assertIn(lib.rel(path), before)
         path.write_text(self.sealed().replace("The demo", "A demo"), encoding="utf-8", newline="\n")
         self.assertEqual(lib.changed_fingerprints(before), [lib.rel(path)])
+
+
+class SetupNoteTest(VaultCase):
+    """The setup note (#110): its checks, its reader and its schema lines."""
+    GITHUB = dict(lib.SETUP_DEFAULTS)
+    JIRA = {**lib.SETUP_DEFAULTS, "tracker": "jira", "jira_feature_type": "Epic", "jira_story_type": "Story",
+            "jira_bug_type": "Bug", "jira_planned_label": "none", "jira_connector": "atlassian"}
+
+    def setUp(self):
+        super().setUp()
+        self.load_base()
+
+    def problems(self, **over):
+        base = self.JIRA if over.pop("jira", False) else self.GITHUB
+        values = {k: v for k, v in {**base, **over}.items() if v is not None}
+        return " | ".join(lib.setup_problems(values))
+
+    def test_valid_setups(self):                                   # T3 -> AC4
+        self.assertEqual(self.problems(), "")
+        self.assertEqual(self.problems(jira=True), "")
+        self.assertEqual(self.problems(branch="{issue}_{type}", branch_feature="story", branch_bug="bug"), "")
+
+    def test_each_problem_is_named(self):                          # T3 -> AC4
+        cases = {
+            "no issue": ({"branch": "{type}/{slug}"}, "{issue} exactly once"),
+            "issue twice": ({"branch": "{type}/{issue}-{issue}"}, "{issue} exactly once"),
+            "no type": ({"branch": "x/{issue}-{slug}"}, "{type} exactly once"),
+            "type twice": ({"branch": "{type}/{type}-{issue}"}, "{type} exactly once"),
+            "slug twice": ({"branch": "{type}/{issue}-{slug}-{slug}"}, "{slug} at most once"),
+            "unknown": ({"branch": "{type}/{issue}-{title}"}, "not {title}"),
+            "adjacent": ({"branch": "{type}/{issue}{slug}"}, "something between them"),
+            "unmatched": ({"branch": "{type}/{issue}-{slug"}, "unmatched"),
+            "invalid ref": ({"branch": "{type}/{issue}..{slug}"}, "valid git branch name"),
+            "space": ({"branch": "{type}/{issue} {slug}"}, "valid git branch name"),
+            "lock": ({"branch": "{type}/{issue}-{slug}.lock"}, "valid git branch name"),
+            "equal words": ({"branch_bug": "feat"}, "must differ"),
+            "hotfix": ({"branch_bug": "hotfix"}, "can't be hotfix"),
+            "uppercase": ({"branch_feature": "Feat"}, "lowercase word"),
+            "tracker": ({"tracker": "gitlab"}, "'tracker' must be one of"),
+            "approvals": ({"approvals": "some"}, "'approvals' must be one of"),
+            "repo settings": ({"repo_settings": "mine"}, "'repo_settings' must be one of"),
+            "jira field in github": ({"jira_connector": "x"}, "belongs only to a Jira setup"),
+        }
+        for label, (over, want) in cases.items():
+            with self.subTest(label):
+                self.assertIn(want, self.problems(**over))
+        for key in lib.SETUP_JIRA:
+            with self.subTest(missing=key):
+                self.assertIn(f"needs '{key}'", self.problems(jira=True, **{key: None}))
+                self.assertIn(f"needs '{key}'", self.problems(jira=True, **{key: ""}))
+        for val in ("a/b", "a\\b", "~x"):
+            with self.subTest(path=val):
+                self.assertIn("must not hold a path", self.problems(jira=True, jira_connector=val))
+
+    def test_reader_defaults_and_note_values(self):                # T4 -> AC6
+        self.assertEqual(lib.read_setup(), lib.SETUP_DEFAULTS)
+        self.assertEqual(lib.SETUP_DEFAULTS, {"tracker": "github", "merge": "squash", "approvals": "none",
+                                              "repo_settings": "managed", "branch": "{type}/{issue}-{slug}",
+                                              "branch_feature": "feat", "branch_bug": "fix"})
+        self.assertEqual(self.check(), ({}, {}))
+        shutil.copytree(FIXTURES / "SETUP" / "pass-jira", self.vault, dirs_exist_ok=True)
+        got = lib.read_setup()
+        self.assertEqual((got["tracker"], got["merge"], got["approvals"], got["jira_connector"]),
+                         ("jira", "merge", "required", "atlassian"))
+        self.assertEqual(self.check(), ({}, {}))
+
+    def test_setup_note_is_not_stray(self):                       # T3 -> AC4
+        shutil.copytree(FIXTURES / "SETUP" / "pass-github", self.vault, dirs_exist_ok=True)
+        self.assertEqual(lib.validate_file(self.vault / "Agent/Setup.md").errors, [])
+        self.assertEqual(lib.classify(("Setup.md",))[0], "setup")
+        self.assertEqual(lib.classify(("setup.md",))[2][0], "PATH-STRAY")
+
+    def test_setup_note_is_not_fingerprinted(self):                # D11
+        shutil.copytree(FIXTURES / "SETUP" / "pass-github", self.vault, dirs_exist_ok=True)
+        self.assertNotIn("Agent/Setup.md", lib.fingerprints())
+
+    def test_schema_shows_the_setup(self):                         # T5 -> AC7
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            vault.cmd_schema(None)
+        text = buf.getvalue()
+        for want in ("Agent/Setup.md", "github | jira", "squash | merge | rebase", "required | none",
+                     "managed | checked", "(default {type}/{issue}-{slug})", "(default feat)", "(default fix)",
+                     *lib.SETUP_JIRA, "{issue} and {type} exactly once", "{slug} at most once",
+                     "jira_project", "No setup note means", "X-JIRA-PROJECT", "X-JIRA-MISSING"):
+            self.assertIn(want, text)
 
 
 class CrossNoteTest(VaultCase):
