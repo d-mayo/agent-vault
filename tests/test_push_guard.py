@@ -1,3 +1,4 @@
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -126,6 +127,34 @@ class PushGuardTest(unittest.TestCase):  # T5 -> AC6
     def test_ignores_other_tools(self):
         r = run_py(GUARD, stdin={"tool_name": "Write", "tool_input": {"file_path": "x"}})
         self.assertEqual(r.returncode, 0)
+
+
+class RecordedGitTest(unittest.TestCase):  # T4 -> AC4 (#47)
+    """push_guard.current_branch runs the config's recorded `git`."""
+
+    def setUp(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        self.addCleanup(self._t.cleanup)
+        self.vault = make_vault(self.root)
+        self.repo = self.root / "r"
+        self.repo.mkdir()
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x")
+        self.fake = self.root / "fake_git.py"
+        self.fake.write_text("print('feat/9-recorded')\n", encoding="utf-8")
+
+    def run_guard(self, command, **tools):
+        cfg = write_config(self.root, self.vault)
+        cfg.write_text(json.dumps({"vault": self.vault.as_posix(), **tools}), encoding="utf-8")
+        return run_py(GUARD, stdin={"tool_name": "Bash", "cwd": str(self.repo),
+                                    "tool_input": {"command": command}}, config=cfg)
+
+    def test_recorded_git_decides_the_branch(self):
+        # the real branch is main (a push is blocked); the recorded fake git says feat/9-recorded (allowed)
+        self.assertEqual(self.run_guard("git push").returncode, 2)
+        self.assertEqual(self.run_guard("git push", git=str(self.fake)).returncode, 0)
+        self.assertEqual(self.run_guard("git push", git=str(self.root / "gone.py")).returncode, 2)
 
 
 class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
