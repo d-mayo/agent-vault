@@ -2064,6 +2064,61 @@ def cmd_seal_design(args) -> None:
           f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
 
 
+def jira_story_done(index: lib.Index, repo: str, key: str) -> bool:
+    """A filed story is done when its impl note is sealed or a merged PR's branch carries its key (D7 of #115)."""
+    impl = work_path(repo, key, "impl")
+    if impl.is_file() and (lib.split_frontmatter(lib.read_text(impl))[0] or {}).get("status") == "sealed":
+        return True
+    return merged_pr_for(index.slugs[repo], key) is not None
+
+
+def jira_filed_stories(tickets: dict, design: str) -> dict[int, list[tuple[str, str, dict]]]:
+    """{story number: [(repo, key, entry)]} for the stories of `design` in the ticket map."""
+    out: dict[int, list[tuple[str, str, dict]]] = {}
+    for repo, entries in sorted(tickets.items()):
+        for key, e in sorted(entries.items()):
+            if e.get("kind") == "story" and e.get("design") == design and isinstance(e.get("story"), int):
+                out.setdefault(e["story"], []).append((repo, key, e))
+    return out
+
+
+def jira_design_stories(index: lib.Index, path: Path, fm: dict, body: str) -> None:
+    tickets = lib.read_tickets()
+    design = path.stem
+    feature = recorded_feature(tickets, design)
+    filed = jira_filed_stories(tickets, design)
+    stories = lib.design_stories(body)
+    print(f"feature: {feature[1]}" if feature else "no feature yet")
+    for s in stories:
+        found = filed.get(s["n"])
+        print(f"S{s['n']}. {s['title']}: "
+              + (", ".join(f"{key} ({'done' if jira_story_done(index, repo, key) else 'open'})"
+                           + ("" if feature is None or e.get("parent") == feature[1] else " [not under the feature]")
+                           for repo, key, e in found) if found else "not filed"))
+    if not any(fm["project"] in pids for pids in index.repos.values()):
+        print(f"project '{fm['project']}' has no repos yet, so nothing can be filed; register one first")
+    unfiled = [s for s in stories if s["n"] not in filed]
+    print(f"{len(stories) - len(unfiled)} of {len(stories)} stories filed" if stories else "no stories")
+
+
+def jira_open_features(index: lib.Index, project: str | None) -> list[str]:
+    """One line per recorded feature with a story unfiled or not done (D4 of #115)."""
+    tickets = lib.read_tickets()
+    rows = []
+    for repo in sorted(n for n, pids in index.repos.items() if not project or project in pids):
+        for key, e in sorted(tickets.get(repo, {}).items()):
+            design = e.get("design")
+            if e.get("kind") != "feature" or design not in index.designs:
+                continue
+            stories = lib.design_stories(lib.split_frontmatter(lib.read_text(index.designs[design]["path"]))[1])
+            filed = jira_filed_stories(tickets, design)
+            open_n = sum(1 for s in stories
+                         if not filed.get(s["n"]) or not all(jira_story_done(index, r, k) for r, k, _ in filed[s["n"]]))
+            if open_n:
+                rows.append(f"{key} {one_line(e.get('title') or '')} [[{design}]] ({open_n} of {len(stories)} open)")
+    return rows
+
+
 def cmd_design_stories(args) -> None:
     path = find_design(args.design)
     fm, body, _ = lib.split_frontmatter(lib.read_text(path))
@@ -2072,6 +2127,8 @@ def cmd_design_stories(args) -> None:
     index = lib.Index()
     project = fm["project"]
     repos = sorted(n for n, pids in index.repos.items() if project in pids)
+    if lib.read_setup()["tracker"] == "jira":
+        return jira_design_stories(index, path, fm, body)
     issues = project_issues(index, project)
     features = feature_issues(issues, path.stem)
     filed: dict[int, list[tuple[str, dict]]] = {}
@@ -2153,6 +2210,10 @@ def cmd_closes_feature(args) -> None:
 def cmd_features(args) -> None:
     index = lib.Index()
     require_project(index, args.project)
+    if lib.read_setup()["tracker"] == "jira":
+        rows = jira_open_features(index, args.project)
+        print("\n".join(rows) if rows else "no open features")
+        return
     names = sorted(n for n, pids in index.repos.items() if not args.project or args.project in pids)
     rows = []
     for name in names:

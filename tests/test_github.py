@@ -3520,3 +3520,80 @@ class JiraRecordTest(JiraFilingCase):  # T3 -> AC3 (#115)
         (self.vault / "Agent" / "Setup.md").unlink()
         self.refused(self.cli("issue", "record", "duo-a", "PROJ-5", "--pending", path), "tracker: github")
         self.assertFalse((self.vault / "Agent" / ".tickets.json").exists())
+
+
+class JiraMapReadTest(JiraFilingCase):  # T4, T5 -> AC4, AC5 (#115)
+    def setUp(self):
+        super().setUp()
+        text = self.path.read_text(encoding="utf-8").replace(
+            "\n\n## Open questions", "\n\n### S3. Third\nOutcome: z.\nDepends on: S2\nRepo: duo-a\n\n## Open questions", 1)
+        self.path.write_text(text, encoding="utf-8", newline="\n")
+        self.add_issue("acme/duo-a", 1, "OPEN", ISSUE_BODY)       # makes the fake's repo state
+        self.add_issue("acme/duo-b", 1, "OPEN", ISSUE_BODY)
+
+    def story(self, key, n, repo="duo-a", parent="PROJ-1"):
+        self.file_ticket(key, "--parent", parent, repo=repo, source=f"[[{self.NAME}]] S{n}")
+
+    def merged(self, key, slug="acme/duo-a"):
+        self.load()
+        self.state["repos"][slug]["prs"].append({"number": 5, "headRefName": f"feat/{key}-x", "state": "MERGED",
+                                                 "url": f"https://github.com/{slug}/pull/5", "title": "t"})
+        self.save()
+
+    def seal_impl(self, repo, key, status="sealed"):
+        self.ok(self.cli("new", "plan", repo, key))
+        impl = self.vault / "Agent" / "Work" / repo / f"{repo}-{key}-impl.md"
+        impl.write_text(impl.read_text(encoding="utf-8").replace("status: open", f"status: {status}"),
+                        encoding="utf-8", newline="\n")
+        return impl
+
+    def issue_reads(self):
+        return [c for c in self.calls() if c[:2] in (["issue", "list"], ["issue", "view"]) or c[0] == "api"]
+
+    def test_design_stories_reads_the_map(self):
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("no feature yet", out)
+        self.assertIn("0 of 3 stories filed", out)
+        self.feature()
+        self.story("PROJ-2", 1)
+        self.story("PROJ-3", 2, repo="duo-b")
+        self.merged("PROJ-2")
+        impl = self.seal_impl("duo-b", "PROJ-3")
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("feature: PROJ-1", out)
+        self.assertIn("S1. Build it: PROJ-2 (done)", out)
+        self.assertIn("S2. Ship it: PROJ-3 (done)", out)
+        self.assertIn("S3. Third: not filed", out)
+        self.assertIn("2 of 3 stories filed", out)
+        impl.write_text(impl.read_text(encoding="utf-8").replace("status: sealed", "status: open"),
+                        encoding="utf-8", newline="\n")
+        self.assertIn("S2. Ship it: PROJ-3 (open)", self.ok(self.cli("design", "stories", self.NAME)).stdout)
+        self.assertEqual(self.issue_reads(), [])
+
+    def test_a_story_under_another_parent_is_flagged(self):
+        self.feature()
+        self.file_ticket("PROJ-9", "--feature", "duo-design-2-other", source="[[duo-design-2-other]]") \
+            if False else None
+        tickets = self.vault / "Agent" / ".tickets.json"
+        self.story("PROJ-2", 1)
+        data = json.loads(tickets.read_text(encoding="utf-8"))
+        data["duo-a"]["PROJ-2"]["parent"] = "PROJ-8"
+        tickets.write_text(json.dumps(data), encoding="utf-8", newline="\n")
+        self.assertIn("S1. Build it: PROJ-2 (open) [not under the feature]",
+                      self.ok(self.cli("design", "stories", self.NAME)).stdout)
+
+    def test_features_lists_the_open_ones_from_the_map(self):
+        self.assertEqual(self.ok(self.cli("features")).stdout.strip(), "no open features")
+        self.feature()
+        self.story("PROJ-2", 1)
+        self.story("PROJ-3", 2, repo="duo-b")
+        out = self.ok(self.cli("features", "--project", "duo")).stdout.strip()
+        self.assertEqual(out, f"PROJ-1 A thing [[{self.NAME}]] (3 of 3 open)")
+        self.merged("PROJ-2")
+        self.seal_impl("duo-b", "PROJ-3")
+        self.assertIn("(1 of 3 open)", self.ok(self.cli("features")).stdout)
+        self.story("PROJ-4", 3)
+        self.merged("PROJ-4")
+        self.assertEqual(self.ok(self.cli("features")).stdout.strip(), "no open features")
+        self.assertEqual(self.ok(self.cli("features", "--project", "widgets")).stdout.strip(), "no open features")
+        self.assertEqual(self.issue_reads(), [])
