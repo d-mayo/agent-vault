@@ -88,7 +88,7 @@ name (e.g. `agent-vault`), never `owner/name`.
 2. Read the sealed plan (`Agent/Work/<repo>/<repo>-<issue>-plan.md`) and the
    impl note (`-impl.md`) in the vault, and the repo's `CLAUDE.md`.
 3. Check whether work already started: the impl note's `branch:` field, then
-   (if that's empty) a local or remote branch matching `<type>/<issue>-*`
+   (if that's empty) a local or remote branch matching the setup's branch pattern (default `<type>/<issue>-*`; in a Jira setup the issue is the ticket key)
    (`git branch --list` and `git ls-remote --heads origin`) — a branch can
    exist without being checked out, or only on GitHub in a fresh clone.
    - None found: make sure the working tree is clean, then run

@@ -1001,6 +1001,19 @@ class BranchTypeDocsTest(AssertMentionsMixin, unittest.TestCase):  # T4 -> AC4 (
         self.assertIn("bug", branch)
 
 
+class BranchPatternDocsTest(AssertMentionsMixin, unittest.TestCase):  # T7 -> AC6 (#113)
+    def test_docs_describe_the_setups_branch_pattern_and_the_key(self):
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        skeleton = (REPO / "agent_vault" / "templates" / "repo-CLAUDE.md").read_text(encoding="utf-8")
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        for name, text in (("guide", guide), ("skeleton", skeleton), ("README", readme),
+                           ("implement-story", read("implement-story", "SKILL.md"))):
+            with self.subTest(name):
+                self.assertIn("branch pattern", " ".join(text.split()).replace("branch-name pattern", "branch pattern"))
+                self.assertIn("<type>/<issue>-", text)
+                self.assertIn("ticket key", text)
+
+
 class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
     HEADING = "Approvals, pings and the closing summary"
 

@@ -14,7 +14,7 @@ Project: {{PROJECT}}
 - `src/`: <what lives here>
 
 ## Conventions
-- Branches are `<type>/<issue>-<slug>`; every change goes through a PR that says `Closes #<issue>`; merges are squash-only.
+- Branch names follow the vault setup's branch pattern (default `<type>/<issue>-<slug>`; the issue is a number or, in a Jira setup, the ticket key); every change goes through a PR that says `Closes #<issue>`; merges are squash-only.
 
 ## Gotchas
 - (none yet)
