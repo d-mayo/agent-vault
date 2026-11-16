@@ -305,9 +305,9 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
     migrate_phone_log(vault, report)
     clear_staging(claude / STAGING)
     copy_tree(REPO / "agent_vault", install_dir, claude / STAGING / "_code")
-    launcher = install_dir / "bin" / "vault"
-    if launcher.is_file():
-        launcher.chmod(launcher.stat().st_mode | 0o111)
+    for launcher in sorted((install_dir / "bin").glob("*")):
+        if launcher.is_file():
+            launcher.chmod(launcher.stat().st_mode | 0o111)
     report.append(f"installed code to {install_dir}")
     install_skills(claude, report)
     clear_staging(claude / STAGING)

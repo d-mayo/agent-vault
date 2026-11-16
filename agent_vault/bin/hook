@@ -1,0 +1,27 @@
+#!/bin/sh
+# agent-vault hook launcher: runs hooks/<script> next to this folder with the Python recorded in the config.
+# Usage: hook <script.py> [--blocking]. With no config, agent-vault isn't set up: do nothing, silently.
+# With the recorded Python gone, fail closed: --blocking hooks exit 2 (the tool call is blocked), session_start.py
+# reports through hook JSON and exits 0 (the session still starts), the others exit 1 (an error the user sees).
+script="$1"
+blocking=0
+if [ "$2" = "--blocking" ]; then blocking=1; fi
+config="${AGENT_VAULT_CONFIG:-$HOME/.claude/agent-vault.json}"
+if [ ! -f "$config" ]; then
+  cat >/dev/null 2>&1
+  exit 0
+fi
+py=$(sed -n 's/^[[:space:]]*"python":[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' "$config" | head -n 1)
+if [ -z "$py" ] || [ ! -f "$py" ]; then
+  msg="agent-vault's Python is gone (${py:-not recorded in $config}); rerun install.py"
+  if [ "$script" = "session_start.py" ]; then
+    esc=$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"systemMessage": "%s", "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "%s"}}\n' "$esc" "$esc"
+    exit 0
+  fi
+  echo "$msg" >&2
+  if [ "$blocking" = 1 ]; then exit 2; fi
+  exit 1
+fi
+here=$(cd -P -- "$(dirname -- "$0")/.." >/dev/null && pwd)
+exec "$py" "$here/hooks/$script"

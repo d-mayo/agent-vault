@@ -600,5 +600,87 @@ class LauncherTest(unittest.TestCase):
             self.assertTrue(os.access(launcher, os.X_OK))
 
 
+@unittest.skipUnless(find_bash(), "needs bash")
+class HookLauncherTest(unittest.TestCase):
+    def setUp(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        self.inst = self.root / "agent-vault"
+        (self.inst / "bin").mkdir(parents=True)
+        (self.inst / "hooks").mkdir()
+        shutil.copyfile(REPO / "agent_vault" / "bin" / "hook", self.inst / "bin" / "hook")
+        (self.inst / "hooks" / "x.py").write_text(
+            "import sys\nprint('stdin=' + sys.stdin.read())\nprint('argv=' + repr(sys.argv[1:]))\nsys.exit(3)\n",
+            encoding="utf-8")
+        (self.inst / "hooks" / "session_start.py").write_text("print('started')\n", encoding="utf-8")
+        self.home = self.root / "home"
+        self.home.mkdir()
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def run_hook(self, config, *args, stdin="{}"):
+        env = dict(os.environ, HOME=str(self.home))
+        env.pop("AGENT_VAULT_CONFIG", None)
+        if config is not None:
+            env["AGENT_VAULT_CONFIG"] = str(config)
+        return subprocess.run([find_bash(), (self.inst / "bin" / "hook").as_posix(), *args],
+                              capture_output=True, text=True, env=env, input=stdin)
+
+    def config(self, python, field=True):
+        cfg = self.root / "agent-vault.json"
+        data = {"vault": "x"}
+        if field:
+            data["python"] = python
+        cfg.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        return cfg
+
+    def test_pass_through(self):  # T1 -> AC1, T4 -> AC4
+        cfg = self.config(Path(sys.executable).as_posix())
+        for extra in ([], ["--blocking"]):
+            out = self.run_hook(cfg, "x.py", *extra, stdin='{"a": 1}')
+            self.assertEqual(out.returncode, 3)
+            self.assertIn('stdin={"a": 1}', out.stdout)
+            self.assertIn("argv=[]", out.stdout)       # --blocking is the launcher's own
+
+    def test_python_gone(self):  # T3 -> AC3
+        for cfg in (self.config((self.root / "nope" / "python").as_posix()), self.config("", field=False)):
+            blocked = self.run_hook(cfg, "x.py", "--blocking")
+            self.assertEqual(blocked.returncode, 2)
+            self.assertIn("rerun install.py", blocked.stderr)
+            soft = self.run_hook(cfg, "x.py")
+            self.assertEqual(soft.returncode, 1)
+            self.assertIn("rerun install.py", soft.stderr)
+            self.assertEqual(soft.stdout, "")
+
+    def test_session_start_reports_in_hook_json(self):  # T3 -> AC3
+        for missing in ("nope/python", 'a dir/with "quote"/python'):
+            out = self.run_hook(self.config((self.root / missing).as_posix()), "session_start.py")
+            self.assertEqual(out.returncode, 0)
+            data = json.loads(out.stdout)
+            self.assertIn("rerun install.py", data["systemMessage"])
+            self.assertIn(missing.split('"')[0], data["systemMessage"])   # the config spells a quote escaped
+            self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "SessionStart")
+            self.assertEqual(data["hookSpecificOutput"]["additionalContext"], data["systemMessage"])
+
+    def test_no_config(self):  # T4 -> AC4: the default config path, under an empty HOME
+        for args in (["x.py"], ["x.py", "--blocking"], ["session_start.py"]):
+            out = self.run_hook(None, *args)
+            self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "", ""))
+
+    def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
+        home = self.root / "inst-home"
+        (home / ".claude").mkdir(parents=True)
+        vault = make_vault(self.root)
+        repo = self.root / "repo"
+        (repo / ".git").mkdir(parents=True)
+        install.install(vault, home, repo=repo)
+        launcher = home / ".claude" / "agent-vault" / "bin" / "hook"
+        self.assertTrue(launcher.is_file())
+        self.assertNotIn(b"\r", launcher.read_bytes())
+        if sys.platform != "win32":
+            self.assertTrue(os.access(launcher, os.X_OK))
+
+
 if __name__ == "__main__":
     unittest.main()
