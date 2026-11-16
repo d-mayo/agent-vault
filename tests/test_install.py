@@ -700,6 +700,14 @@ class HookLauncherTest(unittest.TestCase):
             self.assertIn("rerun install.py", soft.stderr)
             self.assertEqual(soft.stdout, "")
 
+    def test_python_gone_with_a_large_payload(self):  # R1
+        big = "x" * (2 * 1024 * 1024)
+        cfg = self.config((self.root / "nope" / "python").as_posix())
+        for args, code in ((["x.py", "--blocking"], 2), (["x.py"], 1), (["session_start.py"], 0)):
+            out = self.run_hook(cfg, *args, stdin=big)
+            self.assertEqual(out.returncode, code, args)
+            self.assertIn("rerun install.py", out.stderr + out.stdout)
+
     def test_session_start_reports_in_hook_json(self):  # T3 -> AC3
         for missing in ("nope/python", 'a dir/with "quote"/python'):
             out = self.run_hook(self.config((self.root / missing).as_posix()), "session_start.py")

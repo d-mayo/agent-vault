@@ -13,6 +13,7 @@ if [ ! -f "$config" ]; then
 fi
 py=$(sed -n 's/^[[:space:]]*"python":[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' "$config" | head -n 1)
 if [ -z "$py" ] || [ ! -f "$py" ]; then
+  cat >/dev/null 2>&1   # read the payload first, so a large one can't hit EPIPE in Claude Code's writer
   msg="agent-vault's Python is gone (${py:-not recorded in $config}); rerun install.py"
   if [ "$script" = "session_start.py" ]; then
     esc=$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
