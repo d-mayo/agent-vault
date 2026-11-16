@@ -48,6 +48,9 @@ class InstallTest(unittest.TestCase):
         self._t.cleanup()
 
     def cli(self):
+        return "~/.claude/agent-vault/bin/vault"
+
+    def old_cli(self):                  # what an install before #44 recorded
         inst = (self.home / ".claude" / "agent-vault").resolve()
         return f'{install.python_cmd()} "{(inst / "vault.py").as_posix()}"'
 
@@ -79,13 +82,15 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(sorted(Path(c.split('" "')[1].rstrip('"')).name for c in ours),
                          sorted(["session_start.py", "guard.py", "push_guard.py", "post_edit.py",
                                  "stop_check.py"]))
-        self.assertEqual([a for a in us["permissions"]["allow"] if "/.claude/agent-vault/vault.py" in a],
+        self.assertEqual([a for a in us["permissions"]["allow"] if "agent-vault" in a],
                          [f"Bash({self.cli()}:*)"])
+        self.assertEqual(cfg["managed_allow"], [f"Bash({self.cli()}:*)"])
         vs = json.loads((self.vault / ".claude" / "settings.json").read_text())   # T1: nothing of ours left
         self.assertNotIn("hooks", vs)
         self.assertEqual(vs["permissions"]["allow"], ["Bash(ls:*)"])
         claude_md = (self.vault / "CLAUDE.md").read_text()
-        self.assertIn("/.claude/agent-vault/vault.py", claude_md)
+        self.assertIn("~/.claude/agent-vault/bin/vault", claude_md)
+        self.assertNotIn("vault.py", claude_md)
         self.assertNotIn("{{CLI}}", claude_md)
         self.assertIn("phone pull", claude_md)                           # T5 -> AC5
         self.assertNotIn("handoff pull", claude_md)
@@ -164,7 +169,32 @@ class InstallTest(unittest.TestCase):
         self.run_install()
         allow = json.loads(us.read_text())["permissions"]["allow"]
         self.assertIn(mine, allow)
-        self.assertEqual(len([a for a in allow if a.startswith('Bash("') and "/.claude/agent-vault/vault.py" in a]), 1)
+        self.assertEqual([a for a in allow if "agent-vault/bin/vault" in a], [f"Bash({self.cli()}:*)"])
+
+    def test_old_absolute_rule_is_replaced(self):  # T3 -> AC3
+        self.run_install()
+        us = self.home / ".claude" / "settings.json"
+        d = json.loads(us.read_text())
+        d["permissions"]["allow"] = [f"Bash({self.old_cli()}:*)", "Bash(ls:*)"]
+        us.write_text(json.dumps(d))
+        cfgp = self.home / ".claude" / "agent-vault.json"
+        cfg = json.loads(cfgp.read_text())
+        cfg["managed_allow"] = [f"Bash({self.old_cli()}:*)"]
+        cfgp.write_text(json.dumps(cfg))
+        self.run_install()
+        allow = json.loads(us.read_text())["permissions"]["allow"]
+        self.assertEqual([a for a in allow if "agent-vault" in a], [f"Bash({self.cli()}:*)"])
+        self.assertIn("Bash(ls:*)", allow)
+        self.assertEqual(json.loads(cfgp.read_text())["managed_allow"], [f"Bash({self.cli()}:*)"])
+
+    def test_guide_is_the_same_with_another_python(self):  # T4 -> AC4
+        from unittest import mock
+        self.run_install()
+        first = (self.vault / "CLAUDE.md").read_bytes()
+        with mock.patch.object(sys, "executable", str(self.root / "other" / "python.exe")):
+            self.run_install()
+        self.assertEqual((self.vault / "CLAUDE.md").read_bytes(), first)
+        self.assertIn(b"~/.claude/agent-vault/bin/vault", first)
 
     def test_no_vault_settings_created(self):
         (self.vault / ".claude" / "settings.json").unlink()
@@ -190,16 +220,16 @@ class InstallTest(unittest.TestCase):
         self.run_install()
         inst = self.home / ".claude" / "agent-vault"
         vsp = self.vault / ".claude" / "settings.json"
-        old = {"hooks": install.user_hooks(inst), "permissions": {"allow": [f"Bash({self.cli()}:*)", "Bash(ls:*)"]}}
+        old = {"hooks": install.user_hooks(inst), "permissions": {"allow": [f"Bash({self.old_cli()}:*)", "Bash(ls:*)"]}}
         vsp.write_text(json.dumps(old))
         (self.home / ".claude" / "agent-vault.json").write_text(json.dumps(
-            {"vault": self.vault.as_posix(), "managed_allow": [f"Bash({self.cli()}:*)"]}))
+            {"vault": self.vault.as_posix(), "managed_allow": [f"Bash({self.old_cli()}:*)"]}))
         self.run_install()
         vs = json.loads(vsp.read_text())
         self.assertNotIn("hooks", vs)
         self.assertEqual(vs["permissions"]["allow"], ["Bash(ls:*)"])
         us = json.loads((self.home / ".claude" / "settings.json").read_text())
-        self.assertEqual(len([a for a in us["permissions"]["allow"] if "vault.py" in a]), 1)
+        self.assertEqual(len([a for a in us["permissions"]["allow"] if "agent-vault" in a]), 1)
 
     def test_git_hooks_path(self):  # AC5 (installer part)
         import subprocess

@@ -168,7 +168,7 @@ class GuardTest(HookCase):  # T5 -> AC5, AC6, T12
     def test_setup_note_names_the_command(self):                      # T6 -> AC8
         self.put(self.agent("Setup.md"), "---\ntype: setup\n---\n")
         for tool in ("Write", "Edit", "MultiEdit"):
-            msg = self.blocked(self.agent("Setup.md"), tool=tool, says="vault.py\" setup --tracker")
+            msg = self.blocked(self.agent("Setup.md"), tool=tool, says="~/.claude/agent-vault/bin/vault setup --tracker")
             self.assertIn("--replace", msg)
             self.assertIn("`setup` skill", msg)
             self.assertNotIn("loose files", msg)
@@ -511,6 +511,18 @@ class SessionStartTest(HookCase):
         self.assertIn("claudemd-lint found 1 problem(s):", out)
         self.assertIn("missing.py", out)
 
+    def test_names_the_launcher_not_vault_py(self):  # T3 -> AC3
+        self.cli("idea", "add", "Cache it", "--project", "demo")
+        out = self.start(self.repo)
+        self.assertNotIn("vault.py", out)
+        self.put(self.repo / "CLAUDE.md", "# widget\n\n## Commands\n- Lint: `git --version`\n\n## Layout\n"
+                 + "".join(f"- `missing{i}.py`: nope.\n" for i in range(40)))
+        git("add", "CLAUDE.md", cwd=self.repo)
+        git("commit", "-q", "-m", "docs", cwd=self.repo)
+        out = self.start(self.repo)
+        self.assertIn("~/.claude/agent-vault/bin/vault claudemd-lint", out)
+        self.assertNotIn("vault.py", out)
+
     def test_claudemd_lint_ok_and_stale_count(self):  # T2 -> AC8
         self.put(self.repo / "CLAUDE.md", "# widget\n\n## Purpose\nx.\n\n## Commands\n- Lint: `git --version`\n")
         git("add", "CLAUDE.md", cwd=self.repo)
@@ -775,7 +787,7 @@ class StopTest(HookCase):
         r = self.stop()
         self.assertEqual(r.returncode, 2)
         self.assertIn("Ideas/2026-01-01-thing.md", r.stderr)
-        self.assertIn("vault.py", r.stderr)
+        self.assertIn("~/.claude/agent-vault/bin/vault", r.stderr)
         self.assertIn(" log ", r.stderr)
         self.assertEqual(self.stop(active=True).returncode, 0)      # blocks once
 
@@ -922,7 +934,7 @@ class StopTest(HookCase):
         self.assertIn(snap, r.stderr)
         m = re.search(r"put it back with: (.*)$", r.stderr, re.M)
         self.assertIsNotNone(m, r.stderr)
-        self.assertEqual(m.group(1), f'"{Path(sys.executable).as_posix()}" "{(CODE / "vault.py").as_posix()}" '
+        self.assertEqual(m.group(1), "~/.claude/agent-vault/bin/vault "
                          f"restore Agent/Work/widget/widget-7-plan.md --snapshot {snap}")
         self.assertEqual(note.read_bytes(), b"sneaky\n")             # the hook only names the command
         self.cli("restore", "Agent/Work/widget/widget-7-plan.md", "--snapshot", snap)

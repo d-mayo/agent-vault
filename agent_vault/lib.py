@@ -23,8 +23,8 @@ from pathlib import Path
 INSTALL_DIR = Path(__file__).resolve().parent
 CONFIG = Path(os.environ.get("AGENT_VAULT_CONFIG")
               or Path.home() / ".claude" / "agent-vault.json")
-# The interpreter running this code is the one the installer wrote into the hooks.
-CLI = f'"{Path(sys.executable).as_posix()}" "{(INSTALL_DIR / "vault.py").as_posix()}"'
+# The one CLI string, the same on every machine: a launcher the installer writes (the shell expands `~`).
+CLI = "~/.claude/agent-vault/bin/vault"
 
 
 def _load_vault():
@@ -1404,7 +1404,7 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
         tracker = index.setup.get("tracker")
         if fm.get("jira_project") not in (None, "") and tracker != "jira":
             res.add("X-JIRA-PROJECT", f"jira_project is set but the vault's setup has tracker: {tracker}; "
-                                      "remove it, or switch the setup to jira (vault.py setup)")
+                                      f"remove it, or switch the setup to jira ({CLI} setup)")
         if tracker == "jira" and fm.get("repos") and fm.get("jira_project") in (None, ""):
             res.add("X-JIRA-MISSING", "this is a Jira setup, so a project with repos needs jira_project: <KEY>")
     seen = set()
@@ -1468,7 +1468,7 @@ def schema_text() -> str:
                f"({', '.join(DESIGN_SOFT)}). A sealed design has `sealed`, an existing project, a record per "
                "decision with source 'design <design> D<n>' and each listed idea promoted to it; "
                "`seal design` does all of that. An idea's promoted_to is an issue URL, a Jira ticket key (PROJ-12) or a link to a design.")
-    out.append(f"Setup note (Agent/{SETUP_FILE}, type: setup, frontmatter only, written by `vault.py setup`; "
+    out.append(f"Setup note (Agent/{SETUP_FILE}, type: setup, frontmatter only, written by `{CLI} setup`; "
                "it always holds every field, defaults included):")
     for key, default in SETUP_DEFAULTS.items():
         allowed = " | ".join(SETUP_CHOICES[key]) if key in SETUP_CHOICES else (
