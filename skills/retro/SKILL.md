@@ -300,6 +300,10 @@ identity is the ticket key (e.g. `PROJ-12`), and:
   view`. A `pr: none` plan has no PR: before `seal retro`, post the retro's
   `## Closing comment` on the ticket through the connector (`seal retro` closes
   nothing and seals both notes). No feature is closed in a Jira setup.
+- A follow-up ticket: `vault.py issue create` with a placement flag (`--parent <KEY>`,
+  `--standalone` or `--bug`) prints the fields; post exactly those, unchanged, through the
+  connector, run `vault.py issue record <repo> <KEY> --pending <file>`, and write the line
+  `- issue #<KEY> created` (or `- issue #<KEY> amended`), as with a number.
 - Never change a ticket's status (no transition, no "Done"): that is the
   user's; agent-vault only ever adds the planned label (plan-story) or posts a
   closing comment (retro), through the connector.

@@ -217,6 +217,10 @@ identity is the ticket key (e.g. `PROJ-12`), and:
 - Never change a ticket's status (no transition, no "Done"): that is the
   user's; agent-vault only ever adds the planned label (plan-story) or posts a
   closing comment (retro), through the connector.
+- A new ticket (Issue hygiene) is filed as the `issue` skill does in a Jira setup:
+  `vault.py issue create` with a placement flag (`--parent <KEY>`, `--standalone` or `--bug`)
+  prints the fields; post exactly those, unchanged, through the connector, then run
+  `vault.py issue record <repo> <KEY> --pending <file>`. Never post anything that wasn't printed.
 
 ## Stop and ask if
 

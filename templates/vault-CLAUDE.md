@@ -11,6 +11,7 @@ This vault has two sides.
   - `Designs/<project>/<project>-design-<n>-<slug>.md`: one design per larger piece of work, a draft until sealed; a sealed design is never edited, a later design extends or replaces it.
   - `Daily/<date>.md`: the log, one file per day.
   - `Setup.md`: how this vault's stories and PRs work (tracker, merge style, approvals, repo settings, branch names, Jira specifics); written only by `{{CLI}} setup`. With no setup note the vault uses GitHub issues and works as it always has. The setup's tracker decides how issues are read and filed.
+  - `.pending/<repo>-<n>.json` and `.tickets.json` (hidden, Jira setup only): in a Jira setup `{{CLI}} issue create` and `{{CLI}} idea promote` (each with its placement flag, `--standalone` for one) post nothing: each writes a pending file holding exactly the fields to post (and what the ticket is for) and prints them; the skill posts those unchanged through the connector, then `{{CLI}} issue record <repo> <KEY> --pending <file>` records the key in the ticket map `.tickets.json` and deletes the pending file. `design stories` and `features` read that map. Only `issue record` writes the map.
 
 The scripts live outside the vault, in `~/.claude/agent-vault/`, installed from the `d-mayo/agent-vault` repo; change them there, never in place. Code repos live outside the vault. A finished project gets `status: archived` in place.
 

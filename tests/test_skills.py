@@ -1180,3 +1180,32 @@ class JiraSkillsTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#114
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class JiraFilingSkillsTest(AssertMentionsMixin, unittest.TestCase):  # T7 -> AC7 (#115)
+    def section(self, name):
+        text = read(name, "SKILL.md")
+        self.assertIn("## Jira setup", text)
+        return text.split("## Jira setup", 1)[1].split(chr(10) + "## ", 1)[0]
+
+    def test_each_filing_skill_posts_the_printed_fields_and_records_the_key(self):
+        for name in ("issue", "design", "plan-story", "retro"):
+            with self.subTest(skill=name):
+                low = " ".join(self.section(name).lower().split())
+                for phrase in ("issue record", "unchanged", "connector", "never change a ticket's status"):
+                    self.assertIn(phrase, low)
+
+    def test_design_files_the_feature_first_then_each_story_under_its_key(self):
+        low = " ".join(self.section("design").lower().split())
+        self.assertIn("file the feature first", low)
+        self.assertIn("--parent <feature key>", low)
+
+    def test_retro_shows_the_key_form_of_the_follow_up_line(self):
+        self.assertIn("- issue #<KEY> created", self.section("retro"))
+
+    def test_docs_describe_the_pending_file_record_and_the_ticket_map(self):
+        for path in (REPO / "templates" / "vault-CLAUDE.md", REPO / "README.md", REPO / "CLAUDE.md"):
+            with self.subTest(path.name):
+                text = path.read_text(encoding="utf-8")
+                for phrase in ("issue record", ".tickets.json", ".pending"):
+                    self.assertIn(phrase, text)

@@ -3331,3 +3331,269 @@ class ScenarioCopyTest(GhCase):  # T1 -> AC3
         self.prep()
         self.assertEqual(len(list((self.vault / "Agent" / "Decisions" / "widgets").glob("*.md"))), 1)
         self.assertTrue(self.retro.is_file())
+
+
+class JiraFilingCase(DuoCase):
+    """A Jira setup in which the `duo` and `widgets` projects both carry jira_project PROJ (#115)."""
+    JIRA = ("--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+            "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+
+    def setUp(self):
+        super().setUp()
+        self.ok(self.cli("setup", *self.JIRA))
+        for name in ("duo", "widgets"):
+            p = self.vault / "Agent" / "Projects" / f"{name}.md"
+            p.write_text(p.read_text(encoding="utf-8").replace("status: active", "status: active\njira_project: PROJ"),
+                         encoding="utf-8", newline="\n")
+        self.seal()
+
+    def create(self, *placement, repo="duo-a", source=None, body=None):
+        text = body or (self.source(source) if source else ISSUE_BODY)
+        return self.cli("issue", "create", repo, "--title", "A thing", "--body-file", self.body_file(text),
+                        *(placement or ("--standalone",)))
+
+    def pending_dir(self):
+        return self.vault / "Agent" / ".pending"
+
+    def pending(self, name="duo-a-1.json"):
+        return json.loads((self.pending_dir() / name).read_text(encoding="utf-8"))
+
+    def pending_path(self, r):
+        return next(ln.split(": ", 1)[1] for ln in r.stdout.splitlines() if ln.startswith("pending file: "))
+
+    def tickets(self):
+        p = self.vault / "Agent" / ".tickets.json"
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+    def no_gh_call(self):
+        self.assertEqual([c for c in self.calls() if c[:2] in (["issue", "create"], ["label", "create"],
+                                                              ["issue", "edit"])], [])
+
+    def file_ticket(self, key, *placement, repo="duo-a", source=None):
+        r = self.ok(self.create(*placement, repo=repo, source=source))
+        self.ok(self.cli("issue", "record", repo, key, "--pending", self.pending_path(r)))
+
+    def feature(self, key="PROJ-1"):
+        self.file_ticket(key, "--feature", self.NAME, source=f"[[{self.NAME}]]")
+
+
+class JiraPendingTest(JiraFilingCase):  # T1, T2 -> AC1, AC2 (#115)
+    def test_standalone_writes_the_fields_and_numbers_the_files(self):
+        raw = ISSUE_BODY.replace("\n", "\r\n").encode("utf-8")
+        r = self.ok(self.cli("issue", "create", "duo-a", "--title", "A thing", "--standalone",
+                             "--body-file", self.body_file(raw=raw)))
+        data = self.pending()
+        self.assertEqual(data["fields"], {"project": "PROJ", "type": "Story", "summary": "A thing",
+                                          "description": ISSUE_BODY, "parent": None, "labels": []})
+        self.assertEqual((data["vault"]["repo"], data["vault"]["kind"], data["vault"]["idea"]),
+                         ("duo-a", "standalone", None))
+        self.assertIn("duo-a-1.json", r.stdout)
+        self.assertIn('"summary": "A thing"', r.stdout)
+        self.ok(self.create())
+        self.assertTrue((self.pending_dir() / "duo-a-2.json").is_file())
+        self.no_gh_call()
+
+    def test_a_body_failing_the_template_writes_nothing(self):
+        self.refused(self.create(body=ISSUE_BODY.replace("## Constraints\nNone\n\n", "")), "Constraints")
+        self.assertFalse(self.pending_dir().exists())
+
+    def test_idea_promote_writes_a_pending_file_and_leaves_the_idea_open(self):
+        name = self.idea()
+        r = self.ok(self.cli("idea", "promote", name, "--repo", "widget", "--standalone",
+                             "--body-file", self.body_file(), "--title", "Promoted"))
+        data = self.pending("widget-1.json")
+        self.assertEqual(data["fields"]["summary"], "Promoted")
+        self.assertEqual(data["vault"]["idea"], f"Agent/Ideas/{name}")
+        self.assertIn("pending file", r.stdout)
+        self.assertEqual(self.fm(self.vault / "Agent" / "Ideas" / name)["status"], "open")
+        self.no_gh_call()
+
+    def test_feature_has_the_feature_type_and_no_parent(self):
+        r = self.ok(self.create("--feature", self.NAME, source=f"[[{self.NAME}]]"))
+        data = self.pending()
+        self.assertEqual((data["fields"]["type"], data["fields"]["parent"]), ("Epic", None))
+        self.assertEqual((data["vault"]["kind"], data["vault"]["design"]), ("feature", self.NAME))
+        self.assertIn("Epic", r.stdout)
+        self.no_gh_call()
+
+    def test_feature_refusals(self):
+        feature = ("--feature", self.NAME)
+        self.refused(self.create(*feature, source=f"[[{self.NAME}]] S1"), "names no story")
+        self.refused(self.create(*feature, source="session"), f"[[{self.NAME}]]")
+        self.refused(self.create("--feature", "duo-design-9-none", source="session"), "no design")
+        self.refused(self.create(*feature, repo="widget", source=f"[[{self.NAME}]]"), "doesn't belong")
+        self.path.write_text(self.path.read_text(encoding="utf-8").replace("status: sealed", "status: draft"),
+                             encoding="utf-8", newline="\n")
+        self.refused(self.create(*feature, source=f"[[{self.NAME}]]"), "draft")
+        self.assertFalse(self.pending_dir().exists())
+
+    def test_a_second_feature_for_a_recorded_design_is_refused(self):
+        self.feature()
+        self.refused(self.create("--feature", self.NAME, source=f"[[{self.NAME}]]"), "already has a feature", "PROJ-1")
+        self.assertEqual(list(self.pending_dir().glob("*.json")), [])
+
+    def test_parent_gives_the_story_type_and_the_parent_key(self):
+        self.feature()
+        self.ok(self.create("--parent", "PROJ-1", source=f"[[{self.NAME}]] S1"))
+        data = self.pending()
+        self.assertEqual((data["fields"]["type"], data["fields"]["parent"]), ("Story", "PROJ-1"))
+        self.assertEqual((data["vault"]["design"], data["vault"]["story"]), (self.NAME, 1))
+        self.no_gh_call()
+
+    def test_parent_refusals(self):
+        self.feature()
+        self.file_ticket("PROJ-2", "--standalone")
+        self.refused(self.create("--parent", "PROJ-9"), "isn't a recorded feature")
+        self.refused(self.create("--parent", "PROJ-2"), "not a feature")
+        self.refused(self.create("--parent", "12"), "ticket key")
+        self.refused(self.create("--parent", "PROJ-1", repo="widget"), "share no project")
+        other = "duo-design-2-other"
+        (self.vault / "Agent" / "Designs" / "duo" / f"{other}.md").write_text(
+            self.path.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        self.refused(self.create("--parent", "PROJ-1", source=f"[[{other}]] S1"), "isn't the feature of")
+        self.assertEqual(list(self.pending_dir().glob("*.json")), [])
+
+    def test_bug_and_standalone_have_no_parent_and_refuse_a_story(self):
+        self.ok(self.create("--bug"))
+        fields = self.pending()["fields"]
+        self.assertEqual((fields["type"], fields["parent"], self.pending()["vault"]["kind"]), ("Bug", None, "bug"))
+        for flag in ("--standalone", "--bug"):
+            self.refused(self.create(flag, source=f"[[{self.NAME}]] S2"), "--parent")
+        self.assertEqual(len(list(self.pending_dir().glob("*.json"))), 1)
+        self.no_gh_call()
+
+
+class JiraRecordTest(JiraFilingCase):  # T3 -> AC3 (#115)
+    def test_records_the_key_with_the_facts_and_deletes_the_file(self):
+        self.feature()
+        entry = self.tickets()["duo-a"]["PROJ-1"]
+        self.assertEqual((entry["kind"], entry["design"], entry["title"]), ("feature", self.NAME, "A thing"))
+        self.assertEqual(list(self.pending_dir().glob("*.json")), [])
+        r = self.ok(self.create("--parent", "PROJ-1", repo="duo-b", source=f"[[{self.NAME}]] S2"))
+        self.ok(self.cli("issue", "record", "duo-b", "PROJ-2", "--pending", self.pending_path(r)))
+        entry = self.tickets()["duo-b"]["PROJ-2"]
+        self.assertEqual((entry["kind"], entry["design"], entry["story"], entry["parent"]),
+                         ("story", self.NAME, 2, "PROJ-1"))
+        self.assert_valid()
+
+    def test_an_idea_is_promoted_to_the_key(self):
+        name = self.idea()
+        r = self.ok(self.cli("idea", "promote", name, "--repo", "widget", "--bug", "--body-file", self.body_file()))
+        self.ok(self.cli("issue", "record", "widget", "PROJ-5", "--pending", self.pending_path(r)))
+        fm = self.fm(self.vault / "Agent" / "Ideas" / name)
+        self.assertEqual((fm["status"], fm["promoted_to"]), ("promoted", "PROJ-5"))
+        self.assertRegex(self.daily(), r"idea-promoted — ")
+        self.assertEqual(self.tickets()["widget"]["PROJ-5"]["kind"], "bug")
+        self.assert_valid()
+        (self.vault / "Agent" / "Setup.md").unlink()
+        for n in ("duo", "widgets"):
+            p = self.vault / "Agent" / "Projects" / f"{n}.md"
+            p.write_text(p.read_text(encoding="utf-8").replace("jira_project: PROJ\n", ""),
+                         encoding="utf-8", newline="\n")
+        self.assert_valid()
+
+    def test_refusals_change_nothing(self):
+        r = self.ok(self.create())
+        path = self.pending_path(r)
+        foreign = self.pending_dir() / "duo-b-9.json"
+        foreign.write_text("{}", encoding="utf-8")
+        outside = self.root / "duo-a-1.json"
+        outside.write_text(Path(path).read_text(encoding="utf-8"), encoding="utf-8")
+        before = self.fingerprint()
+        for key, pend, why in (("OTHER-5", path, "PROJ"), ("PROJ-5", str(self.root / "x.json"), "pending"),
+                               ("5", path, "ticket key"), ("PROJ-5", str(foreign), "pending file"),
+                               ("PROJ-5", str(outside), "pending file")):
+            self.refused(self.cli("issue", "record", "duo-a", key, "--pending", pend), why)
+        self.refused(self.cli("issue", "record", "duo-b", "PROJ-5", "--pending", str(foreign)), "valid pending")
+        self.assertEqual(self.fingerprint(), before)
+        self.assertFalse((self.vault / "Agent" / ".tickets.json").exists())
+
+    def test_a_recorded_key_is_refused_again(self):
+        self.feature()
+        r = self.ok(self.create())
+        self.refused(self.cli("issue", "record", "duo-a", "PROJ-1", "--pending", self.pending_path(r)),
+                     "already recorded")
+        self.assertTrue((self.pending_dir() / "duo-a-1.json").is_file())
+
+    def test_a_github_setup_refuses(self):
+        path = self.pending_path(self.ok(self.create()))
+        (self.vault / "Agent" / "Setup.md").unlink()
+        self.refused(self.cli("issue", "record", "duo-a", "PROJ-5", "--pending", path), "tracker: github")
+        self.assertFalse((self.vault / "Agent" / ".tickets.json").exists())
+
+
+class JiraMapReadTest(JiraFilingCase):  # T4, T5 -> AC4, AC5 (#115)
+    def setUp(self):
+        super().setUp()
+        text = self.path.read_text(encoding="utf-8").replace(
+            "\n\n## Open questions", "\n\n### S3. Third\nOutcome: z.\nDepends on: S2\nRepo: duo-a\n\n## Open questions", 1)
+        self.path.write_text(text, encoding="utf-8", newline="\n")
+        self.add_issue("acme/duo-a", 1, "OPEN", ISSUE_BODY)       # makes the fake's repo state
+        self.add_issue("acme/duo-b", 1, "OPEN", ISSUE_BODY)
+
+    def story(self, key, n, repo="duo-a", parent="PROJ-1"):
+        self.file_ticket(key, "--parent", parent, repo=repo, source=f"[[{self.NAME}]] S{n}")
+
+    def merged(self, key, slug="acme/duo-a"):
+        self.load()
+        self.state["repos"][slug]["prs"].append({"number": 5, "headRefName": f"feat/{key}-x", "state": "MERGED",
+                                                 "url": f"https://github.com/{slug}/pull/5", "title": "t"})
+        self.save()
+
+    def seal_impl(self, repo, key, status="sealed"):
+        self.ok(self.cli("new", "plan", repo, key))
+        impl = self.vault / "Agent" / "Work" / repo / f"{repo}-{key}-impl.md"
+        impl.write_text(impl.read_text(encoding="utf-8").replace("status: open", f"status: {status}"),
+                        encoding="utf-8", newline="\n")
+        return impl
+
+    def issue_reads(self):
+        return [c for c in self.calls() if c[:2] in (["issue", "list"], ["issue", "view"]) or c[0] == "api"]
+
+    def test_design_stories_reads_the_map(self):
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("no feature yet", out)
+        self.assertIn("0 of 3 stories filed", out)
+        self.feature()
+        self.story("PROJ-2", 1)
+        self.story("PROJ-3", 2, repo="duo-b")
+        self.merged("PROJ-2")
+        impl = self.seal_impl("duo-b", "PROJ-3")
+        out = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("feature: PROJ-1", out)
+        self.assertIn("S1. Build it: PROJ-2 (done)", out)
+        self.assertIn("S2. Ship it: PROJ-3 (done)", out)
+        self.assertIn("S3. Third: not filed", out)
+        self.assertIn("2 of 3 stories filed", out)
+        impl.write_text(impl.read_text(encoding="utf-8").replace("status: sealed", "status: open"),
+                        encoding="utf-8", newline="\n")
+        self.assertIn("S2. Ship it: PROJ-3 (open)", self.ok(self.cli("design", "stories", self.NAME)).stdout)
+        self.assertEqual(self.issue_reads(), [])
+
+    def test_a_story_under_another_parent_is_flagged(self):
+        self.feature()
+        self.file_ticket("PROJ-9", "--feature", "duo-design-2-other", source="[[duo-design-2-other]]") \
+            if False else None
+        tickets = self.vault / "Agent" / ".tickets.json"
+        self.story("PROJ-2", 1)
+        data = json.loads(tickets.read_text(encoding="utf-8"))
+        data["duo-a"]["PROJ-2"]["parent"] = "PROJ-8"
+        tickets.write_text(json.dumps(data), encoding="utf-8", newline="\n")
+        self.assertIn("S1. Build it: PROJ-2 (open) [not under the feature]",
+                      self.ok(self.cli("design", "stories", self.NAME)).stdout)
+
+    def test_features_lists_the_open_ones_from_the_map(self):
+        self.assertEqual(self.ok(self.cli("features")).stdout.strip(), "no open features")
+        self.feature()
+        self.story("PROJ-2", 1)
+        self.story("PROJ-3", 2, repo="duo-b")
+        out = self.ok(self.cli("features", "--project", "duo")).stdout.strip()
+        self.assertEqual(out, f"PROJ-1 A thing [[{self.NAME}]] (3 of 3 open)")
+        self.merged("PROJ-2")
+        self.seal_impl("duo-b", "PROJ-3")
+        self.assertIn("(1 of 3 open)", self.ok(self.cli("features")).stdout)
+        self.story("PROJ-4", 3)
+        self.merged("PROJ-4")
+        self.assertEqual(self.ok(self.cli("features")).stdout.strip(), "no open features")
+        self.assertEqual(self.ok(self.cli("features", "--project", "widgets")).stdout.strip(), "no open features")
+        self.assertEqual(self.issue_reads(), [])

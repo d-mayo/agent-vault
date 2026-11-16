@@ -414,6 +414,18 @@ class RetroFollowRefTest(VaultCase):      # T1 -> AC1
             for suffix in ("", " (R2)", " (R2, R5)"):
                 self.assertTrue(self.matches(base + suffix), base + suffix)
 
+    def test_a_ticket_key_names_the_issue(self):    # T6 -> AC6 (#115)
+        for base in ("- issue #PROJ-12 created", "- issue #PROJ-12 amended"):
+            for suffix in ("", " (R2)"):
+                self.assertTrue(self.matches(base + suffix), base + suffix)
+        for bad in ("- issue #proj-12 created", "- issue #PROJ12 created", "- issue #PROJ-12 amended x"):
+            self.assertFalse(self.matches(bad), bad)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            vault.cmd_schema(None)
+        self.assertIn("- issue #<n|KEY> created", buf.getvalue())
+        self.assertIn("Jira ticket key (PROJ-12)", buf.getvalue())
+
     def test_malformed_suffix_rejected(self):
         for base in ("- issue #4 created", "- issue #4 amended", "- idea [[some idea]]"):
             for suffix in (" (2)", " (R)", " (R2,R5)", " (R2) "):
