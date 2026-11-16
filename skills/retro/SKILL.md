@@ -10,25 +10,23 @@ what the PR actually did, replaces restated facts with pointers to their real
 home, sorts what's left into an issue, an idea, or dropped, then seals the
 retro. For an open PR, `seal retro` readies it: it pushes the `verified:` bump,
 records the commit it readied in the retro and never merges; merging is
-`vault.py merge`'s job, run through the merge skill. For a closed issue or a
+`~/.claude/agent-vault/bin/vault merge`'s job, run through the merge skill. For a closed issue or a
 `pr: none` plan it seals the impl note too. There is no reviewer subagent
 here: a retro has no code to review, only docs and judgment calls, which this
 skill's own approval steps already put in front of the user.
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
-`vault.py`, so `vault.py new retro <repo> <issue>` means "run that string
-followed by `new retro <repo> <issue>`". `<repo>` is always the plain repo
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`. `<repo>` is always the plain repo
 name (e.g. `agent-vault`), never `owner/name`.
 
 ## Never
 
-- `seal retro` never merges, and merging is `vault.py merge`'s job alone (the
+- `seal retro` never merges, and merging is `~/.claude/agent-vault/bin/vault merge`'s job alone (the
   merge skill runs it): never `gh pr merge`, never GitHub's merge button.
   Never push to `main`.
 - Never edit a sealed note. If a plan, impl note or retro turns out to be
   wrong, stop and ask.
-- Never run `install.py` yourself: only `vault.py merge` (after a merge) and session start install, and only from `main`.
+- Never run `install.py` yourself: only `~/.claude/agent-vault/bin/vault merge` (after a merge) and session start install, and only from `main`.
 - Never post a GitHub issue edit before the user approves its exact wording.
 
 ## Approvals, pings and the closing summary
@@ -59,10 +57,8 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Resolve the repo and issue
 
-- Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
-  path; the exact `vault.py` invocation is the line under "CLI after
-  install" in `<vault>/CLAUDE.md`. A repo session's own startup context
-  doesn't carry either.
+- Vault: `~/.claude/agent-vault.json`'s `vault` field is the vault path. A repo
+  session's own startup context doesn't carry it.
 - Repo: `git config --get remote.origin.url` in the current clone gives a
   URL such as `git@github.com:owner/name.git` or `https://github.com/owner/name`;
   strip the host and any trailing `.git` to get `owner/name`. The part after
@@ -77,7 +73,7 @@ If the sealed plan's frontmatter says `pr: none`, the issue has no branch
 and no PR: skip Preflight's `pr:` and branch checks (the clone can be on any
 branch; an already-closed issue is only sealed), run Audit and Follow-ups
 as below (reading the impl note and plan instead of a PR diff), and see
-Seal for the closing comment. `vault.py new retro` creates the retro with
+Seal for the closing comment. `~/.claude/agent-vault/bin/vault new retro` creates the retro with
 `pr: none` and a `## Closing comment` section. Audit lines marked
 `confirmed` are not bumped (nothing is committed), so they stay stale
 until a later PR issue's retro confirms them.
@@ -107,13 +103,13 @@ until a later PR issue's retro confirms them.
 
 ## Audit
 
-1. `vault.py claudemd-lint` on the current clone, and fix its failures
+1. `~/.claude/agent-vault/bin/vault claudemd-lint` on the current clone, and fix its failures
    (bad paths, commands that don't resolve, covers globs matching nothing,
    the line cap) before continuing — the audit below assumes CLAUDE.md is
    already accurate about paths and commands.
 2. Check whether the issue's latest retro note
    (`Agent/Work/<repo>/<repo>-<issue>-retro.md`, or the highest
-   `-retro-<n>.md`) already exists in the vault first — `vault.py new retro
+   `-retro-<n>.md`) already exists in the vault first — `~/.claude/agent-vault/bin/vault new retro
    <repo> <issue>` refuses while the latest is open. None yet: run it to
    scaffold one. Already there and `status: open` (a resumed session): read
    what's already filled in and continue from there instead of re-scaffolding.
@@ -162,13 +158,13 @@ until a later PR issue's retro confirms them.
 1. Sort every impl-note discovery, every review finding the impl note
    records as `→ left open`, and every open point the audit raised into
    exactly one of:
-   - `- issue #<n> created`: draft it in the `vault.py schema` template, `retro <repo>#<issue>` under
+   - `- issue #<n> created`: draft it in the `~/.claude/agent-vault/bin/vault schema` template, `retro <repo>#<issue>` under
      `Source`. Place it first: under the retro'd issue's feature (its parent, if an open feature) only
-     when it clearly continues that feature's work; a bug always `--bug`; else a match from `vault.py
+     when it clearly continues that feature's work; a bug always `--bug`; else a match from `~/.claude/agent-vault/bin/vault
      features --project <id>`, or `--standalone`; another project's repo is never filed under this
      feature. Show the exact title and body and the placement (under feature `<repo>#<n>`, standalone,
      or standalone bug) and ask the approval prompt; once approved, write the body to a temp file outside the clone and vault, run
-     `vault.py issue create <repo> --title "<title>" --body-file <file> <placement>` (`--parent <ref>`,
+     `~/.claude/agent-vault/bin/vault issue create <repo> --title "<title>" --body-file <file> <placement>` (`--parent <ref>`,
      `--standalone` or `--bug`), and if it refuses the body, fix that and put the new wording to the approval prompt.
    - `- issue #<n> amended`: an existing issue with no sealed plan for
      it — check `Agent/Work/<repo>/<repo>-<n>-plan.md`'s `status:` in the
@@ -176,7 +172,7 @@ until a later PR issue's retro confirms them.
      sealed plan is never amended this way, since that would invalidate the
      plan at `preflight`. Propose the exact wording; edit it only after
      the approval prompt is answered Yes.
-   - `- idea [[<idea>]]`: `vault.py idea add "<title>" --project <id>
+   - `- idea [[<idea>]]`: `~/.claude/agent-vault/bin/vault idea add "<title>" --project <id>
      --source "retro <repo>#<issue>"`, `<id>` the project whose `repos:`
      lists this repo.
    - `- decision [[<record>]]`: a decision that came up during
@@ -190,12 +186,12 @@ until a later PR issue's retro confirms them.
    unsorted.
 
    Batch small leftovers: left-open findings that are small and share a
-   theme are settled by one idea, added with `vault.py idea add`, titled for
+   theme are settled by one idea, added with `~/.claude/agent-vault/bin/vault idea add`, titled for
    the theme, with one line naming every finding, e.g.
    `- idea [[<idea>]] (R2, R3, R5)`. A finding that stands alone gets its own
    idea line or is dropped.
-2. Check the project's open ideas (`vault.py ideas --project <id>`, same
-   `<id>`) and propose dropping, with `vault.py idea drop <file> --reason
+2. Check the project's open ideas (`~/.claude/agent-vault/bin/vault ideas --project <id>`, same
+   `<id>`) and propose dropping, with `~/.claude/agent-vault/bin/vault idea drop <file> --reason
    "..."`, the ones this issue resolved, each
    drop confirmed with the approval prompt.
 3. Write the sorted lines under the retro's `## Follow-ups`.
@@ -207,10 +203,10 @@ decision and why (written to stand alone, without D numbers or AC
 references) before creating it, and ask the approval prompt for each.
 
 1. For every line of the sealed plan's `## Decisions` ending in " (lasting)",
-   run `vault.py decision add <id> "<title>" --decision "..." --why "..."
+   run `~/.claude/agent-vault/bin/vault decision add <id> "<title>" --decision "..." --why "..."
    --source "plan <repo>#<issue> D<k>"`, adding `--replaces <record>` when
    the line says `replaces [[<record>]]` (`<id>` as in Follow-ups). Check
-   `vault.py decisions --all --project <id>` first and skip one already
+   `~/.claude/agent-vault/bin/vault decisions --all --project <id>` first and skip one already
    recorded, so a resumed retro never records twice.
 2. For a decision that came up during implementation, run the same
    command with `--source "retro <repo>#<issue>"` and add its
@@ -219,8 +215,8 @@ references) before creating it, and ask the approval prompt for each.
 
 ## Seal
 
-1. `vault.py validate` must pass with no errors; fix whatever it flags.
-2. Run `vault.py closes-feature <repo> <issue>`: it says whether the merge
+1. `~/.claude/agent-vault/bin/vault validate` must pass with no errors; fix whatever it flags.
+2. Run `~/.claude/agent-vault/bin/vault closes-feature <repo> <issue>`: it says whether the merge
    (or, for a `pr: none` issue, sealing) will also close the issue's parent
    feature (every story of the feature's design filed, no other sub-issue
    open). Then present a plain-language summary of the retro in chat — what
@@ -236,7 +232,7 @@ references) before creating it, and ask the approval prompt for each.
    it verbatim and closes the issue as completed. Nothing is sealed if the
    close fails. If `closes-feature` named a feature, the summary names it
    too: approving the summary approves closing that feature.
-3. `vault.py seal retro <repo> <issue>`: for a `pr: none` issue it closes
+3. `~/.claude/agent-vault/bin/vault seal retro <repo> <issue>`: for a `pr: none` issue it closes
    the issue with the closing comment and seals, committing nothing, then
    closes a finished feature, as `closes-feature` said; send the push
    notification: the user starts the next issue. For any other issue with an
@@ -244,7 +240,7 @@ references) before creating it, and ask the approval prompt for each.
    commit in the retro, seals the retro and merges nothing; the impl note
    stays open until the merge, and the clone stays on the issue's branch. It
    prints the next step, which tells you the vault's approvals setting. With
-   `run vault.py merge` (approvals `none`), run the merge skill straight
+   `run ~/.claude/agent-vault/bin/vault merge` (approvals `none`), run the merge skill straight
    away, covered by the summary's approval. With `collect the approvals, then
    run` (approvals `required`), stop at ready: send the push notification, the
    user collects approvals and runs `merge #<issue>`. When the merge skill
@@ -253,7 +249,7 @@ references) before creating it, and ask the approval prompt for each.
 ## Follow-up retros
 
 Commits after a sealed retro (a fix after review, an approval round) need a
-retro of their own before they merge: `vault.py new retro <repo> <issue>`
+retro of their own before they merge: `~/.claude/agent-vault/bin/vault new retro <repo> <issue>`
 creates `<repo>-<issue>-retro-<n>.md` (n = 2, 3, ...) once the latest retro
 is sealed with a `commit:`, and refuses while it is open or once the impl
 note is sealed. Audit and sort follow-ups as above, judging only the commits
@@ -279,7 +275,7 @@ issue, and seals its impl note and retro together.
 
 ## Jira setup
 
-Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+Run `~/.claude/agent-vault/bin/vault tracker <repo>` first. If it prints `tracker: github`, ignore this
 section. If it prints `tracker: jira`, the issue is a Jira ticket and its
 identity is the ticket key (e.g. `PROJ-12`), and:
 
@@ -300,9 +296,9 @@ identity is the ticket key (e.g. `PROJ-12`), and:
   view`. A `pr: none` plan has no PR: before `seal retro`, post the retro's
   `## Closing comment` on the ticket through the connector (`seal retro` closes
   nothing and seals both notes). No feature is closed in a Jira setup.
-- A follow-up ticket: `vault.py issue create` with a placement flag (`--parent <KEY>`,
+- A follow-up ticket: `~/.claude/agent-vault/bin/vault issue create` with a placement flag (`--parent <KEY>`,
   `--standalone` or `--bug`) prints the fields; post exactly those, unchanged, through the
-  connector, run `vault.py issue record <repo> <KEY> --pending <file>`, and write the line
+  connector, run `~/.claude/agent-vault/bin/vault issue record <repo> <KEY> --pending <file>`, and write the line
   `- issue #<KEY> created` (or `- issue #<KEY> amended`), as with a number.
 - Never change a ticket's status (no transition, no "Done"): that is the
   user's; agent-vault only ever adds the planned label (plan-story) or posts a
@@ -315,7 +311,7 @@ identity is the ticket key (e.g. `PROJ-12`), and:
   printed and run it only after the approval prompt is answered Yes.
 - The impl note has no `pr:` yet.
 - A retro note for the issue already exists and is `status: sealed`.
-- `vault.py claudemd-lint` reports a failure that needs a decision rather
+- `~/.claude/agent-vault/bin/vault claudemd-lint` reports a failure that needs a decision rather
   than a fix (e.g. a covers glob matching nothing because the path it
   covered was intentionally removed elsewhere).
 - An audited section's disposition (confirmed, rewritten or removed) isn't
@@ -325,7 +321,7 @@ identity is the ticket key (e.g. `PROJ-12`), and:
 - The retro can't fit the 40-line body cap once every `##` heading of
   `CLAUDE.md`, `README.md` and the overview has its audit line — trimming
   reasons won't fix it, and it isn't this skill's call to raise the cap.
-- `vault.py validate` still fails after fixing what's fixable.
+- `~/.claude/agent-vault/bin/vault validate` still fails after fixing what's fixable.
 - For an open issue, the branch to check out isn't the impl note's
   `branch:` — the branch was deleted or never existed; don't improvise one.
 - `seal retro` refuses because the PR will no longer close the issue (or,
@@ -334,5 +330,5 @@ identity is the ticket key (e.g. `PROJ-12`), and:
   the issue by hand once the PR has merged. Never edit the description or
   close the issue yourself; act only after the approval prompt is answered Yes.
 - `seal retro` refuses over the PR's checks or head: report the reason; never
-  merge any other way. A merge GitHub or `vault.py merge` refuses is the merge
+  merge any other way. A merge GitHub or `~/.claude/agent-vault/bin/vault merge` refuses is the merge
   skill's to report.

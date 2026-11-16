@@ -1,34 +1,32 @@
 ---
 name: merge
-description: 'Merge the PR of a story once its retro has readied it: confirm the readied commit, ask for approval when run on its own, run `vault.py merge` (which merges with the merge style of the vault setup, and only with approvals in place if the setup requires them), then close a finished feature and bring the default branch up to date. Use for requests like "merge #9", "merge issue 9", or "merge agent-vault#9".'
+description: 'Merge the PR of a story once its retro has readied it: confirm the readied commit, ask for approval when run on its own, run `~/.claude/agent-vault/bin/vault merge` (which merges with the merge style of the vault setup, and only with approvals in place if the setup requires them), then close a finished feature and bring the default branch up to date. Use for requests like "merge #9", "merge issue 9", or "merge agent-vault#9".'
 ---
 
 # merge
 
 Runs last in the pipeline, after the retro. `seal retro` readied the PR and
 recorded its commit in the sealed retro; this skill merges exactly that commit
-through `vault.py merge`, which merges with the vault setup's style (squash
+through `~/.claude/agent-vault/bin/vault merge`, which merges with the vault setup's style (squash
 unless the setup says otherwise), seals the impl note, closes a finished
 feature, brings the default branch up to date and updates the install. There
 is no reviewer subagent here: the code was reviewed and the docs audited
 before the retro sealed.
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
-`vault.py`, so `vault.py merge <repo> <issue>` means "run that string
-followed by `merge <repo> <issue>`". `<repo>` is always the plain repo
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`. `<repo>` is always the plain repo
 name (e.g. `agent-vault`), never `owner/name`.
 
 ## Never
 
-- Merge only through `vault.py merge`: never `gh pr merge`, never GitHub's
+- Merge only through `~/.claude/agent-vault/bin/vault merge`: never `gh pr merge`, never GitHub's
   merge button. Never push to `main`.
 - Never update the PR's branch yourself (no merging or rebasing the default
   branch into it, no `gh pr update-branch`): that adds commits no retro
   covered, so it is the user's call.
 - Never edit a sealed note. If a plan, impl note or retro turns out to be
   wrong, stop and ask.
-- Never run `install.py` yourself: only `vault.py merge` (after a merge) and session start install, and only from `main`.
+- Never run `install.py` yourself: only `~/.claude/agent-vault/bin/vault merge` (after a merge) and session start install, and only from `main`.
 
 ## Approvals, pings and the closing summary
 
@@ -58,10 +56,8 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Resolve the repo and issue
 
-- Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
-  path; the exact `vault.py` invocation is the line under "CLI after
-  install" in `<vault>/CLAUDE.md`. A repo session's own startup context
-  doesn't carry either.
+- Vault: `~/.claude/agent-vault.json`'s `vault` field is the vault path. A repo
+  session's own startup context doesn't carry it.
 - Repo: `git config --get remote.origin.url` in the current clone gives a
   URL such as `git@github.com:owner/name.git` or `https://github.com/owner/name`;
   strip the host and any trailing `.git` to get `owner/name`. The part after
@@ -79,12 +75,12 @@ name (e.g. `agent-vault`), never `owner/name`.
    (the commit `seal retro` readied). With no sealed retro, or a plan with
    `pr: none` (which has no PR to merge), stop and say so: the retro comes
    first, and a `pr: none` story is closed by its retro.
-2. Run `vault.py closes-feature <repo> <issue>`: it says whether the merge
+2. Run `~/.claude/agent-vault/bin/vault closes-feature <repo> <issue>`: it says whether the merge
    will also close the issue's parent feature.
 3. Compare the PR's head (`gh pr view <pr> --json headRefOid`) with the
    retro's `commit:`. If the head moved past it, commits came after the
    retro: run a follow-up retro with the retro skill on just the commits
-   since that commit (it starts with `vault.py new retro <repo> <issue>`).
+   since that commit (it starts with `~/.claude/agent-vault/bin/vault new retro <repo> <issue>`).
    Then, with `approvals: required`, stop: the approvals given earlier covered
    the old head, so tell the user to collect approvals again and run `merge
    #<issue>`, and send the push notification for that. With `approvals: none`
@@ -97,7 +93,7 @@ name (e.g. `agent-vault`), never `owner/name`.
    summary — the PR (number and title), the readied commit, the merge style,
    whether the setup requires approvals, and the feature the merge closes (or
    none) — and ask the approval prompt. Only `Yes` continues.
-5. Run `vault.py merge <repo> <issue>`. It merges only the readied commit, so
+5. Run `~/.claude/agent-vault/bin/vault merge <repo> <issue>`. It merges only the readied commit, so
    it refuses, changing nothing, if anything moved or isn't ready: say what it
    refused over and what it says to do. Wait for checks that haven't finished
    (`gh pr checks <pr> --watch`) and run it again; when the checks haven't
@@ -113,7 +109,7 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Jira setup
 
-Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+Run `~/.claude/agent-vault/bin/vault tracker <repo>` first. If it prints `tracker: github`, ignore this
 section. If it prints `tracker: jira`, the issue is a Jira ticket and its
 identity is the ticket key (e.g. `PROJ-12`), and:
 
@@ -128,7 +124,7 @@ identity is the ticket key (e.g. `PROJ-12`), and:
 - Pass `--ticket <file>` to `seal retro` of a follow-up retro (`merge` itself takes no ticket file); those commands never read the
   ticket from GitHub, and a ticket edited since the plan was sealed only warns.
   Follow what the CLI prints.
-- `vault.py merge` judges the PR only and closes no feature in a Jira setup;
+- `~/.claude/agent-vault/bin/vault merge` judges the PR only and closes no feature in a Jira setup;
   the ticket's status stays where it is.
 - Never change a ticket's status (no transition, no "Done"): that is the
   user's; agent-vault only ever adds the planned label (plan-story) or posts a
@@ -137,11 +133,11 @@ identity is the ticket key (e.g. `PROJ-12`), and:
 ## Stop and ask if
 
 - The retro isn't sealed, has no `commit:`, or the impl note has no `pr:`.
-- `vault.py merge` refuses and the reason isn't one this skill's steps
+- `~/.claude/agent-vault/bin/vault merge` refuses and the reason isn't one this skill's steps
   already cover (a closed PR, a repo that disallows the merge style, a failed
   check, a missing approval): report it and never merge any other way.
 - The PR's head moved and the story needs a follow-up retro, but the user
   hasn't asked for one.
-- `vault.py merge` prints a feature-close warning: everything else is done;
+- `~/.claude/agent-vault/bin/vault merge` prints a feature-close warning: everything else is done;
   report the command it printed and run it only after the approval prompt is
   answered Yes.

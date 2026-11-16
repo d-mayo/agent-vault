@@ -52,6 +52,9 @@ STAGING = "agent-vault.staging"                 # under ~/.claude/, never under 
 REPLACE_TRIES, REPLACE_PAUSE = 6, 0.25          # about 1.5 seconds in all
 
 
+CLI = "~/.claude/agent-vault/bin/vault"      # the same text on every machine (D1 of #44); the shell expands ~
+
+
 def python_cmd() -> str:
     return f'"{Path(sys.executable).as_posix()}"'
 
@@ -293,7 +296,8 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
                       "working if it's deleted. Prefer rerunning with your system Python.")
     claude = home / ".claude"
     install_dir = claude / "agent-vault"
-    cli = f'{python_cmd()} "{(install_dir / "vault.py").as_posix()}"'
+    cli = CLI
+    direct = f'{python_cmd()} "{(install_dir / "vault.py").as_posix()}"'
     config_path = claude / "agent-vault.json"
     managed_before = read_json(config_path).get("managed_allow", [])
     allow = [f"Bash({cli}:*)"]
@@ -301,6 +305,9 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
     migrate_phone_log(vault, report)
     clear_staging(claude / STAGING)
     copy_tree(REPO / "agent_vault", install_dir, claude / STAGING / "_code")
+    launcher = install_dir / "bin" / "vault"
+    if launcher.is_file():
+        launcher.chmod(launcher.stat().st_mode | 0o111)
     report.append(f"installed code to {install_dir}")
     install_skills(claude, report)
     clear_staging(claude / STAGING)
@@ -329,6 +336,8 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
     migrate_v1(vault, report)
     set_git_hooks(repo, report)
     report.append(f"check: {cli} status")
+    if sys.platform == "win32":      # the launcher runs only in Bash (D5 of #44); PowerShell and cmd use Python directly
+        report.append(f"check (PowerShell or cmd): {direct} status")
     return report
 
 

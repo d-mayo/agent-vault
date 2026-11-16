@@ -1,7 +1,7 @@
 """The one way to create, move, and check notes in Agent/.
 
-Usage: <CLI> <command>, where <CLI> is the exact command in the vault's
-CLAUDE.md (the installer's Python plus this file). Commands:
+Usage: ~/.claude/agent-vault/bin/vault <command> (the launcher the installer writes, which runs
+the recorded Python on this file; lib.CLI). Commands:
   new project <id> [--repo owner/name ...] [--purpose "..."]
   new plan <repo> <issue>
   new retro <repo> <issue>
@@ -847,8 +847,8 @@ def cmd_seal_retro(args) -> None:
         approvals = lib.read_setup()["approvals"]
         print(f"sealed {lib.rel(retro_path)}; set audited: {today} on {lib.rel(project_path)}{bumped_text}; "
               f"PR #{pr} is ready at {commit}")
-        print(("next: collect the approvals, then run `vault.py merge " if approvals == "required"
-               else "next: run `vault.py merge ") + f"{args.repo} {args.issue}`")
+        print((f"next: collect the approvals, then run `{lib.CLI} merge " if approvals == "required"
+               else f"next: run `{lib.CLI} merge ") + f"{args.repo} {args.issue}`")
         return
     print(f"sealed {lib.rel(impl_path)} and {lib.rel(retro_path)}; set audited: {today} "
           f"on {lib.rel(project_path)}{bumped_text}"
@@ -972,7 +972,7 @@ def close_finished_feature(index: lib.Index, repo: str, slug: str, issue: str, i
     except Exception as e:
         print(f"warning: couldn't check whether the feature is finished: "
               f"{(getattr(e, 'stderr', '') or e)}\n"
-              f"  run `vault.py closes-feature {repo} {issue}` to see whether it should be closed",
+              f"  run `{lib.CLI} closes-feature {repo} {issue}` to see whether it should be closed",
               file=sys.stderr)
         return
     if not feature:
@@ -1153,7 +1153,7 @@ def branch_type(requested, is_bug: bool, setup: dict | None = None) -> str:
     if requested is None:
         return feature
     if requested == "hotfix":
-        die("vault.py branch never creates a hotfix branch (d81)")
+        die(f"{lib.CLI} branch never creates a hotfix branch (d81)")
     if requested == bug or (requested == "fix" and feature != "fix"):
         die(f"`{requested}/` branches are only for an issue labelled `{lib.BUG_LABEL[0]}`; "
             f"if this issue is a bug, add the label on GitHub first")
@@ -2496,7 +2496,7 @@ def cmd_tracker(args) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="vault.py", description=__doc__,
+    ap = argparse.ArgumentParser(prog=lib.CLI, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="<command>")
 

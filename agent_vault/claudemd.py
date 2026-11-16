@@ -172,7 +172,10 @@ def resolve_command(repo: Path, cmd: str) -> bool:
     return shutil.which(first) is not None
 
 
-def check_commands(repo: Path, sections: list, lines: list) -> list:
+def check_commands(repo: Path, sections: list, lines: list, warnings: list | None = None) -> list:
+    """Errors for commands that don't resolve. A command under the home folder (`~/...`, such as
+    the launcher the installer writes) is expanded; when its file is missing on this machine it
+    is a warning appended to `warnings`, not an error (D2 of #44)."""
     errors = []
     commands_secs = [s for s in sections if s.name == "Commands"]
     if not commands_secs:
@@ -189,6 +192,12 @@ def check_commands(repo: Path, sections: list, lines: list) -> list:
                 seen.add(tok)
                 first = tok.split()[0] if tok.split() else ""
                 if not first or "<" in first or ">" in first:
+                    continue
+                if first.startswith("~/"):
+                    home_file = Path(os.path.expanduser(first))
+                    if not home_file.is_file() and warnings is not None:
+                        warnings.append(f"line {lineno}: command '{tok}': {home_file.as_posix()} "
+                                        "does not exist on this machine (run install.py)")
                     continue
                 if not resolve_command(repo, tok):
                     errors.append(f"line {lineno}: command '{tok}' does not resolve")
@@ -371,7 +380,9 @@ def lint(repo: Path) -> LintResult:
     errors += [f"CLAUDE.md: {m}" for m in malformed]
     lines = lib.blank_code_blocks(text)
     errors += [f"CLAUDE.md: {e}" for e in check_paths(repo, sections, lines)]
-    errors += [f"CLAUDE.md: {e}" for e in check_commands(repo, sections, lines)]
+    cmd_warnings: list = []
+    errors += [f"CLAUDE.md: {e}" for e in check_commands(repo, sections, lines, cmd_warnings)]
+    warnings += [f"CLAUDE.md: {w}" for w in cmd_warnings]
     errors += [f"CLAUDE.md: {e}" for e in check_lint_line(sections, lines)]
     errors += [f"CLAUDE.md: {e}" for e in check_globs(repo, sections)]
     errors += [f"CLAUDE.md: {e}" for e in check_cap(text.splitlines())]

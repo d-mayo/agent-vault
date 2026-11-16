@@ -9,17 +9,15 @@ Turns a sealed plan into commits, review findings and an open pull request,
 recording deviations and findings in the issue's impl note as it goes. The
 reviewer's brief and findings format are in `reviewer.md`, next to this file.
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
-`vault.py`, so `vault.py preflight <repo> <issue>` means "run that string
-followed by `preflight <repo> <issue>`". `<repo>` is always the plain repo
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`. `<repo>` is always the plain repo
 name (e.g. `agent-vault`), never `owner/name`.
 
 ## Never
 
 - Never merge a PR, and never push to `main`.
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
-- Never run `install.py` yourself: only `vault.py merge` (after a merge) and session start install, and only from `main`.
+- Never run `install.py` yourself: only `~/.claude/agent-vault/bin/vault merge` (after a merge) and session start install, and only from `main`.
 
 ## Approvals, pings and the closing summary
 
@@ -61,10 +59,8 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Resolve the repo and issue
 
-- Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
-  path; the exact `vault.py` invocation is the line under "CLI after
-  install" in `<vault>/CLAUDE.md`. A repo session's own startup context
-  doesn't carry either.
+- Vault: `~/.claude/agent-vault.json`'s `vault` field is the vault path. A repo
+  session's own startup context doesn't carry it.
 - Repo: `git config --get remote.origin.url` in the current clone gives a
   URL such as `git@github.com:owner/name.git` or `https://github.com/owner/name`;
   strip the host and any trailing `.git` to get `owner/name`. The part after
@@ -79,7 +75,7 @@ name (e.g. `agent-vault`), never `owner/name`.
 
 ## Start
 
-1. Run `vault.py preflight <repo> <issue>`. If it fails — no sealed plan, the
+1. Run `~/.claude/agent-vault/bin/vault preflight <repo> <issue>`. If it fails — no sealed plan, the
    issue is closed, or the issue changed since the plan was sealed — stop and
    report the reason; don't improvise a plan of your own. If it passes but
    prints warnings (`base_sha` far behind, or commits since sealing touching
@@ -92,7 +88,7 @@ name (e.g. `agent-vault`), never `owner/name`.
    (`git branch --list` and `git ls-remote --heads origin`) — a branch can
    exist without being checked out, or only on GitHub in a fresh clone.
    - None found: make sure the working tree is clean, then run
-     `vault.py branch <repo> <issue> [--type <type>] [--slug <slug>]`.
+     `~/.claude/agent-vault/bin/vault branch <repo> <issue> [--type <type>] [--slug <slug>]`.
      The type comes from the issue's `bug` label: a bug gets `fix/`, so
      leave `--type` out; pass `--type` only for a non-bug whose plan
      clearly calls for something other than `feat`, and never `fix` or
@@ -143,7 +139,7 @@ Work through the plan's `## Steps` in order. For each step (numbered `<s>`):
 
 Once every step is committed:
 
-1. Run `vault.py lint` (`claudemd-lint`, then the repo's `Lint:` command). If
+1. Run `~/.claude/agent-vault/bin/vault lint` (`claudemd-lint`, then the repo's `Lint:` command). If
    it fails, fix it first (a lint failure in its own commit), and record what
    broke under `## Discoveries` (or as a deviation, if the fix touched files
    beyond the step that broke it). Request no review while it fails.
@@ -154,7 +150,7 @@ Once every step is committed:
    line under `## Gotchas` doesn't count as failing (record it by name under
    `## Verification`); any other failure does. If the full check fails, the review's findings are
    discarded: not recorded, and the round doesn't count; fix the failure
-   (record it as in step 1), then run `vault.py lint` and start both again.
+   (record it as in step 1), then run `~/.claude/agent-vault/bin/vault lint` and start both again.
    Once both have finished, record the review under `## Verification` as
    `- Review <k>: R<n>-R<n2> (at <sha>)` or `- Review <k>: no findings (at <sha>)`
    (`<sha>` is the tip it reviewed), and each finding under `## Review findings`,
@@ -162,7 +158,7 @@ Once every step is committed:
    `- R<n> (major|minor): Review <k>: <finding> → fixed in <sha>`,
    `→ won't fix: <reason>`, or, for a minor one you're leaving, `→ left open`.
 3. Only now fix every `major` finding, each fix its own commit (no amending),
-   then run `vault.py lint` and start the `Full check:` and a re-review
+   then run `~/.claude/agent-vault/bin/vault lint` and start the `Full check:` and a re-review
    (`Review <k+1>`) at the same time. The re-review covers only the commits
    since the last review: `git diff <reviewed>..HEAD`, where `<reviewed>` is
    the `(at <sha>)` of the last `Review <k>:` line, with that review's major
@@ -183,7 +179,7 @@ Once every step is committed:
    scratchpad directory); an untracked file inside the clone would make the
    next command's clean-tree check fail. End it with a "Left open" list of
    the minor findings still open, for the user to decide. Open the PR:
-   `vault.py open-pr <repo> <issue> --body-file <file>`. `Closes #<issue>` is
+   `~/.claude/agent-vault/bin/vault open-pr <repo> <issue> --body-file <file>`. `Closes #<issue>` is
    added automatically. Then send the push notification: the user reviews the
    PR and runs `retro #<issue>` next.
 7. Leave the impl note `status: open`; it's sealed later, by the retro.
@@ -199,13 +195,13 @@ itself. Nobody is here to answer, so this route asks no one.
    stop there instead.
 2. At a stop-and-ask, return the question as your final report and stop,
    instead of asking the user. The caller answers by resuming you.
-3. Once every step is committed, run `vault.py lint` (fix a failure as Finish
+3. Once every step is committed, run `~/.claude/agent-vault/bin/vault lint` (fix a failure as Finish
    step 1 does) and return a report to the caller: one line per step with its
    commit, the deviations recorded, and anything for `## Discoveries`. Start
    no review, open no PR, write no `Review` lines and send no push
    notification. The closing three-bullet rule doesn't apply to this report.
 4. Resumed with review findings or a failure (a full-check or lint failure),
-   fix each in its own commit, run `vault.py lint` and report the shas.
+   fix each in its own commit, run `~/.claude/agent-vault/bin/vault lint` and report the shas.
 
 ## No-PR plan
 
@@ -213,7 +209,7 @@ A plan with `pr: none` changes no repo file (`seal plan` guarantees every
 step's `Files:` is `none`), so there is no branch, no commit, no diff
 review and no pull request. `branch` and `open-pr` refuse such an issue.
 
-1. Run `vault.py preflight <repo> <issue>`, as in **Start**, and read the
+1. Run `~/.claude/agent-vault/bin/vault preflight <repo> <issue>`, as in **Start**, and read the
    plan and impl note.
 2. Do each step's `Do:` in order (vault notes, GitHub work, anything the
    plan describes), keeping to the plan's "Stop and ask if" lines. After
@@ -244,7 +240,7 @@ Asked to act on review comments for an issue that already has an open PR
    in its own commit, or decline it with a reason. If one comment's fix
    touches several files or changes behaviour, tell the reviewer which
    commit to look at first; it gets no extra review.
-3. Run `vault.py lint`, then start the `Full check:` and the review at the
+3. Run `~/.claude/agent-vault/bin/vault lint`, then start the `Full check:` and the review at the
    same time, covering all the fixes: `git diff <tip>..HEAD`, where `<tip>`
    is the branch tip before the first fix, with the request texts supplied
    (see `reviewer.md`). The same rules as **Finish** steps 1-3 apply: a review
@@ -265,7 +261,7 @@ Asked to act on review comments for an issue that already has an open PR
 
 ## Jira setup
 
-Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+Run `~/.claude/agent-vault/bin/vault tracker <repo>` first. If it prints `tracker: github`, ignore this
 section. If it prints `tracker: jira`, the issue is a Jira ticket and its
 identity is the ticket key (e.g. `PROJ-12`), and:
 
@@ -290,7 +286,7 @@ identity is the ticket key (e.g. `PROJ-12`), and:
 
 ## Stop and ask if
 
-- `vault.py preflight` fails, or passes with a warning that means the plan
+- `~/.claude/agent-vault/bin/vault preflight` fails, or passes with a warning that means the plan
   now rests on something no longer true.
 - Any "Stop and ask if" line in the plan applies, or a step turns out to
   rest on something that's no longer true.

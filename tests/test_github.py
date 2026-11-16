@@ -829,14 +829,14 @@ class SealRetroTest(GhCase):  # T1, T2, T3 -> AC1, AC2, AC3: seal retro readies 
     def test_prints_the_next_step_for_the_setups_approvals(self):       # T1 -> AC1
         self.filled_prep()
         out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
-        self.assertIn("run `vault.py merge widget 7`", out)
+        self.assertIn("run `~/.claude/agent-vault/bin/vault merge widget 7`", out)
         self.assertNotIn("collect", out)
 
     def test_prints_collect_approvals_when_the_setup_requires_them(self):       # T1 -> AC1
         self.filled_prep()
         self.ok(self.cli("setup", "--tracker", "github", "--approvals", "required"))
         out = self.ok(self.cli("seal", "retro", "widget", "7")).stdout
-        self.assertIn("collect the approvals, then run `vault.py merge widget 7`", out)
+        self.assertIn("collect the approvals, then run `~/.claude/agent-vault/bin/vault merge widget 7`", out)
 
     def test_ready_closes_no_feature_installs_nothing_and_does_not_sync(self):       # T1 -> AC1
         self.filled_prep()

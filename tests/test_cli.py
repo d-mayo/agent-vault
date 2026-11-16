@@ -1327,5 +1327,21 @@ class SetupCommandTest(CliCase):
         self.assertIn("\n  setup --tracker github|jira", vault.__doc__)
 
 
+class NoHardCodedCliTest(unittest.TestCase):
+    def test_no_message_names_vault_py_as_a_command(self):  # T3 -> AC3
+        import ast
+        found = []
+        for path in sorted((REPO / "agent_vault").glob("*.py")) + sorted((REPO / "agent_vault" / "hooks").glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            docs = {id(n.body[0].value) for n in ast.walk(tree)
+                    if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef))
+                    and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+                    if re.search(r"vault\.py [a-z]", node.value):
+                        found.append(f"{path.name}:{node.lineno}: {node.value[:60]}")
+        self.assertEqual(found, [])
+
+
 if __name__ == "__main__":
     unittest.main()

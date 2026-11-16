@@ -21,7 +21,7 @@ The installer is safe to rerun after every `git pull`. It:
 - merges every hook and the permission to run the CLI into `~/.claude/settings.json`,
   only ever replacing entries it created, backing the file up to `.bak` first, and removes
   the entries older versions put in `<vault>/.claude/settings.json`;
-- writes `<vault>/CLAUDE.md`;
+- writes `<vault>/CLAUDE.md`, which names the CLI as `~/.claude/agent-vault/bin/vault`: the same text on every machine, a launcher that runs the recorded Python on the installed `vault.py` (in Bash; on Windows the installer also prints a PowerShell form of its closing check);
 - deletes the v1 scripts from `<vault>/Agent/_system/` if they're still there (the phone log is kept);
 - turns on this repo's git hooks (`agent_vault/githooks/`); other repos get the installed copy from `repo-init`.
 
@@ -29,7 +29,7 @@ Hooks run with the same Python that ran the installer, so if you switch Python
 installs, rerun it.
 
 After that first run you don't have to rerun it by hand: the installed copy keeps itself current
-with `main`. `vault.py merge`, after it merges a PR in the clone you installed from, installs what
+with `main`. `~/.claude/agent-vault/bin/vault merge`, after it merges a PR in the clone you installed from, installs what
 `main` now holds, and every session start checks whether that clone's local `main` has a newer commit
 than the installed one and installs it if so. Both install only `main`'s committed tree (never a
 branch or uncommitted changes), look at local refs only (a `git pull` brings in a merge made on
@@ -45,7 +45,7 @@ open Claude sessions.
 **A history of `Agent/`.** Every note write is atomic (a hidden temporary file renamed over the note),
 and the first SessionStart of a vault or repo session snapshots `Agent/` (when something changed
 since the last snapshot) into a git repository kept beside the config,
-`~/.claude/agent-vault-history.git`, never in the vault. `vault.py restore <note> [--snapshot <id>]`
+`~/.claude/agent-vault-history.git`, never in the vault. `~/.claude/agent-vault/bin/vault restore <note> [--snapshot <id>]`
 puts a note back byte for byte from the newest snapshot or a named one, and `restore <note> --list`
 shows the snapshots in which it changed. The Stop hook's message about a note changed through the
 shell names the snapshot taken at the session's start and the exact `restore` command. The history
@@ -73,7 +73,7 @@ ticket file, JSON with `key`, `title`, `body`, `type`, `labels` and `parent`, ou
 vault, and hands it to `seal plan`, `preflight`, `branch`, `open-pr`, `seal retro` and `stage` with
 `--ticket <file>`. The plan records a hash of the ticket's title and body instead of GitHub's edit time (a
 changed ticket only warns), a story counts as merged when a PR carrying its key has, and nothing changes
-a ticket's status. `vault.py tracker <repo>` prints the tracker and, for Jira, the connector, the
+a ticket's status. `~/.claude/agent-vault/bin/vault tracker <repo>` prints the tracker and, for Jira, the connector, the
 project's key, the ticket file's fields and the issue types, so a skill learns them without reading the setup note.
 `stage` also works without `--ticket` in a Jira setup: it answers from the vault's notes, the ticket map and GitHub's
 PRs alone (`feature` with how many of its design's stories are filed and done, `done`, `in review`, `in progress`,
@@ -86,14 +86,14 @@ Filing works the same way in reverse. In a Jira setup `issue create` (with `--fe
 `--standalone` or `--bug`) and `idea promote` run every body and placement check but post nothing: each
 writes a pending file, `Agent/.pending/<repo>-<n>.json`, with the exact fields to post (project, type,
 summary, description, parent, labels) and prints them. The skill posts those unchanged through the
-connector and runs `vault.py issue record <repo> <KEY> --pending <file>`, which records the new key in the
+connector and runs `~/.claude/agent-vault/bin/vault issue record <repo> <KEY> --pending <file>`, which records the new key in the
 ticket map (`Agent/.tickets.json`: what each ticket is, a design's feature or story, standalone or a bug),
 marks a promoted idea promoted to the key and deletes the pending file. `design stories` and `features`
 read that map and GitHub's merged PRs, never a ticket's status.
 
 After `install.py`, start Claude Code in the vault and say "set up this vault" (the `setup` skill):
-it interviews you on each value, shows exactly what it will write, and runs `vault.py setup` only
-after you say yes. `vault.py setup` refuses an incomplete or contradictory setup, and refuses to
+it interviews you on each value, shows exactly what it will write, and runs `~/.claude/agent-vault/bin/vault setup` only
+after you say yes. `~/.claude/agent-vault/bin/vault setup` refuses an incomplete or contradictory setup, and refuses to
 overwrite an existing note without `--replace`; `validate` checks the note and `schema` lists its
 fields. `merge`, `seal retro`'s next step and `repo-init` read it. `repo-init` sets the setup's merge
 style (allowing only that style) where repo settings are `managed`, and only checks that the repo
@@ -105,19 +105,19 @@ Jira setup it creates no GitHub labels and writes no issue template.
 - Never commit to `main`. Use a branch named by the setup's branch pattern (default
   `<type>/<issue>-<slug>`, the issue a number or, in a Jira setup, the ticket key), for example
   `feat/12-note-schema`, and open a PR. Only the owner merges, with **Squash and merge**;
-  the one exception is `vault.py merge` (the `merge` skill), which merges the PR itself, with the
+  the one exception is `~/.claude/agent-vault/bin/vault merge` (the `merge` skill), which merges the PR itself, with the
   merge style of the vault's setup, once the owner (in a `handoff` run, the orchestrating session)
-  has approved. `vault.py seal retro` only readies the PR: it pushes the `verified:` bump and records
+  has approved. `~/.claude/agent-vault/bin/vault seal retro` only readies the PR: it pushes the `verified:` bump and records
   the commit it readied, and `merge` then merges exactly that commit, once its checks have passed and,
   where the setup requires approvals, the PR is approved. The merge also closes the issue's parent
   feature when every story of the feature's design is filed and no other sub-issue is open
-  (`vault.py closes-feature` shows whether it will). Commits made after a retro need a follow-up
-  retro (`vault.py new retro` again) before they merge.
+  (`~/.claude/agent-vault/bin/vault closes-feature` shows whether it will). Commits made after a retro need a follow-up
+  retro (`~/.claude/agent-vault/bin/vault new retro` again) before they merge.
 - Commit messages follow `<type>(<scope>): <subject>`.
 - Two local guards enforce this without depending on GitHub settings: the
   `pre-push` hook (`agent_vault/githooks/`, which also runs the lint), and a Claude Code hook that blocks pushes to `main`
   and `--no-verify` in every session. The same hook blocks `gh issue create` in registered
-  repos: issues go through `vault.py issue create` with a placement flag (`--parent`, `--standalone` or `--bug`; the `issue` skill), which checks the body
+  repos: issues go through `~/.claude/agent-vault/bin/vault issue create` with a placement flag (`--parent`, `--standalone` or `--bug`; the `issue` skill), which checks the body
   against one template. A design's stories are filed under its feature issue (`issue create --feature`,
   then `--parent`), so GitHub shows them as its sub-issues.
 
@@ -131,7 +131,7 @@ Windows pip's `Scripts` folder (for the Microsoft Store Python,
 
 ```bash
 ruff check .                                  # the lint alone
-python ~/.claude/agent-vault/vault.py lint    # claudemd-lint, then the repo's Lint: command
+~/.claude/agent-vault/bin/vault lint    # claudemd-lint, then the repo's Lint: command
 python -m unittest discover -s tests -t .     # the tests, classes in parallel; ruff on PATH too (AGENT_VAULT_TESTS_SERIAL=1: one process)
 ```
 
@@ -139,5 +139,5 @@ CI (`.github/workflows/test.yml`) runs the lint and the tests on Windows and mac
 and 3.12 for every pull request and push to `main`.
 
 The pre-push hook refuses a branch whose name doesn't follow the setup's branch pattern
-(`vault.py check-branch`), runs `vault.py lint` before any push that creates or updates a branch, and
+(`~/.claude/agent-vault/bin/vault check-branch`), runs `~/.claude/agent-vault/bin/vault lint` before any push that creates or updates a branch, and
 implement-story runs it before every review.

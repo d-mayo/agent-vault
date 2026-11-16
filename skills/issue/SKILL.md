@@ -10,10 +10,8 @@ body as the only requirements, so every issue has the same body shape; the
 CLI refuses a body that doesn't match it, and a guard blocks raw
 `gh issue create` in registered repos.
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
-`vault.py`, so `vault.py schema` means "run that string followed by
-`schema`". `<repo>` is always the plain repo name (e.g. `agent-vault`),
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`. `<repo>` is always the plain repo name (e.g. `agent-vault`),
 never `owner/name`.
 
 ## Never
@@ -53,11 +51,10 @@ never `owner/name`.
   one short sentence: the facts the user most needs to know, with nothing after
   them.
 
-## Resolve the vault, CLI and repo
+## Resolve the vault and repo
 
-- Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
-  path; the exact `vault.py` invocation is the line under "CLI after
-  install" in `<vault>/CLAUDE.md`.
+- Vault: `~/.claude/agent-vault.json`'s `vault` field is the vault path. A repo
+  session's own startup context doesn't carry it.
 - Repo: for an idea, the repo of its `project:` (the project note's
   `repos:`; ask if the project has several, or the idea has none). Otherwise
   the current clone's `origin` (`git config --get remote.origin.url`, with
@@ -68,7 +65,7 @@ never `owner/name`.
 
 Before drafting, decide where the issue belongs.
 
-1. Run `vault.py features --project <id>` (the repo's project) and read the
+1. Run `~/.claude/agent-vault/bin/vault features --project <id>` (the repo's project) and read the
    repo's open issues (`gh issue list --state open --repo <owner/name>`).
 2. Suggest the feature the issue plainly belongs to (its open `<repo>#<n>`),
    or standalone, and say why. Ask the user whether it is a bug, in prose.
@@ -80,7 +77,7 @@ Before drafting, decide where the issue belongs.
 
 ## Draft
 
-1. Read the body template from `vault.py schema` (the "Issue body" line):
+1. Read the body template from `~/.claude/agent-vault/bin/vault schema` (the "Issue body" line):
    the `##` sections, in order, none empty. Write `None` under a section
    with nothing to say.
 2. Read what the issue is about: the idea note (`Agent/Ideas/<file>.md`) or
@@ -105,7 +102,7 @@ Before drafting, decide where the issue belongs.
 
 1. Write the body to a temporary file outside the vault and the working
    tree (your scratchpad directory, for example).
-2. Run `vault.py issue create <repo> --title "<title>" --body-file <file>
+2. Run `~/.claude/agent-vault/bin/vault issue create <repo> --title "<title>" --body-file <file>
    <placement>`, where `<placement>` is the approved flag (`--parent <ref>`,
    `--standalone` or `--bug`), adding `--idea <file>` when the issue comes from an idea (the CLI then
    marks the idea promoted and logs it). The idea must be open; if it
@@ -118,14 +115,14 @@ Before drafting, decide where the issue belongs.
 
 ## Jira setup
 
-Run `vault.py tracker <repo>` first. If it prints `tracker: jira`, the CLI posts
+Run `~/.claude/agent-vault/bin/vault tracker <repo>` first. If it prints `tracker: jira`, the CLI posts
 nothing; it hands you the fields to post:
 
-- Run `vault.py issue create` with the approved placement flag (`--parent <KEY>`,
+- Run `~/.claude/agent-vault/bin/vault issue create` with the approved placement flag (`--parent <KEY>`,
   `--standalone` or `--bug`, a parent being a ticket key) exactly as at home. It checks
   the body, writes a pending file and prints its path and the fields to post.
-- Post exactly the printed fields, unchanged, through the connector `vault.py tracker`
-  names, then run `vault.py issue record <repo> <KEY> --pending <file>` with the key the
+- Post exactly the printed fields, unchanged, through the connector `~/.claude/agent-vault/bin/vault tracker`
+  names, then run `~/.claude/agent-vault/bin/vault issue record <repo> <KEY> --pending <file>` with the key the
   connector returned. Never post anything that wasn't printed.
 - Never change a ticket's status; that is the user's.
 

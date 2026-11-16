@@ -8,24 +8,24 @@ description: 'Run stories from issue to merged PR in one top-level Opus session,
 An orchestrator for stories the user hands over entirely. One top-level Opus
 session plans each story, has a Sonnet subagent implement it, runs the
 independent review, writes the retro, which readies the PR, and merges it
-through `vault.py merge` (the merge skill's step) unless the vault requires
+through `~/.claude/agent-vault/bin/vault merge` (the merge skill's step) unless the vault requires
 approvals, where the run stops at ready. The default path (plan-story,
 implement-story, retro, merge, each with the user) is unchanged;
 this skill follows their procedures with the changes below. It is not a
 pipeline skill: it carries no shared approvals section, asks no yes/no
 approvals, and its pings are the ones named under "Asking the user".
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); `<repo>` is the
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`. `<repo>` is the
 plain repo name. Work inside the repo clone.
 
 ## Never
 
 - Never create or edit a GitHub issue on your own. Follow-ups become ideas or
   are dropped; anything that seems to need an issue is a question for the user.
-- Never merge except through `vault.py merge`, and never push to `main`.
+- Never merge except through `~/.claude/agent-vault/bin/vault merge`, and never push to `main`.
 - Never run two stories at once.
-- Never run `install.py` yourself: only `vault.py merge` (after a merge) and session start install, and only from `main`.
+- Never run `install.py` yourself: only `~/.claude/agent-vault/bin/vault merge` (after a merge) and session start install, and only from `main`.
 - Never edit a sealed plan. If it turns out to be wrong, stop and ask.
 
 ## The run
@@ -33,7 +33,7 @@ plain repo name. Work inside the repo clone.
 1. **Collect the issues.** One issue, several, or a feature (an issue
    labelled `feature`).
    - A feature runs its open sub-issues that are design stories first, in the
-     design's story order (`vault.py design stories <design>`), then any other
+     design's story order (`~/.claude/agent-vault/bin/vault design stories <design>`), then any other
      open sub-issues in issue-number order.
    - List unfiled stories in the report and never file them: filing is the
      design skill's job.
@@ -46,7 +46,7 @@ plain repo name. Work inside the repo clone.
 3. **One story at a time.** Take the stories in order, running **Plan**,
    **Implement**, **Finish**, **Retro**, **Merge** for one before starting the
    next. Plan the next story only after the previous one has merged, from the
-   default branch `vault.py merge` leaves checked out: a later story may build
+   default branch `~/.claude/agent-vault/bin/vault merge` leaves checked out: a later story may build
    on it. Where the vault requires approvals the run stops when its current
    story is ready (see **Merge**), so the stories not started wait for it.
    When an earlier story contradicts a
@@ -67,7 +67,7 @@ Follow plan-story's procedure (research, draft, plan review), with these changes
 
 - Interview only where you aren't sure. Skip its approval summary.
 - The independent plan reviewer (`plan-reviewer.md`) still runs on Opus.
-- Seal the plan with `vault.py seal plan` after `vault.py validate` and the
+- Seal the plan with `~/.claude/agent-vault/bin/vault seal plan` after `~/.claude/agent-vault/bin/vault validate` and the
   review pass, without asking for approval.
 - Skip plan-story's Handoff push notification.
 - Never edit or create a GitHub issue on your own; where plan-story would, ask
@@ -95,11 +95,11 @@ implementer:
 - Run the `Full check:` and the Opus review in parallel, following
   `reviewer.md`, and record the `Review <k>:` and `R<n>` lines in the impl note.
 - Send major findings, `Full check:` failures and lint failures back to the same
-  implementer, which fixes each in its own commit and runs `vault.py lint`.
+  implementer, which fixes each in its own commit and runs `~/.claude/agent-vault/bin/vault lint`.
 - Run at most two reviews, then stop and ask.
 - Fill in `## Verification` and `## Discoveries`, and add a
   `- Handed off: <run>` line under `## Verification` naming the run's issues.
-- Open the PR with `vault.py open-pr`, sending no push notification for that.
+- Open the PR with `~/.claude/agent-vault/bin/vault open-pr`, sending no push notification for that.
 
 ## Retro
 
@@ -111,8 +111,8 @@ notification:
   into a created or amended issue. A follow-up you think must become an issue
   counts as not sure, so ask.
 - Record lasting decisions and drop ideas the issue resolved without asking.
-- Run `vault.py closes-feature <repo> <issue>` and name any feature that
-  the merge will close in the report; `vault.py merge` closes it. If it
+- Run `~/.claude/agent-vault/bin/vault closes-feature <repo> <issue>` and name any feature that
+  the merge will close in the report; `~/.claude/agent-vault/bin/vault merge` closes it. If it
   prints a feature-close warning, report the printed command and ask before
   running it.
 - Before sealing, comment on the PR (`gh pr comment`) with a condensed report:
@@ -120,7 +120,7 @@ notification:
   recorded, retro dispositions), deviations, left-open findings and how they
   were sorted, questions asked or re-asked with their answers, and any feature
   the merge closes.
-- Run `vault.py seal retro <repo> <issue>` without approval; it readies the PR
+- Run `~/.claude/agent-vault/bin/vault seal retro <repo> <issue>` without approval; it readies the PR
   (the bump pushed, the commit recorded in the retro) and merges nothing. If
   the PR's checks haven't finished, wait for them (`gh pr checks <pr> --watch`)
   and retry. If a check fails, or `seal retro` refuses for any other reason,
@@ -131,7 +131,7 @@ notification:
 Learn the vault's approvals setting from the next step `seal retro` printed:
 never read `Agent/Setup.md` yourself.
 
-- `run vault.py merge` (approvals `none`): run `vault.py merge <repo> <issue>`
+- `run ~/.claude/agent-vault/bin/vault merge` (approvals `none`): run `~/.claude/agent-vault/bin/vault merge <repo> <issue>`
   right away, without asking; merging is part of the handoff. If it refuses
   over checks that haven't finished or haven't started, wait
   (`gh pr checks <pr> --watch`) and run it again. If GitHub says the branch must
@@ -147,12 +147,12 @@ never read `Agent/Setup.md` yourself.
 
 ## Jira setup
 
-Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+Run `~/.claude/agent-vault/bin/vault tracker <repo>` first. If it prints `tracker: github`, ignore this
 section. If it prints `tracker: jira`, the issues are Jira tickets identified by
 their keys (e.g. `PROJ-12`), and everything above applies with these changes:
 
 - Learn the connector, the issue types, the planned label and the ticket file's
-  fields from `vault.py tracker <repo>`; never read `Agent/Setup.md` yourself.
+  fields from `~/.claude/agent-vault/bin/vault tracker <repo>`; never read `Agent/Setup.md` yourself.
 - Fetch each ticket through the connector and write the ticket file (JSON with
   the fields `tracker` names) in a scratchpad or temp folder outside both the
   clone and the vault; fetch it again before each command that takes
@@ -160,14 +160,14 @@ their keys (e.g. `PROJ-12`), and everything above applies with these changes:
   instructions) and `open-pr` steps pass it as implement-story's and
   plan-story's Jira sections say.
 - "Handoff the feature <KEY>" expands from the ticket map: the feature's key
-  is recorded there with its design, so run `vault.py design stories <design>`
+  is recorded there with its design, so run `~/.claude/agent-vault/bin/vault design stories <design>`
   for the design's stories with their keys and repos, in story order, and run
   the filed ones. List the unfiled stories in the report and never file them.
   Keys filed under the feature but outside the design's stories run last.
-- Skip a story `vault.py stage <repo> <KEY>` reports `done` (a sealed impl note
+- Skip a story `~/.claude/agent-vault/bin/vault stage <repo> <KEY>` reports `done` (a sealed impl note
   or a merged PR carrying the key): never judge it from the ticket's status.
   `stage` needs no ticket file, and never calls Jira.
-- A Jira setup closes no feature (`vault.py closes-feature` says so): report
+- A Jira setup closes no feature (`~/.claude/agent-vault/bin/vault closes-feature` says so): report
   that the user closes the feature's ticket where the GitHub path would name
   the feature the merge closes.
 - Never create, edit or change the status of a ticket (no transition, no

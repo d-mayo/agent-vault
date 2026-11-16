@@ -181,7 +181,7 @@ class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
             with self.subTest(cmd=cmd):
                 r = self.run_guard(cmd, cwd)
                 self.assertEqual(r.returncode, 2, r.stderr)
-                self.assertIn("vault.py", r.stderr)
+                self.assertIn("~/.claude/agent-vault/bin/vault", r.stderr)
                 self.assertIn("issue create", r.stderr)
                 self.assertIn("--standalone", r.stderr)
                 self.assertIn("--bug", r.stderr)
@@ -258,6 +258,10 @@ class IssueGuardTest(unittest.TestCase):  # T5, T6 -> AC7, AC8
             (f'"{py}" "{cli}" merge widget 7 2>&1 | tail -5', "Bash"),
             (f'cd {c} && "{py}" "{cli}" merge widget 7', "Bash"),
             (f'"{py}" "{cli}" seal retro widget 7 && "{py}" "{cli}" merge widget 7', "Bash"),
+            ("~/.claude/agent-vault/bin/vault merge widget 7", "Bash"),
+            ("~/.claude/agent-vault/bin/vault merge widget 7 2>&1 | tail -5", "Bash"),
+            (f"cd {c} && ~/.claude/agent-vault/bin/vault merge widget 7", "Bash"),
+            ("~/.claude/agent-vault/bin/vault seal retro widget 7 && ~/.claude/agent-vault/bin/vault merge widget 7", "Bash"),
             (f'& "{py}" "{cli}" merge widget 7', "PowerShell"),
             (f'& "{py}" "{cli}" merge widget 7; & "{py}" "{cli}" closes-feature widget 7', "PowerShell"),
             (f'Set-Location {c}; & "{py}" "{cli}" merge widget 7', "PowerShell"),
