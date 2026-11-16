@@ -6,8 +6,10 @@ What it does:
   1. Copies agent_vault/ to ~/.claude/agent-vault/ and skills/*/ to ~/.claude/skills/, replacing
      the installed files file by file from a staged copy (so a hook that starts during a
      reinstall never finds its script missing) and deleting files the new version dropped.
-  2. Writes ~/.claude/agent-vault.json (vault path, what the installer manages, and `source`, `commit`
-     and `commit_time`: the clone installed from and its installed commit).
+  2. Writes ~/.claude/agent-vault.json (vault path, what the installer manages, the absolute paths of
+     the `gh` and `git` it checked, and `source`, `commit` and `commit_time`: the clone installed from
+     and its installed commit). Before writing anything it checks Python 3.9+, git, and gh (installed,
+     2.94.0 or newer, logged in), refuses naming every failure and its fix, and warns about a missing ruff.
   3. Merges its hook entries and the CLI permission into ~/.claude/settings.json, and removes
      the ones older versions put in <vault>/.claude/settings.json. Only entries it created
      are replaced or removed; a .bak copy is written before any change.
@@ -54,12 +56,95 @@ SKILL_MARKER = ".installed-by-agent-vault"
 IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", ".gitkeep")
 STAGING = "agent-vault.staging"                 # under ~/.claude/, never under skills/ (D6)
 REPLACE_TRIES, REPLACE_PAUSE = 6, 0.25          # about 1.5 seconds in all
+MIN_PYTHON = (3, 9)
+GH_URL = "https://cli.github.com"
+TEST_PREREQS_ENV = "AGENT_VAULT_TEST_PREREQS"   # set only by tests: skips the prerequisite check (never by selfupdate)
+CHECK_TIMEOUT = 20                              # seconds for one `gh` call of the check
 
 
 CLI = "~/.claude/agent-vault/bin/vault"      # the same text on every machine (D1 of #44); the shell expands ~
 
 
 BLOCKING_HOOKS = ("guard.py", "push_guard.py")   # the PreToolUse guards: a missing Python blocks the tool call
+
+
+def tool_argv(path: str) -> list[str]:
+    """The argv prefix that runs a recorded tool: a `.py` stand-in (tests) runs through this Python."""
+    return [sys.executable, path] if path.lower().endswith(".py") else [path]
+
+
+def _parse_version(text):
+    lines = (text or "").strip().splitlines()
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", lines[0]) if lines else None
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def check_prerequisites(recorded=None, which=shutil.which, run=subprocess.run, version=None):
+    """Check Python, git and gh before the installer writes anything.
+    Returns (tools, problems, warnings): `tools` maps "gh" and "git" to the absolute forward-slash
+    paths checked; each problem is a failure with its fix. A tool is found on PATH, and only when PATH
+    lacks it in the `recorded` config's path (when that file still exists)."""
+    sys.path.insert(0, str(REPO))
+    from agent_vault import github
+    recorded = recorded or {}
+    problems: list[str] = []
+    warnings: list[str] = []
+    tools: dict[str, str] = {}
+    have_py = tuple(version or sys.version_info)[:2]
+    if have_py < MIN_PYTHON:
+        problems.append(f"Python {'.'.join(map(str, MIN_PYTHON))} or newer is required (this is "
+                        f"{have_py[0]}.{have_py[1]}): install a newer Python and rerun with it")
+
+    def find(name):
+        found = which(name)
+        if found:
+            return Path(os.path.abspath(found)).as_posix()
+        old = recorded.get(name)
+        if isinstance(old, str) and old and Path(old).is_file():
+            return Path(old).as_posix()
+        return None
+    git, gh = find("git"), find("gh")
+    if git:
+        tools["git"] = git
+    else:
+        problems.append("git is missing: install git")
+    if not gh:
+        problems.append(f"gh is missing: install gh from {GH_URL} (version {github.MIN_GH} or newer)")
+    else:
+        tools["gh"] = gh
+        try:
+            out = run(tool_argv(gh) + ["--version"], capture_output=True, text=True,
+                      timeout=CHECK_TIMEOUT).stdout
+        except Exception:
+            out = ""
+        have = _parse_version(out)
+        if have is None:
+            problems.append(f"gh at {gh} did not report a version: install or update gh from {GH_URL}")
+        elif have < _parse_version(github.MIN_GH):
+            problems.append(f"gh {'.'.join(map(str, have))} is older than {github.MIN_GH}: "
+                            f"update gh from {GH_URL}")
+        try:
+            logged_in = run(tool_argv(gh) + ["auth", "token"], capture_output=True, text=True,
+                            timeout=CHECK_TIMEOUT).returncode == 0     # the token is never read or printed
+        except Exception:
+            logged_in = False
+        if not logged_in:
+            problems.append("gh is not logged in: run `gh auth login`")
+    if not which("ruff"):
+        warnings.append("warning: ruff is not on PATH; it is needed only to run agent-vault's own "
+                        "tests and `ruff check`, not to use it")
+    return tools, problems, warnings
+
+
+def prerequisites(recorded, report):
+    """The checked tools, or exit naming every failure (before any write)."""
+    if os.environ.get(TEST_PREREQS_ENV):
+        return {n: Path(os.path.abspath(w)).as_posix() for n in ("git", "gh") if (w := shutil.which(n))}
+    tools, problems, warnings = check_prerequisites(recorded)
+    if problems:
+        sys.exit("error: install.py can't continue, nothing was changed: " + "; ".join(problems) + ".")
+    report += warnings
+    return tools
 
 
 def python_cmd() -> str:
@@ -271,22 +356,22 @@ def migrate_v1(vault: Path, report: list[str]) -> None:
         report.append(f"warning: could not delete {old} ({e}); delete it by hand")
 
 
-def set_git_hooks(repo: Path, report: list[str]) -> None:
+def set_git_hooks(repo: Path, report: list[str], git: str = "git") -> None:
     if not (repo / ".git").exists():
         return
     try:
-        subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", HOOKS_DIR],
+        subprocess.run([git, "-C", str(repo), "config", "core.hooksPath", HOOKS_DIR],
                        check=True, capture_output=True)
         report.append(f"git hooks: core.hooksPath = {HOOKS_DIR}")
     except Exception as e:
         report.append(f"warning: could not set core.hooksPath ({e})")
 
 
-def commit_info(repo: Path, commit: str | None) -> dict:
+def commit_info(repo: Path, commit: str | None, git: str = "git") -> dict:
     """{"commit": full sha, "commit_time": committer time in Unix seconds} for `commit` (else HEAD)
     in the clone `repo`; {} when git can't say (not a work tree, unknown sha, git missing)."""
     try:
-        out = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%H %ct",
+        out = subprocess.run([git, "-C", str(repo), "log", "-1", "--format=%H %ct",
                               (commit or "HEAD") + "^{commit}", "--"],
                              capture_output=True, text=True, check=True).stdout.split()
         return {"commit": out[0], "commit_time": int(out[1])}
@@ -343,6 +428,8 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
         sys.exit(f"error: {vault} is not an Obsidian vault (no .obsidian/ folder)")
     home = home.resolve()
     report: list[str] = []
+    config_path = home / ".claude" / "agent-vault.json"
+    tools = prerequisites(read_json(config_path), report)     # before anything is written
     if sys.prefix != sys.base_prefix:
         report.append("warning: running inside a virtualenv; hooks will use its Python, and "
                       "if it's deleted tool calls stay blocked until install.py is rerun. Prefer rerunning "
@@ -351,7 +438,6 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
     install_dir = claude / "agent-vault"
     cli = CLI
     direct = f'{python_cmd()} "{(install_dir / "vault.py").as_posix()}"'
-    config_path = claude / "agent-vault.json"
     managed_before = read_json(config_path).get("managed_allow", [])
     allow = [f"Bash({cli}:*)"]
 
@@ -377,32 +463,32 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
         if write_if_changed(path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
                             backup=True):
             report.append(f"updated {path}")
-    info = commit_info(repo, commit)
-    config = {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
+    info = commit_info(repo, commit, tools.get("git", "git"))
+    config = {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(), **tools,
               "managed_allow": allow, "source": Path(os.path.abspath(repo)).as_posix(), **info}
     write_if_changed(config_path, json.dumps(config, indent=2, ensure_ascii=False) + "\n")
 
     write_guide(vault, cli, info, force_guide, report)
 
     migrate_v1(vault, report)
-    set_git_hooks(repo, report)
+    set_git_hooks(repo, report, tools.get("git", "git"))
     report.append(f"check: {cli} status")
     if sys.platform == "win32":      # the launcher runs only in Bash (D5 of #44); PowerShell and cmd use Python directly
         report.append(f"check (PowerShell or cmd): {direct} status")
     return report
 
 
-def unset_git_hooks(repo: Path, report: list[str]) -> bool:
+def unset_git_hooks(repo: Path, report: list[str], git: str = "git") -> bool:
     """Unset core.hooksPath in this clone if it still points at our hooks (git would otherwise
     run a pre-push hook that refuses every push once the config is gone)."""
     if not (repo / ".git").exists():
         return False
     try:
-        cur = subprocess.run(["git", "-C", str(repo), "config", "--get", "core.hooksPath"],
+        cur = subprocess.run([git, "-C", str(repo), "config", "--get", "core.hooksPath"],
                              capture_output=True, text=True).stdout.strip()
         if cur != HOOKS_DIR:
             return False
-        subprocess.run(["git", "-C", str(repo), "config", "--unset", "core.hooksPath"],
+        subprocess.run([git, "-C", str(repo), "config", "--unset", "core.hooksPath"],
                        check=True, capture_output=True)
     except Exception as e:
         report.append(f"warning: could not unset core.hooksPath in {repo} ({e})")
@@ -447,7 +533,9 @@ def uninstall(home: Path, repo: Path = REPO) -> list[str]:
     if config_path.exists():
         config_path.unlink()
         report.append(f"removed {config_path}")
-    unset_git_hooks(repo, report)
+    recorded = config.get("git")
+    unset_git_hooks(repo, report, recorded if isinstance(recorded, str) and Path(recorded).is_file()
+                    else "git")
     if report:
         report.append("restart open Claude sessions so they stop running the removed hooks")
     else:
