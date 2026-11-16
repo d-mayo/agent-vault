@@ -148,6 +148,8 @@ class GuardTest(HookCase):  # T5 -> AC5, AC6, T12
             self.blocked(self.agent(f"Work/widget/widget-7-{kind}.md"), tool="Edit", says="sealed")
         self.put(self.agent("Work/widget/widget-7-retro.md"), "---\ntype: retro\nstatus: sealed\n---\n")
         self.blocked(self.agent("Work/widget/widget-7-retro.md"), tool="MultiEdit", says="sealed")
+        self.put(self.agent("Work/widget/widget-7-retro-2.md"), "---\ntype: retro\nstatus: sealed\n---\n")
+        self.blocked(self.agent("Work/widget/widget-7-retro-2.md"), tool="Edit", says="sealed")   # a follow-up retro
 
     def test_daily_notes_have_no_exceptions(self):
         today = self.agent("Daily/2026-01-05.md")
@@ -280,6 +282,14 @@ class SessionStartTest(HookCase):
         self.assertIn("first thing", out)
         self.assertIn("Open ideas for demo: 1", out)
         self.assertNotIn("Other idea", out)
+
+    def test_notes_line_lists_every_retro(self):      # T4 -> AC4
+        work = self.vault / "Agent" / "Work" / "widget"
+        for name, status in (("retro", "sealed"), ("retro-2", "open")):
+            (work / f"widget-7-{name}.md").write_text(f"---\ntype: retro\nstatus: {status}\n---\n",
+                                                      encoding="utf-8", newline="\n")
+        out = self.start(self.repo)
+        self.assertIn("retro (sealed), retro-2 (open)", out)
 
     # --- the shortened Standing decisions (#82) ---
     WORDS = ["Alpha", "Bravo", "Carol", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet",

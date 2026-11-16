@@ -7,7 +7,8 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   new retro <repo> <issue>
   new design <project> "<title>"
   seal plan <repo> <issue>
-  seal retro <repo> <issue>
+  seal retro <repo> <issue>      (readies an open PR and records its commit, never merges)
+  merge <repo> <issue>           (merges the PR at the commit the retro readied, then seals the impl note)
   seal design <design>
   design stories <design>
   features [--project <id>]
@@ -141,10 +142,11 @@ def impl_note(repo: str, issue: str) -> str:
             "## Discoveries\nNone\n")
 
 
-def retro_note(repo: str, issue: str, pr: str) -> str:
-    """A fresh retro; a `pr: none` one also gets the closing comment `seal retro` posts."""
+def retro_note(repo: str, issue: str, pr: str, name: str | None = None) -> str:
+    """A fresh retro (`name` is its file stem, which is also its title); a `pr: none` one also gets the
+    closing comment `seal retro` posts."""
     fm = lib.render_frontmatter({"type": "retro", "repo": repo, "issue": issue, "pr": pr, "status": "open"})
-    return (f"{fm}# {repo}-{issue}-retro\n\n"
+    return (f"{fm}# {name or f'{repo}-{issue}-retro'}\n\n"
             "## Summary\n<!-- What was built and how it went. -->\n\n"
             "## CLAUDE.md audit\n\n"
             "## README audit\n\n"
@@ -164,6 +166,17 @@ def idea_note(title: str, source: str, project: str | None, context: str = "") -
 
 def work_path(repo: str, issue: str, kind: str) -> Path:
     return AGENT / FOLDERS["work"] / repo / f"{repo}-{issue}-{kind}.md"
+
+
+def retro_paths(repo: str, issue: str) -> list[Path]:
+    """The issue's retro notes that exist, in order: retro, retro-2, retro-3, ... (a gap ends the list)."""
+    out, k = [], 1
+    while True:
+        p = work_path(repo, issue, "retro" if k == 1 else f"retro-{k}")
+        if not p.is_file():
+            return out
+        out.append(p)
+        k += 1
 
 
 # --- daily note and log lines ------------------------------------------------------
@@ -230,19 +243,36 @@ def cmd_new_retro(args) -> None:
     index = lib.Index()
     require_number(args.issue)
     require_repo(index, args.repo)
-    impl, retro = work_path(args.repo, args.issue, "impl"), work_path(args.repo, args.issue, "retro")
+    impl = work_path(args.repo, args.issue, "impl")
     if not impl.is_file():
         die(f"{lib.rel(impl)} doesn't exist; a retro needs the impl note")
-    if retro.exists():
-        die(f"{lib.rel(retro)} already exists")
     fm, _, _ = lib.split_frontmatter(lib.read_text(impl))
-    pr = (fm or {}).get("pr")
-    if plan_is_no_pr(args.repo, args.issue):
+    fm = fm or {}
+    existing = retro_paths(args.repo, args.issue)
+    no_pr = plan_is_no_pr(args.repo, args.issue)
+    if existing:       # a follow-up retro covers the commits after the latest one (D2)
+        latest = existing[-1]
+        latest_fm, _, _ = lib.split_frontmatter(lib.read_text(latest))
+        latest_fm = latest_fm or {}
+        if no_pr:
+            die(f"{lib.rel(latest)} already exists, and a pr: none story has just the one retro")
+        if latest_fm.get("status") != "sealed":
+            die(f"{lib.rel(latest)} already exists and isn't sealed yet; seal it (`seal retro {args.repo} "
+                f"{args.issue}`) before starting a follow-up")
+        if fm.get("status") == "sealed":
+            die(f"{lib.rel(impl)} is sealed: {args.repo}#{args.issue} is finished, so there's nothing to follow up")
+        if not latest_fm.get("commit"):
+            die(f"{lib.rel(latest)} records no readied commit, so no commits can come after it; "
+                "a follow-up retro follows a retro that readied an open PR")
+    kind = f"retro-{len(existing) + 1}" if existing else "retro"
+    path, name = work_path(args.repo, args.issue, kind), f"{args.repo}-{args.issue}-{kind}"
+    pr = fm.get("pr")
+    if no_pr:
         pr = lib.NO_PR
     elif not isinstance(pr, str) or not lib.NUMBER_RE.match(pr):
         die(f"{lib.rel(impl)} has no 'pr:' yet; open the PR first")
-    commit_note(retro, retro_note(args.repo, args.issue, pr))
-    print("created " + lib.rel(retro))
+    commit_note(path, retro_note(args.repo, args.issue, pr, name))
+    print("created " + lib.rel(path))
 
 
 def design_note(project: str, title: str) -> str:
@@ -375,9 +405,11 @@ def cmd_seal_plan(args) -> None:
 
 
 def load_retro(repo: str, issue: str) -> tuple[Path, dict, str]:
-    path = work_path(repo, issue, "retro")
-    if not path.is_file():
-        die(f"{lib.rel(path)} doesn't exist; `new retro {repo} {issue}` creates it")
+    """The issue's latest retro note (the first one, or the newest follow-up)."""
+    found = retro_paths(repo, issue)
+    if not found:
+        die(f"{lib.rel(work_path(repo, issue, 'retro'))} doesn't exist; `new retro {repo} {issue}` creates it")
+    path = found[-1]
     fm, body, _ = lib.split_frontmatter(lib.read_text(path))
     return path, fm or {}, body
 
@@ -435,25 +467,32 @@ def finding_numbers(impl_body: str) -> tuple[set[int], set[int]]:
     return allnums, left_open
 
 
-def followup_problems(impl_body: str, follow_lines: list[str]) -> list[str]:
-    """Left-open findings with no follow-up line, findings settled twice, references to missing ones (D4, D5)."""
+def followup_problems(impl_body: str, follow_lines: list[str], earlier_lines: list[str] = ()) -> list[str]:
+    """Left-open findings with no follow-up line, findings settled twice, references to missing ones (D4, D5).
+    A finding an earlier retro of the issue settled (`earlier_lines`) stays settled: it needs no line here and
+    a second line for it counts as settling it twice (D2 of #111)."""
     allnums, left_open = finding_numbers(impl_body)
-    counts: dict[int, int] = {}
-    for ln in follow_lines:
-        m = lib.FINDING_REFS_RE.search(ln)
-        if m:
-            for n in re.findall(r"R(\d+)", m.group(1)):
-                counts[int(n)] = counts.get(int(n), 0) + 1
+
+    def refs(lines) -> dict[int, int]:
+        counts: dict[int, int] = {}
+        for ln in lines:
+            m = lib.FINDING_REFS_RE.search(ln)
+            if m:
+                for n in re.findall(r"R(\d+)", m.group(1)):
+                    counts[int(n)] = counts.get(int(n), 0) + 1
+        return counts
+
+    counts, settled = refs(follow_lines), set(refs(earlier_lines))
 
     def fmt(nums) -> str:
         return ", ".join(f"R{n}" for n in sorted(nums))
 
     out = []
-    unsorted = left_open - set(counts)
+    unsorted = left_open - set(counts) - settled
     if unsorted:
         out.append(f"Follow-ups: no follow-up line for the left-open review finding(s) {fmt(unsorted)}; "
                    "end one with ' (R<n>)' (issue, idea or dropped)")
-    twice = {n for n, c in counts.items() if c > 1}
+    twice = {n for n, c in counts.items() if c > 1 or n in settled}
     if twice:
         out.append(f"Follow-ups: more than one follow-up line for {fmt(twice)}")
     unknown = set(counts) - allnums
@@ -495,7 +534,7 @@ def bump_subject(issue: str) -> str:
     return f"docs(claude): verify audited sections (#{issue})"
 
 
-def check_merge_ready(top: Path, pr: str, pr_info: dict, issue: str) -> bool:
+def check_ready(top: Path, pr: str, pr_info: dict, issue: str) -> bool:
     """Refuse, before anything is committed, unless the PR's head is the local HEAD (or its parent, when HEAD
     is this issue's own bump commit, D5) and every check of that head passed (D3). Returns whether HEAD
     already is the bump commit (D6)."""
@@ -557,7 +596,7 @@ def cmd_seal_retro(args) -> None:
     if no_pr != (retro_fm.get("pr") == lib.NO_PR):
         die(f"{lib.rel(retro_path)} says pr: {retro_fm.get('pr')}, but the plan "
             f"{'declares pr: none' if no_pr else 'has a PR'}; they must agree")
-    merging, bump_done, default = False, False, ""
+    readying, bump_done = False, False
     pr = retro_fm.get("pr", "")
     if not no_pr:     # an issue with a PR: the branch, the PR and the merge (a no-PR one has none of them)
         current_branch = github.git("branch", "--show-current", cwd=top)
@@ -584,10 +623,16 @@ def cmd_seal_retro(args) -> None:
                         f"`Closes #{args.issue}` line in its description, then run this again")
                 die(f"PR #{pr} is {pr_info['state']} and did not close issue #{args.issue}; "
                     "close the issue by hand, then run this again")
-            merging = pr_info["state"] == "OPEN"
-            if merging:
-                default = github.default_branch(slug)
-                bump_done = check_merge_ready(top, pr, pr_info, args.issue)
+            readying = pr_info["state"] == "OPEN"
+            if readying:
+                bump_done = check_ready(top, pr, pr_info, args.issue)
+                previous = retro_paths(args.repo, args.issue)[:-1]       # D5: a follow-up needs something new
+                if previous:
+                    prev_fm, _, _ = lib.split_frontmatter(lib.read_text(previous[-1]))
+                    prev_commit = (prev_fm or {}).get("commit") or ""
+                    if prev_commit and github.git("rev-parse", "HEAD", cwd=top).startswith(prev_commit):
+                        die(f"nothing to follow up: the local branch is still at {prev_commit[:12]}, the commit "
+                            f"{lib.rel(previous[-1])} readied; commit the changes first, then run this again")
 
     claude_path = top / "CLAUDE.md"
     if not claude_path.is_file():
@@ -623,7 +668,11 @@ def cmd_seal_retro(args) -> None:
                         "the README audit must be 'None'")
     if problems:
         die(f"{lib.rel(retro_path)} doesn't cover every heading yet:\n  " + "\n  ".join(problems))
-    follow_problems = followup_problems(impl_body, retro_secs.get("Follow-ups", []))
+    earlier_lines = []
+    for earlier in retro_paths(args.repo, args.issue)[:-1]:         # follow-ups only: the retros before this one
+        _, earlier_body, _ = lib.split_frontmatter(lib.read_text(earlier))
+        earlier_lines += dict(lib.split_sections(lib.blank_code_blocks(earlier_body))).get("Follow-ups", [])
+    follow_problems = followup_problems(impl_body, retro_secs.get("Follow-ups", []), earlier_lines)
     if follow_problems:
         die(f"{lib.rel(retro_path)} has unsorted review findings:\n  " + "\n  ".join(follow_problems))
 
@@ -631,14 +680,18 @@ def cmd_seal_retro(args) -> None:
     if lasting:
         die("the plan's lasting decisions aren't all recorded yet:\n  " + "\n  ".join(lasting))
 
-    for path, fm, body in ((impl_path, impl_fm, impl_body), (retro_path, retro_fm, retro_body)):
+    # an open PR is only readied: the retro is sealed with the readied commit, and `merge` seals the impl note
+    trials = [(retro_path, {**retro_fm, "commit": "0000000"} if readying else retro_fm, retro_body)]
+    if not readying:
+        trials.insert(0, (impl_path, impl_fm, impl_body))
+    for path, fm, body in trials:
         errors = trial_seal_errors(path, fm, body)
         if errors:
             die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
 
     confirmed = {h for h, v in claude_audit if v == "confirmed"}
     new_text, bumped = claudemd.bump_verified(claude_text, sections, confirmed, lib.today())
-    if no_pr or bump_done:      # no-PR: nothing to commit (D5); a rerun after a refused merge: HEAD already is the bump commit
+    if no_pr or bump_done:      # no-PR: nothing to commit (D5); a rerun after a failed push: HEAD already is the bump commit
         bumped = []
     if bumped:
         lib.write_text(claude_path, new_text)
@@ -650,12 +703,6 @@ def cmd_seal_retro(args) -> None:
             github.git("push", "-u", "origin", "HEAD", cwd=top)
         else:
             github.git("push", cwd=top)
-    if merging:
-        try:
-            github.squash_merge(slug, pr, github.git("rev-parse", "HEAD", cwd=top))
-        except github.CmdError as e:
-            die(f"PR #{pr} was not merged, and nothing is sealed: {e.stderr or e}\n"
-                "fix that, then run this again; it adds no second verified commit")
 
     if no_pr and not closed:
         try:
@@ -664,18 +711,104 @@ def cmd_seal_retro(args) -> None:
             die(f"issue #{args.issue} was not closed, and nothing is sealed: {e.stderr or e}\n"
                 "fix that, then run this again")
 
-    update_note(impl_path, status="sealed")
-    update_note(retro_path, status="sealed")
-    update_note(project_path, audited=lib.today().isoformat())
+    today = lib.today().isoformat()
+    commit = github.git("rev-parse", "HEAD", cwd=top) if readying else ""
+    if readying:
+        update_note(retro_path, commit=commit, status="sealed")
+    else:
+        update_note(impl_path, status="sealed")
+        update_note(retro_path, status="sealed")
+    update_note(project_path, audited=today)
     log_event(args.repo, args.issue, "retro-done")
-    print(f"sealed {lib.rel(impl_path)} and {lib.rel(retro_path)}; set audited: {lib.today().isoformat()} "
-          f"on {lib.rel(project_path)}" + (f"; bumped verified on: {', '.join(bumped)}" if bumped else "")
-          + (f"; merged PR #{pr}" if merging else "")
+    bumped_text = f"; bumped verified on: {', '.join(bumped)}" if bumped else ""
+    if readying:
+        approvals = lib.read_setup()["approvals"]
+        print(f"sealed {lib.rel(retro_path)}; set audited: {today} on {lib.rel(project_path)}{bumped_text}; "
+              f"PR #{pr} is ready at {commit}")
+        print(("next: collect the approvals, then run `vault.py merge " if approvals == "required"
+               else "next: run `vault.py merge ") + f"{args.repo} {args.issue}`")
+        return
+    print(f"sealed {lib.rel(impl_path)} and {lib.rel(retro_path)}; set audited: {today} "
+          f"on {lib.rel(project_path)}{bumped_text}"
           + (f"; closed issue #{args.issue}" if no_pr and not closed else ""))
-    close_finished_feature(index, args.repo, slug, args.issue, info)
-    if merging:
-        sync_default_branch(top, default, pr)
-        update_install(top)
+    close_finished_feature(index, args.repo, slug, args.issue, info, "retro")
+
+
+def cmd_merge(args) -> None:
+    index = lib.Index()
+    require_number(args.issue)
+    require_repo(index, args.repo)
+    slug = index.slugs[args.repo]
+    if plan_is_no_pr(args.repo, args.issue):
+        die(f"{args.repo}#{args.issue}'s plan declares pr: none, so it has no pull request to merge; "
+            "its retro closes the issue")
+    impl_path, impl_fm = load_impl(args.repo, args.issue)
+    if impl_fm.get("status") == "sealed":
+        die(f"{lib.rel(impl_path)} is already sealed: {args.repo}#{args.issue} is finished")
+    pr = impl_fm.get("pr")
+    if not isinstance(pr, str) or not lib.NUMBER_RE.match(pr):
+        die(f"{lib.rel(impl_path)} has no 'pr:'; `open-pr {args.repo} {args.issue}` opens and records the PR")
+    retro_path, retro_fm, _ = load_retro(args.repo, args.issue)
+    if retro_fm.get("status") != "sealed":
+        die(f"{lib.rel(retro_path)} isn't sealed yet; run the retro and `seal retro {args.repo} {args.issue}` "
+            "first, which readies the PR")
+    commit = retro_fm.get("commit")
+    if not commit:
+        die(f"{lib.rel(retro_path)} is sealed but records no readied commit (`seal retro` on an open PR "
+            f"writes one); run `new retro {args.repo} {args.issue}` for a follow-up retro and seal it")
+    setup = lib.read_setup()
+    style = setup["merge"]
+    top = require_clone(slug)
+    pr_info = github.pr_closing(slug, pr)
+    head = pr_info["head"]
+    resume = pr_info["state"] == "MERGED" and head.startswith(commit)     # D3: only what comes after the merge is left
+    if not resume:
+        again = (f"; run a follow-up retro (`new retro {args.repo} {args.issue}`), then `seal retro` "
+                 + ("and collect the approvals again" if setup["approvals"] == "required" else "and run this again"))
+        if pr_info["state"] != "OPEN":
+            die(f"PR #{pr} is {pr_info['state'].lower()}"
+                + (f", at {head[:12]}, not at the readied commit {commit[:12]}" if head else "")
+                + "; merge it by hand if it should go in, or close the story with the retro")
+        if not head.startswith(commit):
+            die(f"PR #{pr}'s head is {head[:12] or '(unknown)'}, but the retro readied {commit[:12]}: "
+                f"commits came after it{again}")
+        branch = impl_fm.get("branch")
+        if github.git("branch", "--show-current", cwd=top) != branch:
+            die(f"the current branch isn't {branch}, the branch of PR #{pr}; check it out first")
+        if github.git("status", "--porcelain", cwd=top):
+            die("the working tree isn't clean; commit or stash your changes first")
+        local = github.git("rev-parse", "HEAD", cwd=top)
+        if not local.startswith(commit):
+            die(f"the local {branch} is at {local[:12]}, but the retro readied {commit[:12]}; "
+                f"if you committed after it, run a follow-up retro (`new retro {args.repo} {args.issue}`)")
+        if pr_info["unpassed"]:
+            die(f"PR #{pr} has checks that haven't passed: {', '.join(pr_info['unpassed'])}; "
+                "wait for them (or fix them), then run this again")
+        if not pr_info["checks"] and github.has_workflows(slug):
+            die(f"PR #{pr}'s checks haven't started yet; wait, then run this again")
+        if setup["approvals"] == "required" and pr_info["decision"] != "APPROVED":
+            die(f"PR #{pr} isn't approved (review decision: {pr_info['decision'].lower() or 'none yet'}); "
+                "this vault requires approvals, so collect them, then run this again")
+        if not github.merge_allowed(slug, style):
+            die(f"{slug} doesn't allow the {style} merge style the vault's setup asks for; ask a repo admin "
+                f"to turn on {github.MERGE_STYLES[style]} (Settings, General, Pull Requests), then run this again")
+    errors = trial_seal_errors(impl_path, impl_fm, lib.split_frontmatter(lib.read_text(impl_path))[1])
+    if errors:
+        die(f"{lib.rel(impl_path)} can't be sealed yet, so nothing is merged:\n  " + "\n  ".join(errors))
+    default = github.default_branch(slug)
+    if not resume:
+        try:
+            github.merge_pr(slug, pr, commit, style)
+        except github.CmdError as e:
+            die(f"PR #{pr} was not merged, and nothing is sealed: {e.stderr or e}\nfix that, then run this again")
+
+    update_note(impl_path, status="sealed")
+    log_event(args.repo, args.issue, "merged")
+    what = f"PR #{pr} was already merged; sealed" if resume else f"merged PR #{pr} ({style}) at {commit[:12]}; sealed"
+    print(f"{what} {lib.rel(impl_path)}")
+    close_finished_feature(index, args.repo, slug, args.issue, None, "merge")
+    sync_default_branch(top, default, pr)
+    update_install(top)
 
 
 def git_common_dir(cwd) -> str:
@@ -700,30 +833,33 @@ def update_install(top: Path) -> None:
         print(line)
 
 
-def feature_close_comment(feature: dict, slug: str, issue: str) -> str:
+def feature_close_comment(feature: dict, slug: str, issue: str, by: str = "retro") -> str:
     ref = f"#{issue}" if slug.lower() == feature["slug"].lower() else f"{slug}#{issue}"
-    return (f"Closed by the retro of {ref}: every story of this feature's design is filed, "
+    return (f"Closed by the {by} of {ref}: every story of this feature's design is filed, "
             "and none of its sub-issues is open.")
 
 
-def close_finished_feature(index: lib.Index, repo: str, slug: str, issue: str, info: dict) -> None:
-    """After `seal retro` has sealed the notes: close the issue's parent feature if it is finished (#59 D2, D3).
-    Never dies: whatever fails is a warning with the command to run by hand."""
+def close_finished_feature(index: lib.Index, repo: str, slug: str, issue: str, info: dict | None,
+                           by: str = "retro") -> None:
+    """After the notes are sealed (`merge`, or `seal retro` where nothing is left to merge): close the issue's
+    parent feature if it is finished (#59 D2, D3). Never dies and never raises: whatever fails, a bad answer
+    from GitHub or a bug alike, is a warning with the command to run by hand (#73)."""
     try:
-        feature, _ = feature_to_close(index, slug, issue, info)
-    except github.CmdError as e:
-        print(f"warning: couldn't check whether the feature is finished: {e.stderr or e}\n"
+        feature, _ = feature_to_close(index, slug, issue, info or github.issue_info(slug, issue))
+    except Exception as e:
+        print(f"warning: couldn't check whether the feature is finished: "
+              f"{(getattr(e, 'stderr', '') or e)}\n"
               f"  run `vault.py closes-feature {repo} {issue}` to see whether it should be closed",
               file=sys.stderr)
         return
     if not feature:
         return
-    comment = feature_close_comment(feature, slug, issue)
+    comment = feature_close_comment(feature, slug, issue, by)
     try:
         github.close_issue(feature["slug"], feature["number"], comment)
-    except github.CmdError as e:
+    except Exception as e:
         print(f"warning: feature {feature['slug']}#{feature['number']} is finished but was not closed: "
-              f"{e.stderr or e}\n  close it by hand:\n"
+              f"{(getattr(e, 'stderr', '') or e)}\n  close it by hand:\n"
               f"  gh issue close {feature['number']} --repo {feature['slug']} --reason completed "
               f'--comment "{comment}"', file=sys.stderr)
         return
@@ -1664,10 +1800,11 @@ def cmd_closes_feature(args) -> None:
         feature, reason = feature_to_close(lib.Index(), slug, args.issue, github.issue_info(slug, args.issue))
     except github.CmdError as e:
         die(f"couldn't check: {e.stderr or e}")
+    who = "the retro" if plan_is_no_pr(args.repo, args.issue) else "the merge"
     if feature:
-        print(f"sealing closes feature {feature['slug']}#{feature['number']}: {feature['title']}")
+        print(f"{who} closes feature {feature['slug']}#{feature['number']}: {feature['title']}")
     else:
-        print(f"sealing closes no feature: {reason}")
+        print(f"{who} closes no feature: {reason}")
 
 
 def cmd_features(args) -> None:
@@ -1930,9 +2067,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = seal.add_parser("design", help="record its decisions, promote its ideas, then seal it")
     p.add_argument("design")
     p.set_defaults(fn=cmd_seal_design)
-    for name, fn in (("preflight", cmd_preflight), ("stage", cmd_stage), ("branch", cmd_branch),
-                     ("open-pr", cmd_open_pr)):
-        p = sub.add_parser(name)
+    for name, fn, text in (("preflight", cmd_preflight, None), ("stage", cmd_stage, None),
+                           ("branch", cmd_branch, None), ("open-pr", cmd_open_pr, None),
+                           ("merge", cmd_merge, "merge the PR at the commit the latest retro readied, then "
+                                                "seal the impl note")):
+        p = sub.add_parser(name, help=text)
         p.add_argument("repo")
         p.add_argument("issue")
         if name == "branch":
@@ -2011,7 +2150,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = des.add_parser("stories", help="each story with the issues whose Source names it, or 'not filed'")
     p.add_argument("design")
     p.set_defaults(fn=cmd_design_stories)
-    p = sub.add_parser("closes-feature", help="whether sealing this issue's retro closes its finished feature")
+    p = sub.add_parser("closes-feature", help="whether the merge (or, for a pr: none story, the retro) closes this issue's finished feature")
     p.add_argument("repo")
     p.add_argument("issue")
     p.set_defaults(fn=cmd_closes_feature)
