@@ -6,7 +6,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from tests.helpers import REPO, make_vault, tmpdir
+from tests.helpers import REPO, find_bash, make_vault, tmpdir
 
 sys.path.insert(0, str(REPO))
 import install  # noqa: E402
@@ -65,10 +65,10 @@ class InstallTest(unittest.TestCase):
         cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
         self.assertEqual(cfg["vault"], self.vault.resolve().as_posix())
         self.assertEqual(cfg["python"], Path(sys.executable).as_posix())        # T8 -> AC8 (#33)
-        if shutil.which("bash"):                    # the hook's own line reads it back from this file
+        if find_bash():                    # the hook's own line reads it back from this file
             hook = (REPO / "agent_vault" / "githooks" / "pre-push").read_text(encoding="utf-8")
             read_line = next(ln.strip() for ln in hook.splitlines() if ln.strip().startswith("py=$(sed"))
-            out = subprocess.run(["bash", "-c", f'config="$1"; {read_line}; printf %s "$py"', "bash",
+            out = subprocess.run([find_bash(), "-c", f'config="$1"; {read_line}; printf %s "$py"', "bash",
                                   (self.home / ".claude" / "agent-vault.json").as_posix()],
                                  capture_output=True, text=True)
             self.assertEqual(out.stdout, cfg["python"])
