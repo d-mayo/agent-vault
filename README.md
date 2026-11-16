@@ -75,6 +75,12 @@ vault, and hands it to `seal plan`, `preflight`, `branch`, `open-pr`, `seal retr
 changed ticket only warns), a story counts as merged when a PR carrying its key has, and nothing changes
 a ticket's status. `vault.py tracker <repo>` prints the tracker and, for Jira, the connector, the
 project's key, the ticket file's fields and the issue types, so a skill learns them without reading the setup note.
+`stage` also works without `--ticket` in a Jira setup: it answers from the vault's notes, the ticket map and GitHub's
+PRs alone (`feature` with how many of its design's stories are filed and done, `done`, `in review`, `in progress`,
+`planned` without checking the planned label, `backlog`), and SessionStart's stage line on a branch carrying a key
+shows that same answer, never calling Jira. `handoff` in a Jira setup fetches each ticket through the connector,
+expands "handoff the feature <KEY>" from the ticket map with `design stories`, skips a story `stage` reports done,
+and never creates, edits or changes the status of a ticket.
 
 Filing works the same way in reverse. In a Jira setup `issue create` (with `--feature`, `--parent <KEY>`,
 `--standalone` or `--bug`) and `idea promote` run every body and placement check but post nothing: each

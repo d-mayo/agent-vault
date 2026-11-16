@@ -2370,6 +2370,8 @@ class TicketFileTest(JiraTicketBase):  # T1, T7 -> AC1, AC7 (#114)
                "parent not a key": self.ticket("p.json", parent="12"),
                **{f"no {f}": self.ticket(f"m{f}.json", **{f: ...}) for f in lib.TICKET_FIELDS}}
         for cmd in self.COMMANDS:
+            if cmd == ("stage",):
+                continue                                  # stage works without one in a Jira setup (D1 of #116)
             with self.subTest(cmd, why="no --ticket"):
                 self.refused(self.cli(*cmd, "widget", self.KEY), "--ticket")
             for why, path in bad.items():
@@ -3569,6 +3571,69 @@ class JiraMapReadTest(JiraFilingCase):  # T4, T5 -> AC4, AC5 (#115)
                         encoding="utf-8", newline="\n")
         self.assertIn("S2. Ship it: PROJ-3 (open)", self.ok(self.cli("design", "stories", self.NAME)).stdout)
         self.assertEqual(self.issue_reads(), [])
+
+    def seal_plan_note(self, repo, key):
+        self.ok(self.cli("new", "plan", repo, key))
+        plan = self.vault / "Agent" / "Work" / repo / f"{repo}-{key}-plan.md"
+        plan.write_text(plan.read_text(encoding="utf-8").replace("status: draft", "status: sealed"),
+                        encoding="utf-8", newline="\n")
+
+    def stage_of(self, repo, key, *extra):
+        return self.ok(self.cli("stage", repo, key, *extra)).stdout.strip()
+
+    def test_stage_without_a_ticket_reads_notes_map_and_prs(self):      # T1 -> AC1 (#116)
+        self.ok(self.cli("setup", *[a if a != "none" else "planned" for a in self.JIRA], "--replace"))
+        self.feature()
+        self.story("PROJ-2", 1)
+        self.story("PROJ-3", 2, repo="duo-b")
+        self.story("PROJ-4", 3)
+        out = self.stage_of("duo-a", "PROJ-1")
+        self.assertTrue(out.startswith("feature:"), out)
+        self.assertIn("3 of 3 stories", out)
+        self.assertIn("0 done", out)
+        self.assertTrue(self.stage_of("duo-a", "PROJ-2").startswith("backlog:"))
+        self.seal_plan_note("duo-a", "PROJ-2")
+        planned = self.stage_of("duo-a", "PROJ-2")
+        self.assertTrue(planned.startswith("planned:"), planned)
+        self.assertIn("label", planned)
+        self.load()
+        self.state["repos"]["acme/duo-a"]["branches"].append("feat/PROJ-2-x")
+        self.save()
+        self.assertTrue(self.stage_of("duo-a", "PROJ-2").startswith("in progress:"))
+        self.merged("PROJ-4")
+        self.load()
+        self.state["repos"]["acme/duo-a"]["prs"].append({"number": 6, "headRefName": "feat/PROJ-2-x", "state": "OPEN",
+                                                         "url": "https://github.com/acme/duo-a/pull/6", "title": "t"})
+        self.save()
+        self.assertTrue(self.stage_of("duo-a", "PROJ-2").startswith("in review:"))
+        self.assertTrue(self.stage_of("duo-a", "PROJ-4").startswith("done:"))
+        self.seal_impl("duo-b", "PROJ-3")
+        self.assertTrue(self.stage_of("duo-b", "PROJ-3").startswith("done:"))
+        out = self.stage_of("duo-a", "PROJ-1")
+        self.assertIn("2 done", out)
+        stories = self.ok(self.cli("design", "stories", self.NAME)).stdout
+        self.assertIn("PROJ-3 (done) in duo-b", stories)
+        self.assertIn("PROJ-2 (open) in duo-a", stories)
+        ticket = self.root / "t.json"
+        ticket.write_text(json.dumps({"key": "PROJ-3", "title": "t", "body": "b", "type": "Story", "labels": [],
+                                      "parent": "PROJ-1"}), encoding="utf-8", newline="\n")
+        self.assertTrue(self.stage_of("duo-b", "PROJ-3", "--ticket", str(ticket)).startswith("done:"))
+        self.assertEqual([c for c in self.calls() if c[0] == "issue" or "graphql" in c], [])
+
+    def test_stage_reads_the_merged_list_once_and_the_planned_label_none_is_quiet(self):
+        self.feature()
+        self.story("PROJ-2", 1)
+        self.story("PROJ-3", 2, repo="duo-b")
+        self.stage_of("duo-a", "PROJ-1")
+        def merged():
+            return [c for c in self.calls("pr", "list") if "merged" in c]
+
+        self.assertEqual(len(merged()), 2)       # one per repo of the feature's stories
+        before = len(merged())
+        self.stage_of("duo-a", "PROJ-2")
+        self.assertEqual(len(merged()) - before, 1)
+        self.seal_plan_note("duo-a", "PROJ-2")
+        self.assertNotIn("label", self.stage_of("duo-a", "PROJ-2"))
 
     def test_a_story_under_another_parent_is_flagged(self):
         self.feature()

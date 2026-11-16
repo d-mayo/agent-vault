@@ -396,10 +396,11 @@ def issue_branch_re(issue: str) -> re.Pattern:
     return lib.branch_regex(lib.read_setup(), issue, prefix=True)
 
 
-def issue_context(args) -> str:
+def issue_context(args, ticket_optional: bool = False) -> str:
     """Validate <repo> <issue>; returns the repo's owner/name. For a command with `--ticket`, checks it
     right after the issue (D1 of #114): required in a Jira setup, refused in a GitHub one, and the file read
-    and checked before anything reads GitHub; the ticket is left in `args.ticket_data` (None at home)."""
+    and checked before anything reads GitHub; the ticket is left in `args.ticket_data` (None at home).
+    `ticket_optional` (stage, D1 of #116) lets a Jira setup go without one."""
     index = lib.Index()
     require_issue(index, args.repo, args.issue)
     if hasattr(args, "ticket"):
@@ -407,6 +408,8 @@ def issue_context(args) -> str:
         if lib.read_setup()["tracker"] != "jira":
             if args.ticket:
                 die("--ticket belongs to a Jira setup; the vault's setup has tracker: github, so the issue is read from GitHub")
+        elif not args.ticket and ticket_optional:
+            pass
         elif not args.ticket:
             die(f"the vault's setup has tracker: jira, so this command needs --ticket <file>: the ticket "
                 f"{args.issue} as JSON with {', '.join(lib.TICKET_FIELDS)}, fetched through the connector "
@@ -1063,10 +1066,15 @@ def ticket_changed(repo: str, issue: str, ticket: dict | None) -> list[str]:
     return []
 
 
-def merged_pr_for(slug: str, issue: str) -> dict | None:
-    """A merged PR whose head branch carries the Jira key (D3 of #114), or None."""
+def merged_pr_for(slug: str, issue: str, cache: dict | None = None) -> dict | None:
+    """A merged PR whose head branch carries the Jira key (D3 of #114), or None. `cache` ({slug: PR list})
+    keeps one call to a single read of each repo's merged-PR list (D2 of #116)."""
     setup = lib.read_setup()
-    for pr in github.merged_prs(slug):
+    if cache is None:
+        cache = {}
+    if slug not in cache:
+        cache[slug] = github.merged_prs(slug)
+    for pr in cache[slug]:
         if lib.branch_issue(setup, pr["headRefName"]) == issue:
             return pr
     return None
@@ -1243,13 +1251,21 @@ def stage_of(slug: str, repo: str, issue: str, ticket: dict | None = None) -> tu
     """(stage, why) of an issue, derived from GitHub and the plan note (design §4). In a Jira setup `ticket`
     (the ticket file) stands for the issue, and a merged PR carrying the key means done (D3, D7 of #114)."""
     setup = lib.read_setup()
-    if ticket:
-        if ticket["type"] == setup["jira_feature_type"]:
+    jira = setup["tracker"] == "jira"
+    merged_cache: dict = {}
+    if jira:
+        index = lib.Index()
+        recorded = lib.read_tickets().get(repo, {}).get(issue) or {}
+        if ticket and ticket["type"] == setup["jira_feature_type"]:
             return "feature", f"ticket {issue} is a {ticket['type']}"
-        merged = merged_pr_for(slug, issue)
-        if merged:
-            return "done", f"PR #{merged['number']} ({merged['headRefName']}) is merged"
-        labels, label = ticket["labels"], setup["jira_planned_label"]
+        if not ticket and recorded.get("kind") == "feature":
+            return "feature", jira_feature_counts(index, recorded, merged_cache)
+        if jira_story_done(index, repo, issue, merged_cache):
+            merged = merged_pr_for(slug, issue, merged_cache)
+            if merged:
+                return "done", f"PR #{merged['number']} ({merged['headRefName']}) is merged"
+            return "done", f"the impl note of {issue} is sealed"
+        labels, label = (ticket["labels"] if ticket else []), setup["jira_planned_label"]
     else:
         info = github.issue_info(slug, issue)
         if info["state"] != "OPEN":
@@ -1265,11 +1281,13 @@ def stage_of(slug: str, repo: str, issue: str, ticket: dict | None = None) -> tu
     if plan.is_file():
         fm, _, _ = lib.split_frontmatter(lib.read_text(plan))
         sealed = (fm or {}).get("status") == "sealed"
-    what = "ticket" if ticket else "issue"
+    what = "ticket" if jira else "issue"
     if prs:
         return "in review", f"PR {prs[0]['url']} is open for {prs[0]['headRefName']}"
     if branches:
         return "in progress", f"branch {branches[0]} exists and has no open PR"
+    if sealed and jira and not ticket and label != "none":
+        return "planned", f"the plan is sealed (the '{label}' label can't be checked without the ticket)"
     if sealed and (label == "none" or label in labels):
         return "planned", (f"the plan is sealed and the {what} has the '{label}' label" if label != "none"
                            else "the plan is sealed")
@@ -1279,8 +1297,20 @@ def stage_of(slug: str, repo: str, issue: str, ticket: dict | None = None) -> tu
     return "backlog", f"the {what} is open and has no sealed plan"
 
 
+def jira_feature_counts(index: lib.Index, entry: dict, cache: dict) -> str:
+    """How many of a recorded feature's design stories are filed and done (AC1 of #116)."""
+    design = entry.get("design")
+    if design not in index.designs:
+        return f"the ticket map records it as the feature of {design}, which isn't in the vault"
+    stories = lib.design_stories(lib.split_frontmatter(lib.read_text(index.designs[design]["path"]))[1])
+    filed = jira_filed_stories(lib.read_tickets(), design)
+    done = sum(1 for s in stories
+               if filed.get(s["n"]) and all(jira_story_done(index, r, k, cache) for r, k, _ in filed[s["n"]]))
+    return f"{len(filed)} of {len(stories)} stories of {design} filed, {done} done"
+
+
 def cmd_stage(args) -> None:
-    slug = issue_context(args)
+    slug = issue_context(args, ticket_optional=True)
     for w in ticket_changed(args.repo, args.issue, args.ticket_data):
         print(f"warning: {w}")
     print("{}: {}".format(*stage_of(slug, args.repo, args.issue, args.ticket_data)))
@@ -2064,12 +2094,12 @@ def cmd_seal_design(args) -> None:
           f"rewrote '## {lib.STANDING}' in {lib.rel(overview)}")
 
 
-def jira_story_done(index: lib.Index, repo: str, key: str) -> bool:
+def jira_story_done(index: lib.Index, repo: str, key: str, cache: dict | None = None) -> bool:
     """A filed story is done when its impl note is sealed or a merged PR's branch carries its key (D7 of #115)."""
     impl = work_path(repo, key, "impl")
     if impl.is_file() and (lib.split_frontmatter(lib.read_text(impl))[0] or {}).get("status") == "sealed":
         return True
-    return merged_pr_for(index.slugs[repo], key) is not None
+    return merged_pr_for(index.slugs[repo], key, cache) is not None
 
 
 def jira_filed_stories(tickets: dict, design: str) -> dict[int, list[tuple[str, str, dict]]]:
@@ -2087,13 +2117,15 @@ def jira_design_stories(index: lib.Index, path: Path, fm: dict, body: str) -> No
     design = path.stem
     feature = recorded_feature(tickets, design)
     filed = jira_filed_stories(tickets, design)
+    cache: dict = {}
     stories = lib.design_stories(body)
     print(f"feature: {feature[1]}" if feature else "no feature yet")
     for s in stories:
         found = filed.get(s["n"])
         print(f"S{s['n']}. {s['title']}: "
-              + (", ".join(f"{key} ({'done' if jira_story_done(index, repo, key) else 'open'})"
+              + (", ".join(f"{key} ({'done' if jira_story_done(index, repo, key, cache) else 'open'})"
                            + ("" if feature is None or e.get("parent") == feature[1] else " [not under the feature]")
+                           + f" in {repo}"
                            for repo, key, e in found) if found else "not filed"))
     if not any(fm["project"] in pids for pids in index.repos.values()):
         print(f"project '{fm['project']}' has no repos yet, so nothing can be filed; register one first")

@@ -431,14 +431,32 @@ class SessionStartTest(HookCase):
         self.assertIn("widget#7", out)
         self.assertIn("Stage:", out)
 
-    def test_jira_branch_names_the_key_and_skips_the_stage_lookup(self):     # T4 -> AC3
+    def jira_setup(self):
         self.cli("setup", "--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
                  "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+        proj = self.vault / "Agent" / "Projects" / "demo.md"
+        proj.write_text(proj.read_text(encoding="utf-8").replace("status: active", "status: active\njira_project: PROJ", 1),
+                        encoding="utf-8", newline="\n")
         self.on_branch("feat/PROJ-12-x")
+
+    def test_jira_branch_names_the_key_and_shows_the_stage(self):     # T2 -> AC2 (#116)
+        self.jira_setup()
+        self.cli("new", "plan", "widget", "PROJ-12")
+        plan = self.vault / "Agent" / "Work" / "widget" / "widget-PROJ-12-plan.md"
+        plan.write_text(plan.read_text(encoding="utf-8").replace("status: draft", "status: sealed"),
+                        encoding="utf-8", newline="\n")
         out = self.start(self.repo)
         self.assertIn("widget#PROJ-12", out)
-        self.assertIn("isn't available in a Jira setup yet", out)
+        self.assertIn("Stage: planned (", out)
         self.assertNotIn("Stage unavailable", out)
+
+    def test_jira_stage_line_falls_back_when_gh_fails(self):     # T2 -> AC2 (#116)
+        self.jira_setup()
+        r = run_py(HOOKS / "session_start.py", stdin={"session_id": self.sid, "cwd": str(self.repo)},
+                   config=self.cfg, env={**self.env, "AGENT_VAULT_GH": str(self.root / "nope.py")})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Stage unavailable (", r.stdout)
+        self.assertIn("Build widgets.", r.stdout)
 
     def test_default_setup_branch_forms(self):     # T4 -> AC3
         self.on_branch("feat/12-Foo_Bar")
