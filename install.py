@@ -11,7 +11,10 @@ What it does:
   3. Merges its hook entries and the CLI permission into ~/.claude/settings.json, and removes
      the ones older versions put in <vault>/.claude/settings.json. Only entries it created
      are replaced or removed; a .bak copy is written before any change.
-  4. Writes <vault>/CLAUDE.md.
+  4. Writes <vault>/CLAUDE.md, whose first line is `<!-- agent-vault <committer-time> <commit> -->`
+     (the commit installed). An install from an older commit than the one in that marker leaves the
+     guide alone and warns to `git pull` and rerun, so a stale clone never undoes a newer machine's
+     guide; `--force-guide` writes it anyway. An install that can't tell its commit keeps a marked guide.
   5. Deletes v1 code from <vault>/Agent/_system/ (the phone log is kept).
   6. Points this repo's git hooks at agent_vault/githooks/ (main-branch protection); other repos
      get the installed copy in ~/.claude/agent-vault/githooks/ through `repo-init`.
@@ -34,6 +37,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -290,7 +294,50 @@ def commit_info(repo: Path, commit: str | None) -> dict:
         return {}
 
 
-def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = None) -> list[str]:
+GUIDE_MARK = "<!-- agent-vault"
+GUIDE_MARKER_RE = re.compile(r"^<!-- agent-vault (\d+) ([0-9a-f]{40}) -->$")
+GUIDE_HELD = "warning: the vault guide is from"       # selfupdate looks for this in the output
+
+
+def guide_state(path: Path):
+    """None for a guide with no marker (or none at all); (time, commit) for a marked one;
+    (None, None) for a first line that starts the marker but doesn't parse."""
+    try:
+        first = (path.read_text(encoding="utf-8-sig").splitlines() or [""])[0]
+    except OSError:
+        return None
+    if not first.startswith(GUIDE_MARK):
+        return None
+    m = GUIDE_MARKER_RE.match(first)
+    return (int(m.group(1)), m.group(2)) if m else (None, None)
+
+
+def write_guide(vault: Path, cli: str, info: dict, force: bool, report: list[str]) -> None:
+    path = vault / "CLAUDE.md"
+    template = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+    text = template.replace("{{CLI}}", cli)
+    if info:
+        text = f"{GUIDE_MARK} {info['commit_time']} {info['commit']} -->\n" + text
+    state = guide_state(path)
+    hold = "Run `git pull` and rerun install.py, or pass --force-guide."
+    if state is not None and not force:
+        theirs, sha = state
+        if theirs is not None and info and info["commit_time"] >= theirs:
+            pass                                    # same age or newer: write it
+        elif theirs is not None and info:
+            report.append(f"{GUIDE_HELD} a newer agent-vault (commit {sha}); left it alone. {hold}")
+            return
+        else:
+            why = ("this install can't tell its own commit" if theirs is not None
+                   else "its marker can't be read")
+            report.append(f"{GUIDE_HELD} an agent-vault of unknown age ({why}); left it alone. {hold}")
+            return
+    if write_if_changed(path, text):
+        report.append(f"updated {path}")
+
+
+def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = None,
+            force_guide: bool = False) -> list[str]:
     vault = Path(os.path.abspath(vault))
     if not (vault / ".obsidian").is_dir():
         sys.exit(f"error: {vault} is not an Obsidian vault (no .obsidian/ folder)")
@@ -330,14 +377,12 @@ def install(vault: Path, home: Path, repo: Path = REPO, commit: str | None = Non
         if write_if_changed(path, json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
                             backup=True):
             report.append(f"updated {path}")
+    info = commit_info(repo, commit)
     config = {"vault": vault.as_posix(), "python": Path(sys.executable).as_posix(),
-              "managed_allow": allow, "source": Path(os.path.abspath(repo)).as_posix(),
-              **commit_info(repo, commit)}
+              "managed_allow": allow, "source": Path(os.path.abspath(repo)).as_posix(), **info}
     write_if_changed(config_path, json.dumps(config, indent=2, ensure_ascii=False) + "\n")
 
-    template = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
-    if write_if_changed(vault / "CLAUDE.md", template.replace("{{CLI}}", cli)):
-        report.append(f"updated {vault / 'CLAUDE.md'}")
+    write_guide(vault, cli, info, force_guide, report)
 
     migrate_v1(vault, report)
     set_git_hooks(repo, report)
@@ -418,6 +463,8 @@ def main() -> None:
     ap.add_argument("--repo", default=str(REPO), help=argparse.SUPPRESS)  # tests
     ap.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)  # tests
     ap.add_argument("--commit", help=argparse.SUPPRESS)  # the commit this copy was exported from
+    ap.add_argument("--force-guide", action="store_true",
+                    help="write the vault guide even if it is from a newer agent-vault")
     args = ap.parse_args()
     if args.uninstall:
         for line in uninstall(Path(args.home), Path(args.repo)):
@@ -425,7 +472,8 @@ def main() -> None:
         return
     if not args.vault:
         ap.error("--vault is required (or use --uninstall)")
-    for line in install(Path(args.vault), Path(args.home), Path(args.repo), args.commit):
+    for line in install(Path(args.vault), Path(args.home), Path(args.repo), args.commit,
+                        args.force_guide):
         print(line)
 
 

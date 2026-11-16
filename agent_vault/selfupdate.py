@@ -26,6 +26,7 @@ import lib  # noqa: E402
 
 LOCK_NAME = "agent-vault.update.lock"
 LOCK_STALE_SECONDS = 120
+GUIDE_HELD = "warning: the vault guide is from"   # install.py prints it when it keeps a newer guide
 INSTALL_LIMIT = 60                 # seconds the installer may run
 
 
@@ -124,8 +125,11 @@ def _selfupdate() -> str | None:
             last = next((ln for ln in reversed((proc.stderr or "").splitlines()) if ln.strip()), "")
             return _by_hand(f"install.py exited {proc.returncode}" + (f" ({last.strip()})" if last else ""),
                             source, vault)
-        return (f"agent-vault installed main ({sha[:7]}) from {source}; the hooks, skills and vault "
+        held = next((ln.strip() for ln in (proc.stdout or "").splitlines()
+                     if ln.strip().startswith(GUIDE_HELD)), "")
+        line = (f"agent-vault installed main ({sha[:7]}) from {source}; the hooks, skills and vault "
                 "guide it changed take effect in the next session.")
+        return f"{line} {held}" if held else line
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         try:
