@@ -1033,3 +1033,16 @@ class PrerequisiteTest(unittest.TestCase):
         self.assertIn("https://cli.github.com", out.stderr)
         self.assertIn("install git", out.stderr)
         self.assertEqual(self.listing(), before)
+
+
+class PrerequisiteDocsTest(unittest.TestCase):  # T5 -> AC5
+    def test_readme_names_the_prerequisites_and_recorded_paths(self):
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        for phrase in ("Python 3.9+", "gh 2.94.0", "gh auth login", "paths of the `gh` and `git`"):
+            self.assertIn(phrase, readme)
+
+    def test_claude_md_names_the_lookup_order_and_the_check(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        for phrase in ("`AGENT_VAULT_GH`, else the config's `gh`, else PATH", "the config's `git`, else PATH",
+                       "checks Python 3.9+", "records the absolute paths of `gh` and `git`"):
+            self.assertIn(phrase, text)
