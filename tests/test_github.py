@@ -2317,6 +2317,77 @@ class JiraPrLinkTest(GhCase):  # T6 -> AC5 (#113)
         self.assertEqual(github.pr_closing(SLUG, n)["closes"], [("7", SLUG)])
 
 
+class JiraTicketBase(GhCase):
+    """A Jira setup with the planned label `none`, and ticket files for PROJ-12 (#114)."""
+    JIRA = ("--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+            "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+    KEY = "PROJ-12"
+    TICKET = {"key": "PROJ-12", "title": "Frob widgets", "body": "Frob them.\nAll of them.", "type": "Story",
+              "labels": [], "parent": None}
+
+    def jira(self, label="none"):
+        args = [a if a != "none" else label for a in self.JIRA]
+        self.ok(self.cli("setup", *args))
+        p = self.vault / "Agent" / "Projects" / "widgets.md"
+        p.write_text(p.read_text(encoding="utf-8").replace("status: active", f"status: active{chr(10)}jira_project: PROJ"),
+                     encoding="utf-8", newline=chr(10))
+
+    def ticket(self, name="ticket.json", **changes):
+        data = {**self.TICKET, **changes}
+        data = {k: v for k, v in data.items() if v is not ...}
+        path = self.root / name
+        path.write_text(json.dumps(data), encoding="utf-8", newline=chr(10))
+        return str(path)
+
+
+class TicketFileTest(JiraTicketBase):  # T1, T7 -> AC1, AC7 (#114)
+    COMMANDS = [("seal", "plan"), ("preflight",), ("branch",), ("open-pr",), ("seal", "retro"), ("stage",)]
+
+    def test_each_command_refuses_a_bad_ticket_before_github(self):
+        self.jira()
+        raw = self.root / "raw.json"
+        raw.write_text("not json", encoding="utf-8")
+        bad = {"missing file": str(self.root / "nope.json"), "not json": str(raw),
+               "wrong key": self.ticket("k.json", key="PROJ-13"),
+               "labels not a list": self.ticket("l.json", labels="bug"),
+               "parent not a key": self.ticket("p.json", parent="12"),
+               **{f"no {f}": self.ticket(f"m{f}.json", **{f: ...}) for f in lib.TICKET_FIELDS}}
+        for cmd in self.COMMANDS:
+            with self.subTest(cmd, why="no --ticket"):
+                self.refused(self.cli(*cmd, "widget", self.KEY), "--ticket")
+            for why, path in bad.items():
+                with self.subTest(cmd, why=why):
+                    self.refused(self.cli(*cmd, "widget", self.KEY, "--ticket", path), "ticket")
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.vault / "Agent" / "Work" / "widget").exists())
+
+    def test_good_ticket_with_a_parent_key_or_null_reads(self):
+        for parent in (None, "PROJ-3"):
+            t = lib.read_ticket(self.ticket(parent=parent), self.KEY)
+            self.assertEqual(t["parent"], parent)
+
+    def test_github_setup_refuses_ticket(self):
+        for cmd in self.COMMANDS:
+            with self.subTest(cmd):
+                self.refused(self.cli(*cmd, "widget", "7", "--ticket", self.ticket()), "--ticket")
+        self.assertEqual(self.calls(), [])
+
+    def test_hash_ignores_line_endings_and_surrounding_whitespace(self):
+        a = lib.ticket_hash(self.TICKET)
+        self.assertEqual(a, lib.ticket_hash({**self.TICKET, "body": "Frob them.\r\nAll of them.\r\n"}))
+        self.assertNotEqual(a, lib.ticket_hash({**self.TICKET, "body": "Frob them.\nSome."}))
+        self.assertRegex(a, r"^[0-9a-f]{64}$")
+
+    def test_tracker_command(self):
+        self.assertEqual(self.ok(self.cli("tracker", "widget")).stdout.strip(), "tracker: github")
+        self.jira()
+        out = self.ok(self.cli("tracker", "widget")).stdout
+        for word in ("tracker: jira", "atlassian", "PROJ", "Epic", "Story", "Bug", "key", "title", "body", "type",
+                     "labels", "parent"):
+            self.assertIn(word, out)
+        self.refused(self.cli("tracker", "nope"), "repo")
+
+
 class GhHelperTest(GhCase):  # T10 -> AC10
     def test_signed_out(self):
         self.state["signed_out"] = True

@@ -389,9 +389,25 @@ def issue_branch_re(issue: str) -> re.Pattern:
 
 
 def issue_context(args) -> str:
-    """Validate <repo> <issue>; returns the repo's owner/name."""
+    """Validate <repo> <issue>; returns the repo's owner/name. For a command with `--ticket`, checks it
+    right after the issue (D1 of #114): required in a Jira setup, refused in a GitHub one, and the file read
+    and checked before anything reads GitHub; the ticket is left in `args.ticket_data` (None at home)."""
     index = lib.Index()
     require_issue(index, args.repo, args.issue)
+    if hasattr(args, "ticket"):
+        args.ticket_data = None
+        if lib.read_setup()["tracker"] != "jira":
+            if args.ticket:
+                die("--ticket belongs to a Jira setup; the vault's setup has tracker: github, so the issue is read from GitHub")
+        elif not args.ticket:
+            die(f"the vault's setup has tracker: jira, so this command needs --ticket <file>: the ticket "
+                f"{args.issue} as JSON with {', '.join(lib.TICKET_FIELDS)}, fetched through the connector "
+                f"(`tracker {args.repo}` says what to fetch)")
+        else:
+            try:
+                args.ticket_data = lib.read_ticket(args.ticket, args.issue)
+            except lib.TicketError as e:
+                die(str(e))
     return index.slugs[args.repo]
 
 
@@ -618,9 +634,8 @@ def pr_link_missing(link: dict, key: str, setup: dict) -> list[str]:
 
 
 def cmd_seal_retro(args) -> None:
+    slug = issue_context(args)
     index = lib.Index()
-    require_issue(index, args.repo, args.issue)
-    slug = index.slugs[args.repo]
     impl_path, impl_fm = load_impl(args.repo, args.issue)
     _, impl_body, _ = lib.split_frontmatter(lib.read_text(impl_path))
     retro_path, retro_fm, retro_body = load_retro(args.repo, args.issue)
@@ -2122,6 +2137,30 @@ def cmd_setup(args) -> None:
         print(f"  {key}: {val}")
 
 
+TICKET_HELP = "Jira setup only: the ticket as JSON (key, title, body, type, labels, parent), written outside the clone and the vault"
+
+
+def cmd_tracker(args) -> None:
+    index = lib.Index()
+    require_repo(index, args.repo)
+    setup = lib.read_setup()
+    print(f"tracker: {setup['tracker']}")
+    if setup["tracker"] != "jira":
+        return
+    project = index.repos[args.repo][0]
+    fm, _, _ = lib.split_frontmatter(lib.read_text(index.projects[project]))
+    key = (fm or {}).get("jira_project") or "(none: set jira_project in the project note)"
+    print(f"connector: {setup['jira_connector']}")
+    print(f"project key: {key}")
+    print(f"issue types: feature {setup['jira_feature_type']}, story {setup['jira_story_type']}, "
+          f"bug {setup['jira_bug_type']}")
+    print(f"planned label: {setup['jira_planned_label']}")
+    print("ticket file (JSON, written outside the clone and the vault, passed with --ticket): "
+          + ", ".join(lib.TICKET_FIELDS))
+    print("  key: the ticket key; title, body: as the connector returns them; type: the issue type's name; "
+          "labels: a list of the ticket's labels; parent: the parent's key or null")
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="vault.py", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2150,6 +2189,7 @@ def build_parser() -> argparse.ArgumentParser:
         p = seal.add_parser(kind)
         p.add_argument("repo")
         p.add_argument("issue")
+        p.add_argument("--ticket", metavar="FILE", help=TICKET_HELP)
         p.set_defaults(fn=fn)
     p = seal.add_parser("design", help="record its decisions, promote its ideas, then seal it")
     p.add_argument("design")
@@ -2161,6 +2201,8 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=text)
         p.add_argument("repo")
         p.add_argument("issue")
+        if name != "merge":
+            p.add_argument("--ticket", metavar="FILE", help=TICKET_HELP)
         if name == "branch":
             p.add_argument("--type", help="default: the bug word (fix) for an issue labelled bug, else the "
                                           "feature word (feat); checked against the setup")
@@ -2251,6 +2293,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project")
     p.add_argument("--all", action="store_true")
     p.set_defaults(fn=cmd_decisions)
+
+    p = sub.add_parser("tracker", help="the vault's tracker and, in a Jira setup, the connector, project key and ticket file's fields")
+    p.add_argument("repo")
+    p.set_defaults(fn=cmd_tracker)
 
     p = sub.add_parser("setup", help="write Agent/Setup.md: how this vault's stories and PRs work")
     p.add_argument("--tracker", required=True, choices=lib.SETUP_CHOICES["tracker"])
