@@ -271,6 +271,67 @@ class GhCase(unittest.TestCase):
         return self.cli("branch", "widget", "7", *extra)
 
 
+class IssueArgumentTest(GhCase):  # T1 -> AC1 (#113)
+    JIRA = ("--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+            "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+    WITH_ISSUE = [("new", "plan"), ("new", "retro"), ("seal", "plan"), ("preflight",), ("branch",), ("open-pr",),
+                  ("stage",), ("seal", "retro"), ("merge",), ("closes-feature",)]
+
+    def jira(self, project_key="PROJ"):
+        self.ok(self.cli("setup", *self.JIRA))
+        if project_key:
+            p = self.vault / "Agent" / "Projects" / "widgets.md"
+            p.write_text(p.read_text(encoding="utf-8").replace("status: active", f"status: active{chr(10)}jira_project: {project_key}"),
+                         encoding="utf-8", newline=chr(10))
+
+    def test_key_accepted_in_a_jira_setup(self):
+        self.jira()
+        self.ok(self.cli("new", "plan", "widget", "PROJ-12"))
+        work = self.vault / "Agent" / "Work" / "widget"
+        self.assertEqual(sorted(p.name for p in work.iterdir()), ["widget-PROJ-12-impl.md", "widget-PROJ-12-plan.md"])
+        self.assertIn("issue: PROJ-12", (work / "widget-PROJ-12-plan.md").read_text(encoding="utf-8"))
+        impl = work / "widget-PROJ-12-impl.md"
+        impl.write_text(impl.read_text(encoding="utf-8").replace("status: open", "pr: 5" + chr(10) + "status: open"),
+                        encoding="utf-8", newline=chr(10))
+        self.ok(self.cli("new", "retro", "widget", "PROJ-12"))
+        self.assertTrue((work / "widget-PROJ-12-retro.md").is_file())
+        self.assert_valid()
+
+    def test_wrong_forms_refused_creating_nothing(self):
+        self.jira()
+        for bad in ("12", "OTHER-12", "proj-12", "PROJ12", "PROJ-", "PROJ-12x"):
+            with self.subTest(bad):
+                self.refused(self.cli("new", "plan", "widget", bad), "jira ticket key")
+        self.assertFalse((self.vault / "Agent" / "Work" / "widget").exists())
+
+    def test_project_without_jira_project_names_the_field(self):
+        self.jira(project_key=None)
+        self.refused(self.cli("new", "plan", "widget", "PROJ-12"), "jira_project")
+        self.assertFalse((self.vault / "Agent" / "Work" / "widget").exists())
+
+    def test_every_command_refuses_a_number_in_jira_before_github(self):
+        self.jira()
+        for cmd in self.WITH_ISSUE:
+            with self.subTest(cmd):
+                self.refused(self.cli(*cmd, "widget", "12"), "jira ticket key")
+                self.refused(self.cli(*cmd, "widget", "OTHER-12"), "PROJ")
+        self.assertEqual(self.calls(), [])
+
+    def test_every_command_refuses_a_key_in_a_github_setup(self):
+        for setup in (False, True):
+            if setup:
+                self.ok(self.cli("setup", "--tracker", "github"))
+            for cmd in self.WITH_ISSUE:
+                with self.subTest(cmd, setup=setup):
+                    self.refused(self.cli(*cmd, "widget", "PROJ-12"), "number")
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.vault / "Agent" / "Work" / "widget").exists())
+
+    def test_no_setup_note_numbers_work_as_before(self):
+        self.ok(self.cli("new", "plan", "widget", "12"))
+        self.assertTrue((self.vault / "Agent" / "Work" / "widget" / "widget-12-plan.md").is_file())
+
+
 class SealPlanTest(GhCase):  # T1 -> AC1, AC11
     def test_refuses_missing_plan(self):
         self.refused(self.cli("seal", "plan", "widget", "7"), "doesn't exist")

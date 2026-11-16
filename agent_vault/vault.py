@@ -94,6 +94,28 @@ def require_number(value: str, what: str = "issue") -> str:
     return value
 
 
+def require_issue(index: lib.Index, repo: str, value: str) -> str:
+    """The one argument check for an `<issue>` (D1 of #113): in a Jira setup a ticket key whose prefix is
+    the `jira_project` of the project listing `repo`, otherwise a number. Refuses before anything reads
+    GitHub or writes."""
+    require_repo(index, repo)
+    if lib.read_setup()["tracker"] != "jira":
+        if lib.ISSUE_KEY_RE.match(str(value)):
+            die(f"issue must be a number like 12 (got {value!r}); the vault's setup has tracker: github, "
+                "so a Jira ticket key isn't an issue here")
+        return require_number(value)
+    project = index.repos[repo][0]
+    fm, _, _ = lib.split_frontmatter(lib.read_text(index.projects[project]))
+    prefix = (fm or {}).get("jira_project")
+    if not isinstance(prefix, str) or not prefix:
+        die(f"the vault's setup has tracker: jira, but project '{project}' (which lists repo '{repo}') has no "
+            f"jira_project; set jira_project: <KEY> in {lib.rel(index.projects[project])} first")
+    if not lib.ISSUE_KEY_RE.match(str(value)) or not str(value).startswith(prefix + "-"):
+        die(f"issue must be a Jira ticket key like {prefix}-12 with the project's prefix {prefix} (got {value!r}); "
+            "the vault's setup has tracker: jira")
+    return value
+
+
 def commit_note(path: Path, text: str) -> None:
     """Write a note, then validate it. If that adds errors the note didn't already
     have, put the file back as it was and refuse, so no command leaves a bad note."""
@@ -227,8 +249,7 @@ def cmd_new_project(args) -> None:
 
 def cmd_new_plan(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     plan, impl = work_path(args.repo, args.issue, "plan"), work_path(args.repo, args.issue, "impl")
     for p in (plan, impl):
         if p.exists():
@@ -241,8 +262,7 @@ def cmd_new_plan(args) -> None:
 
 def cmd_new_retro(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     impl = work_path(args.repo, args.issue, "impl")
     if not impl.is_file():
         die(f"{lib.rel(impl)} doesn't exist; a retro needs the impl note")
@@ -369,8 +389,7 @@ def issue_branch_re(issue: str) -> re.Pattern:
 def issue_context(args) -> str:
     """Validate <repo> <issue>; returns the repo's owner/name."""
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     return index.slugs[args.repo]
 
 
@@ -586,8 +605,7 @@ def sync_default_branch(top: Path, default: str, pr: str) -> None:
 
 def cmd_seal_retro(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     slug = index.slugs[args.repo]
     impl_path, impl_fm = load_impl(args.repo, args.issue)
     _, impl_body, _ = lib.split_frontmatter(lib.read_text(impl_path))
@@ -743,8 +761,7 @@ def cmd_seal_retro(args) -> None:
 
 def cmd_merge(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     slug = index.slugs[args.repo]
     if plan_is_no_pr(args.repo, args.issue):
         die(f"{args.repo}#{args.issue}'s plan declares pr: none, so it has no pull request to merge; "
