@@ -510,5 +510,65 @@ class InstallTest(unittest.TestCase):
             install.install(self.root / "home", self.home)
 
 
+@unittest.skipUnless(find_bash(), "needs bash")
+class LauncherTest(unittest.TestCase):
+    def setUp(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        self.inst = self.root / "agent-vault"
+        (self.inst / "bin").mkdir(parents=True)
+        shutil.copyfile(REPO / "agent_vault" / "bin" / "vault", self.inst / "bin" / "vault")
+        (self.inst / "vault.py").write_text(
+            "import sys\nfor a in sys.argv[1:]:\n    print('[' + a + ']')\nsys.exit(3)\n", encoding="utf-8")
+        self.home = self.root / "home"
+        self.home.mkdir()
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def run_launcher(self, config, *args):
+        env = dict(os.environ, HOME=str(self.home))
+        env.pop("AGENT_VAULT_CONFIG", None)
+        if config is not None:
+            env["AGENT_VAULT_CONFIG"] = str(config)
+        return subprocess.run([find_bash(), (self.inst / "bin" / "vault").as_posix(), *args],
+                              capture_output=True, text=True, env=env)
+
+    def config(self, python):
+        cfg = self.root / "agent-vault.json"
+        cfg.write_text(json.dumps({"vault": "x", "python": python}, indent=2) + "\n", encoding="utf-8")
+        return cfg
+
+    def test_passes_arguments_and_exit_code(self):  # T1 -> AC1
+        out = self.run_launcher(self.config(Path(sys.executable).as_posix()), "status", "two words", "--x=1")
+        self.assertEqual(out.returncode, 3)
+        self.assertEqual(out.stdout.split(), ["[status]", "[two", "words]", "[--x=1]"])
+
+    def test_missing_python(self):  # T2 -> AC2
+        out = self.run_launcher(self.config((self.root / "nope" / "python").as_posix()), "status")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("rerun install.py", out.stderr)
+        self.assertIn("nope/python", out.stderr)
+
+    def test_no_config(self):  # T2 -> AC2: the default config path, under an empty HOME
+        out = self.run_launcher(None, "status")
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("not installed", out.stderr)
+        self.assertIn("install.py", out.stderr)
+
+    def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
+        home = self.root / "inst-home"
+        (home / ".claude").mkdir(parents=True)
+        vault = make_vault(self.root)
+        repo = self.root / "repo"
+        (repo / ".git").mkdir(parents=True)
+        install.install(vault, home, repo=repo)
+        launcher = home / ".claude" / "agent-vault" / "bin" / "vault"
+        self.assertTrue(launcher.is_file())
+        self.assertNotIn(b"\r", launcher.read_bytes())
+        if sys.platform != "win32":
+            self.assertTrue(os.access(launcher, os.X_OK))
+
+
 if __name__ == "__main__":
     unittest.main()

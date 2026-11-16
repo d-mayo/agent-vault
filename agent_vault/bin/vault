@@ -1,0 +1,15 @@
+#!/bin/sh
+# agent-vault CLI launcher: runs the recorded Python on the vault.py next to this folder.
+# The installer writes the Python's path to the config; this never searches PATH.
+config="${AGENT_VAULT_CONFIG:-$HOME/.claude/agent-vault.json}"
+if [ ! -f "$config" ]; then
+  echo "agent-vault is not installed (no config at $config); run install.py" >&2
+  exit 1
+fi
+py=$(sed -n 's/^[[:space:]]*"python":[[:space:]]*"\(.*\)"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p' "$config" | head -n 1)
+here=$(cd "$(dirname "$0")/.." && pwd)
+if [ -z "$py" ] || [ ! -f "$py" ]; then
+  echo "agent-vault's Python is gone (${py:-not recorded in $config}); rerun install.py" >&2
+  exit 1
+fi
+exec "$py" "$here/vault.py" "$@"

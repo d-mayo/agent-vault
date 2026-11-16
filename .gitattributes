@@ -4,3 +4,4 @@ agent_vault/githooks/* text eol=lf
 *.md text eol=lf
 *.json text eol=lf
 *.patch text eol=lf
+agent_vault/bin/* text eol=lf
