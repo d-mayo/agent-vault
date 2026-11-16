@@ -29,7 +29,7 @@ Hooks run with the same Python that ran the installer, so if you switch Python
 installs, rerun it.
 
 After that first run you don't have to rerun it by hand: the installed copy keeps itself current
-with `main`. `seal retro`, after it merges a PR in the clone you installed from, installs what
+with `main`. `vault.py merge`, after it merges a PR in the clone you installed from, installs what
 `main` now holds, and every session start checks whether that clone's local `main` has a newer commit
 than the installed one and installs it if so. Both install only `main`'s committed tree (never a
 branch or uncommitted changes), look at local refs only (a `git pull` brings in a merge made on
@@ -77,9 +77,14 @@ work-setup design.
 
 - Never commit to `main`. Use a branch named `<type>/<issue>-<slug>`, for example
   `feat/12-note-schema`, and open a PR. Only the owner merges, with **Squash and merge**;
-  the one exception is `vault.py seal retro`, which squash-merges the PR itself once the
-  owner (in a `handoff` run, the orchestrating session) has approved the retro and the PR's checks have passed. It also closes the issue's parent feature when every story of the feature's
-  design is filed and no other sub-issue is open (`vault.py closes-feature` shows whether it will).
+  the one exception is `vault.py merge` (the `merge` skill), which merges the PR itself, with the
+  merge style of the vault's setup, once the owner (in a `handoff` run, the orchestrating session)
+  has approved. `vault.py seal retro` only readies the PR: it pushes the `verified:` bump and records
+  the commit it readied, and `merge` then merges exactly that commit, once its checks have passed and,
+  where the setup requires approvals, the PR is approved. The merge also closes the issue's parent
+  feature when every story of the feature's design is filed and no other sub-issue is open
+  (`vault.py closes-feature` shows whether it will). Commits made after a retro need a follow-up
+  retro (`vault.py new retro` again) before they merge.
 - Commit messages follow `<type>(<scope>): <subject>`.
 - Two local guards enforce this without depending on GitHub settings: the
   `pre-push` hook (`agent_vault/githooks/`, which also runs the lint), and a Claude Code hook that blocks pushes to `main`

@@ -486,22 +486,49 @@ class MergeSkillTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC10 (#1
         self.assertMentions("## stop and ask if", "feature-close warning", "never merge any other way")
 
 
-class SealRetroMergeDocsTest(unittest.TestCase):  # T7 -> AC7 (#51)
+class SealRetroMergeDocsTest(unittest.TestCase):  # T7 -> AC7 (#51), T12 -> AC14 (#111)
     def squashed(self, text):
         return " ".join(text.lower().split())
 
-    def test_readme_git_conventions_say_seal_retro_merges(self):
+    def test_readme_git_conventions_say_merge_merges_and_seal_retro_readies(self):
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         section = self.squashed(re.search(r"^## Git conventions\n(.*?)^## ", readme, re.S | re.M).group(1))
         self.assertIn("only the owner merges", section)
-        self.assertIn("`vault.py seal retro`, which squash-merges the pr itself", section)
+        self.assertIn("the one exception is `vault.py merge` (the `merge` skill), which merges the pr itself", section)
+        self.assertIn("`vault.py seal retro` only readies the pr", section)
+        self.assertNotIn("squash-merges the pr itself", section)
+        self.assertIn("follow-up retro", section)
 
-    def test_claude_md_retro_line_says_seal_retro_merges(self):
+    def test_claude_md_retro_line_says_seal_retro_readies(self):
         claude = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
         line = next(ln for ln in claude.splitlines() if ln.startswith("- `skills/retro/`"))
         low = self.squashed(line)
-        self.assertIn("squash-merges that pr itself", low)
-        self.assertIn("otherwise only the user merges", low)
+        self.assertNotIn("squash-merges that pr itself", low)
+        self.assertIn("seals only the retro, leaves the impl note open and never merges", low)
+        self.assertIn("follow-up retro", low)
+        self.assertIn("a finished feature is closed by the merge", low)
+
+    def test_claude_md_has_a_merge_skill_bullet_and_the_merge_does_the_install(self):
+        claude = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        line = next(ln for ln in claude.splitlines() if ln.startswith("- `skills/merge/`"))
+        low = self.squashed(line)
+        for needle in ("`vault.py merge <repo> <issue>`", "the commit the latest retro readied",
+                       "never updates the pr branch itself", "a pipeline skill, with the shared approvals section",
+                       "follow-up retro"):
+            self.assertIn(needle, low)
+        self.assertIn("`vault.py merge` calls it after a merge", self.squashed(claude))
+
+    def test_the_guides_and_the_docstring_name_merge(self):                # T12 -> AC14
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertRegex(guide, r"\{\{CLI\}\} merge <repo> <issue>")
+        self.assertIn("merge #<issue>", guide)
+        self.assertIn("-retro-2.md", guide)
+        self.assertIn("\n  merge <repo> <issue>", vault.__doc__)
+        for path in ("install.py", "agent_vault/selfupdate.py"):
+            text = (REPO / path).read_text(encoding="utf-8")
+            self.assertIn("vault.py merge", text, path)
+            self.assertNotIn("`seal retro` (after a merge)", text, path)
+        self.assertIn("vault.py merge", (REPO / "README.md").read_text(encoding="utf-8"))
 
 
 class ClosesFeatureDocsTest(unittest.TestCase):  # T7 -> AC4, AC5 (#59)
@@ -938,7 +965,7 @@ class HandoffDocsTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC14 (#7
     def test_claude_md_bullet(self):
         text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
         bullet = next(ln for ln in text.splitlines() if ln.startswith("- `skills/handoff/`"))
-        self.assertMentions("doesn't carry the shared approvals section", "five pipeline skills",
+        self.assertMentions("doesn't carry the shared approvals section", "six pipeline skills",
                             text=bullet)
 
     def test_guide_line(self):
