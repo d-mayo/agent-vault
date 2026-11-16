@@ -14,7 +14,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   features [--project <id>]
   closes-feature <repo> <issue>
   preflight <repo> <issue>
-  branch <repo> <issue> [--type <type>] [--slug <slug>]   (type: fix for a bug-labelled issue, else feat)
+  branch <repo> <issue> [--type <type>] [--slug <slug>]   (type: the setup's bug word (fix) for a bug-labelled issue, else its feature word (feat))
   open-pr <repo> <issue> [--body-file <file>]
   stage <repo> <issue>
   idea add "<title>" [--project <id>] [--source <source>]
@@ -40,6 +40,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   repo-init <path>
   claudemd-lint [<repo path>]
   lint
+  check-branch <name>            (exit 1 unless the name follows the setup's branch pattern; the pre-push hook runs it)
   validate
   status
   schema
@@ -91,6 +92,28 @@ def require_repo(index: lib.Index, repo: str) -> None:
 def require_number(value: str, what: str = "issue") -> str:
     if not lib.NUMBER_RE.match(value):
         die(f"{what} must be a number like 12 (got {value!r})")
+    return value
+
+
+def require_issue(index: lib.Index, repo: str, value: str) -> str:
+    """The one argument check for an `<issue>` (D1 of #113): in a Jira setup a ticket key whose prefix is
+    the `jira_project` of the project listing `repo`, otherwise a number. Refuses before anything reads
+    GitHub or writes."""
+    require_repo(index, repo)
+    if lib.read_setup()["tracker"] != "jira":
+        if lib.ISSUE_KEY_RE.match(str(value)):
+            die(f"issue must be a number like 12 (got {value!r}); the vault's setup has tracker: github, "
+                "so a Jira ticket key isn't an issue here")
+        return require_number(value)
+    project = index.repos[repo][0]
+    fm, _, _ = lib.split_frontmatter(lib.read_text(index.projects[project]))
+    prefix = (fm or {}).get("jira_project")
+    if not isinstance(prefix, str) or not prefix:
+        die(f"the vault's setup has tracker: jira, but project '{project}' (which lists repo '{repo}') has no "
+            f"jira_project; set jira_project: <KEY> in {lib.rel(index.projects[project])} first")
+    if not lib.ISSUE_KEY_RE.match(str(value)) or not str(value).startswith(prefix + "-"):
+        die(f"issue must be a Jira ticket key like {prefix}-12 with the project's prefix {prefix} (got {value!r}); "
+            "the vault's setup has tracker: jira")
     return value
 
 
@@ -227,8 +250,7 @@ def cmd_new_project(args) -> None:
 
 def cmd_new_plan(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     plan, impl = work_path(args.repo, args.issue, "plan"), work_path(args.repo, args.issue, "impl")
     for p in (plan, impl):
         if p.exists():
@@ -241,8 +263,7 @@ def cmd_new_plan(args) -> None:
 
 def cmd_new_retro(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     impl = work_path(args.repo, args.issue, "impl")
     if not impl.is_file():
         die(f"{lib.rel(impl)} doesn't exist; a retro needs the impl note")
@@ -363,14 +384,14 @@ def load_impl(repo: str, issue: str) -> tuple[Path, dict]:
 
 
 def issue_branch_re(issue: str) -> re.Pattern:
-    return re.compile(rf"^[^/]+/{issue}-")
+    """Matches the branch names tied to `issue` under the setup's branch pattern (D3, D8 of #113)."""
+    return lib.branch_regex(lib.read_setup(), issue, prefix=True)
 
 
 def issue_context(args) -> str:
     """Validate <repo> <issue>; returns the repo's owner/name."""
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     return index.slugs[args.repo]
 
 
@@ -584,10 +605,21 @@ def sync_default_branch(top: Path, default: str, pr: str) -> None:
             f"to date: {e.stderr or e}\nfix that, then run:{by_hand}")
 
 
+def pr_link_missing(link: dict, key: str, setup: dict) -> list[str]:
+    """What keeps a PR from being linked to a Jira ticket (D6 of #113): the key as the branch pattern's
+    `{issue}` in its head branch name, and as a whole key in its title. [] when it is linked."""
+    missing = []
+    if lib.branch_issue(setup, link["head"]) != key:
+        missing.append(f"its head branch '{link['head']}' doesn't carry {key} where the branch pattern "
+                       f"{setup['branch']} puts the issue")
+    if not re.search(rf"(?<![A-Z0-9_]){re.escape(key)}(?![0-9])", link["title"]):
+        missing.append(f"its title doesn't contain {key}")
+    return missing
+
+
 def cmd_seal_retro(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     slug = index.slugs[args.repo]
     impl_path, impl_fm = load_impl(args.repo, args.issue)
     _, impl_body, _ = lib.split_frontmatter(lib.read_text(impl_path))
@@ -624,7 +656,15 @@ def cmd_seal_retro(args) -> None:
             die("the working tree isn't clean; commit or stash your changes first")
         if not closed:
             pr_info = github.pr_closing(slug, pr)
-            if (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
+            if lib.read_setup()["tracker"] == "jira":
+                missing = pr_link_missing(github.pr_link(slug, pr), args.issue, lib.read_setup())
+                if missing and pr_info["state"] == "OPEN":
+                    die(f"PR #{pr} isn't linked to ticket {args.issue}: {' and '.join(missing)}; fix that "
+                        "on GitHub, then run this again")
+                if missing:
+                    die(f"PR #{pr} is {pr_info['state']} and wasn't linked to ticket {args.issue} "
+                        f"({' and '.join(missing)}); finish the ticket by hand, then run this again")
+            elif (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
                 if pr_info["state"] == "OPEN":
                     die(f"PR #{pr} will not close issue #{args.issue} when it merges; restore a "
                         f"`Closes #{args.issue}` line in its description, then run this again")
@@ -743,8 +783,7 @@ def cmd_seal_retro(args) -> None:
 
 def cmd_merge(args) -> None:
     index = lib.Index()
-    require_number(args.issue)
-    require_repo(index, args.repo)
+    require_issue(index, args.repo, args.issue)
     slug = index.slugs[args.repo]
     if plan_is_no_pr(args.repo, args.issue):
         die(f"{args.repo}#{args.issue}'s plan declares pr: none, so it has no pull request to merge; "
@@ -891,6 +930,19 @@ def cmd_claudemd_lint(args) -> None:
     print(f"claudemd-lint OK ({result.stale} stale section(s))" if result.stale else "claudemd-lint OK")
 
 
+def cmd_check_branch(args) -> None:
+    """Exit 1, naming the setup's branch pattern, unless the branch name follows it (D4 of #113). Runs without a
+    vault, then judging by the default setup, like `lint`."""
+    setup = lib.read_setup()
+    if not lib.branch_regex(setup).match(args.name):
+        shown = ", ".join(sorted({setup["branch_feature"], setup["branch_bug"]}))
+        issue = "a Jira ticket key like PROJ-12" if setup["tracker"] == "jira" else "an issue number"
+        die(f"branch '{args.name}' must follow the branch pattern {setup['branch']} "
+            f"({{type}} a branch type such as {shown}, {{issue}} {issue}, {{slug}} lowercase a-z0-9-), "
+            "e.g. " + lib.branch_name(setup, setup["branch_feature"],
+                                      "PROJ-12" if setup["tracker"] == "jira" else "12", "note-schema"))
+
+
 def cmd_lint(args) -> None:
     """claudemd-lint, then the repo's declared `Lint:` command, from the clone's top
     level; both always run so one pass shows everything to fix (#33)."""
@@ -977,15 +1029,26 @@ def default_slug(title: str) -> str:
     return lib.slugify(subject)[:BRANCH_SLUG_MAX].strip("-") or "work"
 
 
-def branch_type(requested, is_bug: bool) -> str:
+def branch_type(requested, is_bug: bool, setup: dict | None = None) -> str:
+    """The `{type}` word of an issue's branch (D5 of #113): a bug's is the setup's bug word; another issue's
+    is the feature word, or `requested` when it is a branch type other than hotfix, the bug word or `fix`."""
+    setup = setup or lib.read_setup()
+    feature, bug = setup["branch_feature"], setup["branch_bug"]
     if is_bug:
-        if requested not in (None, "fix"):
-            die(f"the issue is labelled `{lib.BUG_LABEL[0]}`, so its branch is `fix/`, not `{requested}/`")
-        return "fix"
-    if requested == "fix":
-        die(f"`fix/` branches are only for an issue labelled `{lib.BUG_LABEL[0]}`; "
+        if requested not in (None, bug):
+            die(f"the issue is labelled `{lib.BUG_LABEL[0]}`, so its branch is `{bug}/`, not `{requested}/`")
+        return bug
+    if requested is None:
+        return feature
+    if requested == "hotfix":
+        die("vault.py branch never creates a hotfix branch (d81)")
+    if requested == bug or (requested == "fix" and feature != "fix"):
+        die(f"`{requested}/` branches are only for an issue labelled `{lib.BUG_LABEL[0]}`; "
             f"if this issue is a bug, add the label on GitHub first")
-    return requested or "feat"
+    allowed = [t for t in lib.BRANCH_TYPES if t not in ("hotfix", "fix")] + [feature]
+    if requested not in allowed:
+        die(f"--type must be one of {', '.join(dict.fromkeys(allowed))} (got {requested!r})")
+    return requested
 
 
 def cmd_branch(args) -> None:
@@ -994,12 +1057,13 @@ def cmd_branch(args) -> None:
     info, warnings = check_preflight(args.repo, args.issue, slug)
     for w in warnings:
         print(f"warning: {w}")
-    btype = branch_type(args.type, lib.BUG_LABEL[0] in info["labels"])
+    setup = lib.read_setup()
+    btype = branch_type(args.type, lib.BUG_LABEL[0] in info["labels"], setup)
     impl, _ = load_impl(args.repo, args.issue)
     top = require_clone(slug)
-    name = f"{btype}/{args.issue}-{args.slug or default_slug(info['title'])}"
-    if not lib.BRANCH_RE.match(name):
-        die(f"branch '{name}' must match <type>/<issue>-<slug> with a lowercase a-z0-9- slug")
+    name = lib.branch_name(setup, btype, args.issue, args.slug or default_slug(info['title']))
+    if not lib.branch_regex(setup, args.issue).match(name):
+        die(f"branch '{name}' must match the branch pattern {setup['branch']} with a lowercase a-z0-9- slug")
     pat = issue_branch_re(args.issue)
     local = github.git("for-each-ref", "--format=%(refname:short)", "refs/heads", cwd=top).splitlines()
     found = [f"{b} (local)" for b in local if pat.match(b)]
@@ -2098,8 +2162,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("repo")
         p.add_argument("issue")
         if name == "branch":
-            p.add_argument("--type", choices=[t for t in lib.BRANCH_TYPES if t != "hotfix"],
-                           help="default: fix for an issue labelled bug, else feat")
+            p.add_argument("--type", help="default: the bug word (fix) for an issue labelled bug, else the "
+                                          "feature word (feat); checked against the setup")
             p.add_argument("--slug")
         if name == "open-pr":
             p.add_argument("--body-file")
@@ -2112,6 +2176,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_claudemd_lint)
     p = sub.add_parser("lint", help="claudemd-lint plus the repo's declared lint command (current clone)")
     p.set_defaults(fn=cmd_lint)
+    p = sub.add_parser("check-branch", help="exit 1 unless a branch name follows the setup's branch pattern")
+    p.add_argument("name")
+    p.set_defaults(fn=cmd_check_branch)
 
     idea = sub.add_parser("idea", help="add, drop or promote an idea").add_subparsers(
         dest="action", required=True, metavar="add|drop|promote")
@@ -2225,7 +2292,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     lib.setup_io()
-    if lib.VAULT is None and sys.argv[1:2] != ["lint"]:      # `lint` reads nothing from the vault
+    if lib.VAULT is None and sys.argv[1:2] not in (["lint"], ["check-branch"]):  # these need no vault
         die(f"no usable vault: {lib.CONFIG} is missing, or its vault path has no .obsidian folder; "
             "run install.py --vault <path>")
     args = build_parser().parse_args()

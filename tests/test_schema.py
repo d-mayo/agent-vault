@@ -831,6 +831,67 @@ class SetupNoteTest(VaultCase):
             self.assertIn(want, text)
 
 
+class IssueKeyTest(VaultCase):
+    """A Jira ticket key is an issue identity wherever a number is (#113)."""
+
+    def setUp(self):
+        super().setUp()
+        self.load_base()
+
+    def copy_work(self, repo, old, new_issue):
+        for kind in ("plan", "impl", "retro"):
+            text = (self.vault / f"Agent/Work/demo/demo-{old}-{kind}.md").read_text(encoding="utf-8")
+            text = text.replace("repo: demo", f"repo: {repo}").replace(f"issue: {old}", f"issue: {new_issue}")
+            text = text.replace(f"demo-{old}-", f"{repo}-{new_issue}-")
+            self.put(f"Agent/Work/{repo}/{repo}-{new_issue}-{kind}.md", text)
+
+    def rules(self, relpath):
+        res = lib.validate_file(self.vault / relpath)
+        return sorted({m[1:m.index("]")] for m in res.errors})
+
+    def test_key_named_notes_validate(self):          # T2 -> AC2
+        self.copy_work("demo", 1, "PROJ-12")
+        retro2 = (self.vault / "Agent/Work/demo/demo-PROJ-12-retro.md").read_text(encoding="utf-8")
+        self.put("Agent/Work/demo/demo-PROJ-12-retro-2.md", retro2.replace("demo-PROJ-12-retro", "demo-PROJ-12-retro-2"))
+        for kind in ("plan", "impl", "retro", "retro-2"):
+            with self.subTest(kind):
+                self.assertEqual(self.rules(f"Agent/Work/demo/demo-PROJ-12-{kind}.md"), [])
+        self.assertEqual(self.check(), ({}, {}))
+
+    def test_pr_stays_a_number_and_issue_must_be_a_form(self):          # T2 -> AC2
+        self.copy_work("demo", 1, "PROJ-12")
+        rel = "Agent/Work/demo/demo-PROJ-12-impl.md"
+        good = (self.vault / rel).read_text(encoding="utf-8")
+        self.put(rel, good.replace("pr: 2", "pr: PROJ-7"))
+        self.assertEqual(self.rules(rel), ["FM-FORMAT"])
+        self.put(rel, good.replace("issue: PROJ-12", "issue: proj-12"))
+        self.assertIn("FM-FORMAT", self.rules(rel))
+
+    def test_repo_name_ending_in_caps_segment(self):          # T2 -> AC2
+        self.put("Agent/Projects/foo.md", (self.vault / "Agent/Projects/demo.md").read_text(
+            encoding="utf-8").replace("id: demo", "id: foo").replace("repos: [me/demo]", "repos: [me/foo-SDK]"))
+        self.copy_work("foo-SDK", 1, 12)
+        for kind in ("plan", "impl", "retro"):
+            self.assertEqual(self.rules(f"Agent/Work/foo-SDK/foo-SDK-12-{kind}.md"), [], kind)
+        self.put("Agent/Work/foo-SDK/foo-SDK-12-extra.md", "x\n")
+        self.assertEqual(self.rules("Agent/Work/foo-SDK/foo-SDK-12-extra.md"), ["PATH-NAME"])
+
+    def test_daily_lines_and_sources(self):          # T2 -> AC2
+        def daily(ln):
+            return any(rx.match(ln) for _, rx in lib.LINE_FORMATS["DAILY-LINE"])
+        self.assertTrue(daily("- 09:30 demo#PROJ-12 planned") and daily("- 09:30 demo#12 merged — x"))
+        self.assertFalse(daily("- 09:30 demo#proj-12 planned") or daily("- 09:30 demo#PROJ12 planned"))
+        for source in ("plan demo#PROJ-12 D1", "issue demo#PROJ-12", "retro demo#PROJ-12"):
+            self.assertTrue(lib.DECISION_SOURCE_RE.match(source), source)
+        self.assertTrue(lib.UNIQUE_SOURCE_RE.match("plan demo#PROJ-12 D1"))
+        self.assertTrue(lib.IDEA_SOURCE_RE.match("retro demo#PROJ-12"))
+        self.assertFalse(lib.IDEA_SOURCE_RE.match("retro demo#proj-12"))
+
+    def test_schema_names_the_key_form(self):          # T7 -> AC6
+        text = lib.schema_text()
+        self.assertIn("PROJ-12", text)
+
+
 class CrossNoteTest(VaultCase):
     def test_repos_empty_and_code_links(self):    # T9 -> AC9
         self.load_base()

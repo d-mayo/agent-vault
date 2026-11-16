@@ -413,6 +413,43 @@ class SessionStartTest(HookCase):
                      "prs": [{"number": 3, "headRefName": "feat/7-thing", "url": "u/3"}]})
         self.assertIn("Stage: feature (2 of 2 sub-issues open).", self.start(self.repo))
 
+    def test_repo_session_shows_a_ticket_key_log_line(self):     # T2 -> AC2
+        self.cli("log", "seed", "--project", "demo")
+        daily = next((self.vault / "Agent" / "Daily").glob("*.md"))
+        with open(daily, "a", encoding="utf-8", newline="\n") as f:
+            f.write("- 12:00 widget#PROJ-7 planned\n")
+        self.assertIn("widget#PROJ-7 planned", self.start(self.repo))
+
+    def on_branch(self, name):
+        git("checkout", "-q", "-b", name, cwd=self.repo)
+
+    def test_custom_pattern_ties_the_branch(self):     # T4 -> AC3
+        self.cli("setup", "--tracker", "github", "--branch", "{issue}/{type}-{slug}",
+                 "--branch-feature", "story", "--branch-bug", "bugfix")
+        self.on_branch("7/story-x")
+        out = self.start(self.repo)
+        self.assertIn("widget#7", out)
+        self.assertIn("Stage:", out)
+
+    def test_jira_branch_names_the_key_and_skips_the_stage_lookup(self):     # T4 -> AC3
+        self.cli("setup", "--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+                 "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+        self.on_branch("feat/PROJ-12-x")
+        out = self.start(self.repo)
+        self.assertIn("widget#PROJ-12", out)
+        self.assertIn("isn't available in a Jira setup yet", out)
+        self.assertNotIn("Stage unavailable", out)
+
+    def test_default_setup_branch_forms(self):     # T4 -> AC3
+        self.on_branch("feat/12-Foo_Bar")
+        self.assertIn("widget#12", self.start(self.repo))
+        git("checkout", "-q", "-b", "feat/PROJ-12-x", cwd=self.repo)
+        self.assertIn("isn't tied to an issue", self.start(self.repo))
+
+    def test_branch_without_an_issue_names_the_pattern(self):     # T4 -> AC3
+        git("checkout", "-q", "main", cwd=self.repo)
+        self.assertIn("{type}/{issue}-{slug}", self.start(self.repo))
+
     def test_repo_session_last_five_lines_only(self):
         for i in range(7):
             self.cli("log", f"line number {i}", "--project", "demo")
@@ -776,6 +813,20 @@ class StopTest(HookCase):
         with open(daily, "a", encoding="utf-8", newline="\n") as f:
             f.write("- 12:00 widget#7 pr-opened\n")
         (self.repo / "a.txt").write_text("more work\n", encoding="utf-8")   # after the event line
+        self.assertEqual(self.stop(cwd=self.repo).returncode, 0)
+
+    def test_pipeline_event_for_a_ticket_key_counts_as_logged(self):     # T2 -> AC2
+        self.start(self.repo)
+        self.tick()
+        self.cli("log", "seed", "--project", "demo")
+        daily = next((self.vault / "Agent" / "Daily").glob("*.md"))
+        self.tick()
+        (self.repo / "a.txt").write_text("work\n", encoding="utf-8")
+        self.tick()
+        self.assertEqual(self.stop(cwd=self.repo).returncode, 2)
+        with open(daily, "a", encoding="utf-8", newline="\n") as f:
+            f.write("- 12:00 widget#PROJ-7 pr-opened\n")
+        (self.repo / "a.txt").write_text("more work\n", encoding="utf-8")
         self.assertEqual(self.stop(cwd=self.repo).returncode, 0)
 
     def test_pipeline_event_for_another_repo_does_not_count(self):

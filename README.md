@@ -64,7 +64,9 @@ manages a repo's settings or only checks them, the branch-name pattern with the 
 a bug, and, for Jira, the connector's name, the issue types and the planned label. The note holds the
 same values on every machine, so it has no path in it. A vault with no setup note works exactly as
 before: GitHub issues, squash merges, no required approvals, settings managed by `repo-init`,
-branches `{type}/{issue}-{slug}`.
+branches `{type}/{issue}-{slug}`. Every command that takes an issue takes its number, or in a Jira
+setup its ticket key (`PROJ-12`, with the prefix of the project's `jira_project`); branch names, the
+pre-push hook and the retro's PR check all follow the setup's branch pattern.
 
 After `install.py`, start Claude Code in the vault and say "set up this vault" (the `setup` skill):
 it interviews you on each value, shows exactly what it will write, and runs `vault.py setup` only
@@ -77,7 +79,8 @@ Jira setup it creates no GitHub labels and writes no issue template.
 
 ## Git conventions
 
-- Never commit to `main`. Use a branch named `<type>/<issue>-<slug>`, for example
+- Never commit to `main`. Use a branch named by the setup's branch pattern (default
+  `<type>/<issue>-<slug>`, the issue a number or, in a Jira setup, the ticket key), for example
   `feat/12-note-schema`, and open a PR. Only the owner merges, with **Squash and merge**;
   the one exception is `vault.py merge` (the `merge` skill), which merges the PR itself, with the
   merge style of the vault's setup, once the owner (in a `handoff` run, the orchestrating session)
@@ -109,5 +112,6 @@ python ~/.claude/agent-vault/vault.py lint    # claudemd-lint, then the repo's L
 python -m unittest discover -s tests -t .     # the tests, classes in parallel; ruff on PATH too (AGENT_VAULT_TESTS_SERIAL=1: one process)
 ```
 
-The pre-push hook runs `vault.py lint` before any push that creates or updates a branch, and
+The pre-push hook refuses a branch whose name doesn't follow the setup's branch pattern
+(`vault.py check-branch`), runs `vault.py lint` before any push that creates or updates a branch, and
 implement-story runs it before every review.

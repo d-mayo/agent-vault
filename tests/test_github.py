@@ -17,6 +17,7 @@ from tests.helpers import (CODE, FAKE_INSTALLER, REPO, copy_scenario, make_vault
 sys.path.insert(0, str(CODE))
 import github  # noqa: E402
 import lib  # noqa: E402
+import vault  # noqa: E402
 
 VAULT_PY = CODE / "vault.py"
 FAKE_GH = REPO / "tests" / "fake_gh.py"
@@ -271,6 +272,67 @@ class GhCase(unittest.TestCase):
         return self.cli("branch", "widget", "7", *extra)
 
 
+class IssueArgumentTest(GhCase):  # T1 -> AC1 (#113)
+    JIRA = ("--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+            "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+    WITH_ISSUE = [("new", "plan"), ("new", "retro"), ("seal", "plan"), ("preflight",), ("branch",), ("open-pr",),
+                  ("stage",), ("seal", "retro"), ("merge",), ("closes-feature",)]
+
+    def jira(self, project_key="PROJ"):
+        self.ok(self.cli("setup", *self.JIRA))
+        if project_key:
+            p = self.vault / "Agent" / "Projects" / "widgets.md"
+            p.write_text(p.read_text(encoding="utf-8").replace("status: active", f"status: active{chr(10)}jira_project: {project_key}"),
+                         encoding="utf-8", newline=chr(10))
+
+    def test_key_accepted_in_a_jira_setup(self):
+        self.jira()
+        self.ok(self.cli("new", "plan", "widget", "PROJ-12"))
+        work = self.vault / "Agent" / "Work" / "widget"
+        self.assertEqual(sorted(p.name for p in work.iterdir()), ["widget-PROJ-12-impl.md", "widget-PROJ-12-plan.md"])
+        self.assertIn("issue: PROJ-12", (work / "widget-PROJ-12-plan.md").read_text(encoding="utf-8"))
+        impl = work / "widget-PROJ-12-impl.md"
+        impl.write_text(impl.read_text(encoding="utf-8").replace("status: open", "pr: 5" + chr(10) + "status: open"),
+                        encoding="utf-8", newline=chr(10))
+        self.ok(self.cli("new", "retro", "widget", "PROJ-12"))
+        self.assertTrue((work / "widget-PROJ-12-retro.md").is_file())
+        self.assert_valid()
+
+    def test_wrong_forms_refused_creating_nothing(self):
+        self.jira()
+        for bad in ("12", "OTHER-12", "proj-12", "PROJ12", "PROJ-", "PROJ-12x"):
+            with self.subTest(bad):
+                self.refused(self.cli("new", "plan", "widget", bad), "jira ticket key")
+        self.assertFalse((self.vault / "Agent" / "Work" / "widget").exists())
+
+    def test_project_without_jira_project_names_the_field(self):
+        self.jira(project_key=None)
+        self.refused(self.cli("new", "plan", "widget", "PROJ-12"), "jira_project")
+        self.assertFalse((self.vault / "Agent" / "Work" / "widget").exists())
+
+    def test_every_command_refuses_a_number_in_jira_before_github(self):
+        self.jira()
+        for cmd in self.WITH_ISSUE:
+            with self.subTest(cmd):
+                self.refused(self.cli(*cmd, "widget", "12"), "jira ticket key")
+                self.refused(self.cli(*cmd, "widget", "OTHER-12"), "PROJ")
+        self.assertEqual(self.calls(), [])
+
+    def test_every_command_refuses_a_key_in_a_github_setup(self):
+        for setup in (False, True):
+            if setup:
+                self.ok(self.cli("setup", "--tracker", "github"))
+            for cmd in self.WITH_ISSUE:
+                with self.subTest(cmd, setup=setup):
+                    self.refused(self.cli(*cmd, "widget", "PROJ-12"), "number")
+        self.assertEqual(self.calls(), [])
+        self.assertFalse((self.vault / "Agent" / "Work" / "widget").exists())
+
+    def test_no_setup_note_numbers_work_as_before(self):
+        self.ok(self.cli("new", "plan", "widget", "12"))
+        self.assertTrue((self.vault / "Agent" / "Work" / "widget" / "widget-12-plan.md").is_file())
+
+
 class SealPlanTest(GhCase):  # T1 -> AC1, AC11
     def test_refuses_missing_plan(self):
         self.refused(self.cli("seal", "plan", "widget", "7"), "doesn't exist")
@@ -485,9 +547,7 @@ class BranchTest(GhCase):  # T3 -> AC3, AC11
         for t in ("feat", "chore"):
             self.refused(self.branch("--type", t), "bug", "fix/")
             self.no_branch_made()
-        r = self.branch("--type", "hotfix")
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("invalid choice: 'hotfix'", r.stderr)
+        self.refused(self.branch("--type", "hotfix"), "bug", "fix/")
         self.no_branch_made()
         self.ok(self.branch())
         self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-add-widget-frobbing")
@@ -504,9 +564,7 @@ class BranchTest(GhCase):  # T3 -> AC3, AC11
         self.sealed()
         self.refused(self.branch("--type", "fix"), "bug", "label")
         self.no_branch_made()
-        r = self.branch("--type", "hotfix")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("hotfix", r.stderr)
+        self.refused(self.branch("--type", "hotfix"), "hotfix")
         self.no_branch_made()
 
     def test_help_and_docstring(self):  # T3
@@ -540,6 +598,68 @@ class BranchTest(GhCase):  # T3 -> AC3, AC11
         git("remote", "set-url", "origin", "https://github.com/acme/other.git", cwd=self.clone)
         self.ok(self.cli("seal", "plan", "widget", "7"))
         self.refused(self.branch(), "acme/other", SLUG)
+
+
+class BranchPatternTest(GhCase):  # T3 -> AC3 (#113)
+    def setup_words(self, *extra):
+        self.ok(self.cli("setup", "--tracker", "github", "--branch", "{issue}/{type}-{slug}",
+                         "--branch-feature", "story", "--branch-bug", "bugfix", *extra))
+
+    def test_custom_pattern_and_words(self):
+        self.setup_words()
+        self.sealed()
+        self.ok(self.branch())
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "7/story-add-widget-frobbing")
+        self.assertEqual(self.fm(self.note("impl"))["branch"], "7/story-add-widget-frobbing")
+        self.assertRegex(self.daily(), r"widget#7 started")
+
+    def test_bug_gets_the_bug_word(self):
+        self.setup_words()
+        self.sealed()
+        self.issue()["labels"].append("bug")
+        self.save()
+        self.refused(self.branch("--type", "story"), "bug", "bugfix/")
+        self.ok(self.branch())
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "7/bugfix-add-widget-frobbing")
+
+    def test_type_option_follows_the_setup(self):
+        self.setup_words()
+        self.sealed()
+        for t in ("fix", "hotfix", "bugfix"):
+            self.refused(self.branch("--type", t), t)
+        self.refused(self.branch("--type", "nonsense"), "--type")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.ok(self.branch("--type", "docs", "--slug", "x"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "7/docs-x")
+
+    def test_existing_branch_blocks_by_pattern(self):
+        self.setup_words()
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["7/story-x"]
+        self.save()
+        self.refused(self.branch(), "already has a branch", "7/story-x")
+
+    def test_a_longer_issue_does_not_block(self):
+        self.ok(self.cli("setup", "--tracker", "github", "--branch", "{type}/{slug}-{issue}"))
+        self.sealed()
+        self.state["repos"][SLUG]["branches"] = ["feat/x-17", "feat/y-70"]
+        self.save()
+        self.ok(self.branch("--slug", "mine"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "feat/mine-7")
+
+    def test_feature_word_fix_makes_a_plain_issue_branch_fix(self):
+        self.ok(self.cli("setup", "--tracker", "github", "--branch-feature", "fix", "--branch-bug", "bug"))
+        self.sealed()
+        self.ok(self.branch("--slug", "x"))
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "fix/7-x")
+
+    def test_stage_finds_the_pr_by_pattern(self):
+        self.setup_words()
+        self.sealed()
+        self.state["repos"][SLUG]["prs"] = [{"number": 3, "headRefName": "7/story-x", "url": "u/3"}]
+        self.state["repos"][SLUG]["branches"] = ["7/story-x"]
+        self.save()
+        self.assertIn("in review", self.ok(self.cli("stage", "widget", "7")).stdout)
 
 
 class OpenPrTest(GhCase):  # T4 -> AC4, AC11
@@ -2155,6 +2275,46 @@ class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
         git("config", "core.hooksPath", str(theirs), cwd=self.clone)
         self.refused(self.init(), "core.hooksPath", "isn't agent-vault's")
         self.assertEqual(self.calls("api"), [])
+
+
+class JiraPrLinkTest(GhCase):  # T6 -> AC5 (#113)
+    JIRA = {**lib.SETUP_DEFAULTS, "tracker": "jira"}
+
+    def open_pr(self, head, title):
+        body = self.body_file("Closes #7" + chr(10))
+        url = github.gh("pr", "create", "--repo", SLUG, "--head", head, "--base", "main",
+                        "--title", title, "--body-file", body).strip()
+        return url.rsplit("/", 1)[1]
+
+    def missing(self, head, title, key="PROJ-12"):
+        n = self.open_pr(head, title)
+        return vault.pr_link_missing(github.pr_link(SLUG, n), key, self.JIRA)
+
+    def test_linked_by_branch_and_title(self):
+        self.assertEqual(self.missing("feat/PROJ-12-x", "PROJ-12: Do it"), [])
+        self.assertEqual(self.missing("feat/PROJ-12-y", "Do PROJ-12"), [])
+
+    def test_title_must_hold_the_whole_key(self):
+        for title in ("Do it", "PROJ-123: Do it", "XPROJ-12: Do it"):
+            with self.subTest(title):
+                out = self.missing("feat/PROJ-12-x", title)
+                self.assertEqual(len(out), 1)
+                self.assertIn("title", out[0])
+
+    def test_branch_must_carry_the_key(self):
+        for head in ("feat/PROJ-13-x", "feat/PROJ-123-x", "feat/12-x"):
+            with self.subTest(head):
+                out = self.missing(head, "PROJ-12: Do it")
+                self.assertEqual(len(out), 1)
+                self.assertIn("branch", out[0])
+
+    def test_both_missing_names_both(self):
+        self.assertEqual(len(self.missing("feat/PROJ-13-x", "Do it")), 2)
+
+    def test_the_pr_read_does_not_change_what_closing_references_read(self):
+        n = self.open_pr("feat/7-x", "t")
+        self.assertEqual(github.pr_link(SLUG, n), {"title": "t", "head": "feat/7-x"})
+        self.assertEqual(github.pr_closing(SLUG, n)["closes"], [("7", SLUG)])
 
 
 class GhHelperTest(GhCase):  # T10 -> AC10
