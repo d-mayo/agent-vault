@@ -974,6 +974,25 @@ class HandoffDocsTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC14 (#7
         self.assertMentions("opus", "repo clone", text=line)
 
 
+class HandoffJiraTest(AssertMentionsMixin, unittest.TestCase):  # T3, T4 -> AC3, AC4 (#116)
+    def test_skill_has_the_jira_path_and_keeps_its_github_text(self):  # T3
+        skill = read("handoff", "SKILL.md")
+        self.assertMentions("## Jira setup", "vault.py tracker", "through the connector", "ticket file",
+                            "ticket map", "design stories", "unfiled stories in the report",
+                            "skip a story `vault.py stage", "reports `done`", "closes no feature",
+                            "never create, edit or change the status of a ticket", text=skill)
+        self.assertMentions("an issue labelled `feature`", "skip closed issues", text=skill)
+        self.assertNotIn("## Approvals, pings and the closing summary", skill)
+
+    def test_docs_describe_stage_without_a_ticket_and_handoffs_jira_path(self):  # T4
+        for name in ("README.md", "CLAUDE.md"):
+            self.assertMentions("without `--ticket`" if name == "README.md" else "takes `--ticket` optionally",
+                                "ticket map", "handoff", text=(REPO / name).read_text(encoding="utf-8"))
+        guide = (REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8")
+        self.assertMentions("without `--ticket` in a jira setup", "in a jira setup it fetches each ticket",
+                            "ticket map", text=guide)
+
+
 class NoPrPathTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#66)
     def test_plan_story_declares_it(self):
         self.assertMentions("pr: none", "Files:", "whether the issue ends in a pull request",

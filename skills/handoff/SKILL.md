@@ -145,6 +145,35 @@ never read `Agent/Setup.md` yourself.
   merged, so none of them is touched. Rerunning handoff once the user has
   merged resumes with the next story.
 
+## Jira setup
+
+Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+section. If it prints `tracker: jira`, the issues are Jira tickets identified by
+their keys (e.g. `PROJ-12`), and everything above applies with these changes:
+
+- Learn the connector, the issue types, the planned label and the ticket file's
+  fields from `vault.py tracker <repo>`; never read `Agent/Setup.md` yourself.
+- Fetch each ticket through the connector and write the ticket file (JSON with
+  the fields `tracker` names) in a scratchpad or temp folder outside both the
+  clone and the vault; fetch it again before each command that takes
+  `--ticket`. The planning, implementing (the Sonnet subagent gets the same
+  instructions) and `open-pr` steps pass it as implement-story's and
+  plan-story's Jira sections say.
+- "Handoff the feature <KEY>" expands from the ticket map: the feature's key
+  is recorded there with its design, so run `vault.py design stories <design>`
+  for the design's stories with their keys and repos, in story order, and run
+  the filed ones. List the unfiled stories in the report and never file them.
+  Keys filed under the feature but outside the design's stories run last.
+- Skip a story `vault.py stage <repo> <KEY>` reports `done` (a sealed impl note
+  or a merged PR carrying the key): never judge it from the ticket's status.
+  `stage` needs no ticket file, and never calls Jira.
+- A Jira setup closes no feature (`vault.py closes-feature` says so): report
+  that the user closes the feature's ticket where the GitHub path would name
+  the feature the merge closes.
+- Never create, edit or change the status of a ticket (no transition, no
+  "Done"); the only things agent-vault posts are the planned label and the
+  retro's closing comment, through the skills that do so.
+
 ## Asking the user
 
 Whenever you need the user, first send a push notification (`PushNotification`)
