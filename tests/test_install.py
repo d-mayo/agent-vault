@@ -66,11 +66,13 @@ class InstallTest(unittest.TestCase):
 
     def test_hooks_call_the_launcher(self):  # T2 -> AC2
         self.run_install()
-        launcher = (self.home / ".claude" / "agent-vault" / "bin" / "hook").as_posix()
+        launcher = self.home / ".claude" / "agent-vault" / "bin" / "hook"
         cmds = [c for _, c in self.our_hook_commands()]
         self.assertEqual(len(cmds), 5)
         for c in cmds:
-            self.assertTrue(c.startswith(f'"{launcher}" '), c)
+            self.assertTrue(c.startswith('"'), c)
+            quoted, _, _rest = c[1:].partition('" ')       # the temp path may be spelled differently
+            self.assertTrue(os.path.samefile(quoted, launcher), c)
             self.assertNotIn(Path(sys.executable).as_posix(), c)
             self.assertEqual(c.endswith(" --blocking"), "guard.py" in c, c)
         self.assertEqual(sum(c.endswith(" --blocking") for c in cmds), 2)
