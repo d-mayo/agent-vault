@@ -56,7 +56,7 @@ PATHS = {                                  # note type -> layout (for `schema`)
     "project": "Projects/<id>.md",
     "plan": "Work/<repo>/<repo>-<n>-plan.md",
     "impl": "Work/<repo>/<repo>-<n>-impl.md",
-    "retro": "Work/<repo>/<repo>-<n>-retro.md",
+    "retro": "Work/<repo>/<repo>-<n>-retro.md (a follow-up retro: <repo>-<n>-retro-<k>.md, k >= 2)",
     "idea": "Ideas/<YYYY-MM-DD>-<slug>.md",
     "decision": "Decisions/<project>/<project>-d<n>-<slug>.md",
     "design": "Designs/<project>/<project>-design-<n>-<slug>.md",
@@ -101,7 +101,7 @@ OPTIONAL = {
     "project": ["audited", "jira_project"],
     "plan": ["issue_updated", "base_sha", "pr"],
     "impl": ["branch", "pr"],
-    "retro": [],
+    "retro": ["commit"],
     "idea": ["project", "promoted_to"],
     "decision": ["replaces", "superseded_by"],
     "design": ["sealed", "extends", "replaces"],
@@ -110,7 +110,8 @@ OPTIONAL = {
 }
 CONDITIONAL = {                            # shown by `schema`; enforced by FM-COND / PLAN-SEALED
     "plan": "issue_updated and base_sha are required when status is sealed; pr, if present, is none (the issue ends without a pull request)",
-    "retro": "pr is a number, or none when the plan declares pr: none; then a non-empty '## Closing comment' section follows Follow-ups, and only then",
+    "retro": "pr is a number, or none when the plan declares pr: none; then a non-empty '## Closing comment' section follows Follow-ups, and only then; "
+             "commit (7-40 hex characters) is the PR commit `seal retro` readied, set by `seal retro` only; a follow-up retro <repo>-<n>-retro-<k>.md needs retro-<k-1> (retro for k = 2) of the same issue",
     "idea": "promoted_to is required if and only if status is promoted",
     "decision": "superseded_by is required if and only if status is superseded",
     "design": "sealed is required if and only if status is sealed; extends and replaces each link a sealed design of the same project",
@@ -144,7 +145,7 @@ SECTIONS = {                               # required `##` sections, in order
 }
 SIZE_CAPS = {"project": 60, "impl": 80, "retro": 40, "idea": 8, "decision": 12}   # body lines; errors
 WARN_LINES = {"plan": 400, "design": 400}                        # body lines; warning
-EVENTS = ["planned", "started", "pr-opened", "retro-done"]          # '<repo>#<n> <event>' lines
+EVENTS = ["planned", "started", "pr-opened", "retro-done", "merged"]          # '<repo>#<n> <event>' lines
 IDEA_EVENTS = ["idea-added", "idea-promoted"]                       # '<event> — <title> [[<idea>]]' lines
 DECISION_EVENT = "decision-recorded"                                # '<event> — <title> [[<record>]]' lines
 DESIGN_EVENT = "design-sealed"                                      # '<event> — <title> [[<design>]]' lines
@@ -181,7 +182,8 @@ SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 IDEA_FILE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$")
-WORK_FILE_RE = re.compile(r"^(?P<repo>[A-Za-z0-9._-]+?)-(?P<n>[1-9]\d*)-(?P<kind>plan|impl|retro)$")
+WORK_FILE_RE = re.compile(r"^(?P<repo>[A-Za-z0-9._-]+?)-(?P<n>[1-9]\d*)-(?P<kind>plan|impl|retro)"
+                          r"(?P<seq>(?<=retro)-(?:[2-9]|[1-9]\d+))?$")   # seq: a follow-up retro's -<k>, k >= 2
 IDEA_SOURCE_RE = re.compile(r"^(?:retro [A-Za-z0-9._-]+#[1-9]\d*|phone:\S.*|session)$")
 DECISION_SOURCE_RE = re.compile(r"^(?:plan [A-Za-z0-9._-]+#[1-9]\d* D[1-9]\d*|design [a-z0-9]+(?:-[a-z0-9]+)* D[1-9]\d*"
                                 r"|(?:issue|retro) [A-Za-z0-9._-]+#[1-9]\d*|session)$")
@@ -297,6 +299,7 @@ RULES = {
     "IMPL-REV": ("error", "Review findings end in '→ fixed in <sha>', '→ won't fix: <reason>' or, for minor only, '→ left open' (or None)"),
     "RETRO-AUDIT": ("error", "Audit lines are '- <heading>: confirmed|rewritten|removed — <reason>'"),
     "RETRO-FOLLOW": ("error", "Follow-up lines are issue created/amended, idea link, decision link or dropped, each optionally ending in ' (R<n>[, R<m>…])' for the left-open findings they settle"),
+    "RETRO-SEQ": ("error", "A follow-up retro <repo>-<n>-retro-<k>.md needs the retro before it (retro-<k-1>, or retro for k = 2) of the same issue"),
     "PLAN-PR": ("error", "A plan's optional 'pr' field can only be 'none' (the issue ends without a pull request)"),
     "RETRO-CLOSE": ("error", "A retro with 'pr: none' has a non-empty '## Closing comment' section after Follow-ups (a warning while open); a retro with a PR has none"),
     "DAILY-LINE": ("error", "Log lines are '- HH:MM <repo>#<n> <event>[ — detail]', '- HH:MM session — …' an idea event line, a decision-recorded line or a design-sealed line"),
@@ -790,7 +793,7 @@ def classify(parts: tuple[str, ...]):
     if top == FOLDERS["work"] and depth == 3:
         m = WORK_FILE_RE.match(stem)
         if not m or m.group("repo") != parts[1]:
-            return bad_name(f"{parts[1]}-<n>-plan|impl|retro.md")
+            return bad_name(f"{parts[1]}-<n>-plan|impl|retro.md (a follow-up retro: {parts[1]}-<n>-retro-<k>.md, k >= 2)")
         return m.group("kind"), {"repo": m.group("repo"), "issue": m.group("n")}, None
     return None, {}, stray
 
@@ -852,6 +855,8 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
         res.add("FM-FORMAT", f"jira_project is a Jira project key like PROJ (got {fm.get('jira_project')!r})")
     if scalar("base_sha") and not SHA_RE.match(scalar("base_sha")):
         res.add("FM-FORMAT", "base_sha must be a 7-40 character lowercase hex sha")
+    if fm.get("commit") not in (None, "") and not (scalar("commit") and SHA_RE.match(scalar("commit"))):
+        res.add("FM-FORMAT", "commit must be a 7-40 character lowercase hex sha")
     repos = fm.get("repos")
     if repos is not None and repos != "":
         if not isinstance(repos, list):
@@ -1230,6 +1235,12 @@ def validate_file(path: Path, index: Index | None = None, text: str | None = Non
             if len(owners) > 1 or (len(owners) == 1 and owners[0] != path.stem):
                 res.add("X-REPO-DUP", f"repo '{slug.split('/')[-1]}' is listed by more than one project: "
                         f"{', '.join(sorted(set(owners) | {path.stem}))}")
+    seq = WORK_FILE_RE.match(path.stem)
+    if etype == "retro" and seq and seq.group("seq"):
+        k = int(seq.group("seq")[1:])
+        prev = f"{seq.group('repo')}-{seq.group('n')}-retro" + (f"-{k - 1}" if k > 2 else "")
+        if not (path.parent / f"{prev}.md").is_file():
+            res.add("RETRO-SEQ", f"a follow-up retro needs {prev}.md of the same issue, which doesn't exist")
     if etype in ("plan", "impl", "retro") and parts[1] not in index.repos:
         res.add("X-REPO-UNREG", f"Work/{parts[1]}/ has no project listing repo '{parts[1]}' in repos:")
     if (etype in ("idea", "decision") or (etype == "design" and fm.get("status") == "sealed")) \

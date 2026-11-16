@@ -137,6 +137,22 @@ class SchemaOutputTest(VaultCase):
         self.assertIn("pr, if present, is none", text)
         self.assertIn("## Closing comment", text)
 
+    def test_shows_follow_up_retros_commit_and_merged(self):    # T4 -> AC4
+        text = self.out()
+        self.assertIn("-retro-<k>.md", text)
+        self.assertIn("follow-up retro", text)
+        self.assertIn("commit (7-40 hex characters)", text)
+        self.assertIn("merged", text)
+
+    def test_follow_up_retro_names(self):        # T4 -> AC4
+        for name, ok in (("demo-1-retro-2", True), ("demo-1-retro-10", True), ("demo-1-retro-1", False),
+                         ("demo-1-retro-02", False), ("demo-1-plan-2", False)):
+            with self.subTest(name=name):
+                ntype, derived, problem = lib.classify(("Work", "demo", f"{name}.md"))
+                self.assertEqual(problem is None, ok)
+                if ok:
+                    self.assertEqual((ntype, derived), ("retro", {"repo": "demo", "issue": "1"}))
+
     def test_patching_a_constant_changes_output(self):   # T1 -> AC1
         with mock.patch.dict(lib.SIZE_CAPS, {"project": 61}), \
                 mock.patch.object(lib, "EVENTS", ["zzz-event"]), \

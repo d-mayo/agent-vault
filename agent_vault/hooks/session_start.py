@@ -54,9 +54,10 @@ def project_lines(pid: str, repos: list[str], n: int) -> list[str]:
 
 
 def notes_line(repo: str, issue: str) -> str:
+    notes = [("plan", vault.work_path(repo, issue, "plan")), ("impl", vault.work_path(repo, issue, "impl"))]
+    notes += [("retro" + p.stem.split("-retro", 1)[1], p) for p in vault.retro_paths(repo, issue)]
     found = []
-    for kind in ("plan", "impl", "retro"):
-        p = vault.work_path(repo, issue, kind)
+    for kind, p in notes:
         if p.is_file():
             fm, _, _ = lib.split_frontmatter(lib.read_text(p))
             found.append(f"{kind} ({(fm or {}).get('status', '?')})")

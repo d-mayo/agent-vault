@@ -166,6 +166,17 @@ def work_path(repo: str, issue: str, kind: str) -> Path:
     return AGENT / FOLDERS["work"] / repo / f"{repo}-{issue}-{kind}.md"
 
 
+def retro_paths(repo: str, issue: str) -> list[Path]:
+    """The issue's retro notes that exist, in order: retro, retro-2, retro-3, ... (a gap ends the list)."""
+    out, k = [], 1
+    while True:
+        p = work_path(repo, issue, "retro" if k == 1 else f"retro-{k}")
+        if not p.is_file():
+            return out
+        out.append(p)
+        k += 1
+
+
 # --- daily note and log lines ------------------------------------------------------
 def create_daily(d: dt.date | None = None) -> tuple[Path, bool]:
     d = d or lib.today()
