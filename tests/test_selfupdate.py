@@ -61,6 +61,13 @@ class DecisionTest(SelfUpdateCase):
         self.assertIn("next session", line)
         self.assertFalse(self.cfg.with_name(selfupdate.LOCK_NAME).exists())
 
+    def test_held_back_guide_is_in_the_line(self):  # T6 -> AC6
+        warn = "warning: the vault guide is from a newer agent-vault (commit abc123); left it alone."
+        self.setup_clone(installer=f"print({warn!r})\n")
+        line = self.run_update()
+        self.assertIn(self.sha[:7], line)
+        self.assertIn("vault guide is from a newer agent-vault (commit abc123)", line)
+
     def test_current_install_does_nothing(self):  # T2 -> AC2
         self.setup_clone(commit_time="equal")
         self.assertIsNone(self.run_update())

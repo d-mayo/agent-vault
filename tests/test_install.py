@@ -106,6 +106,10 @@ class InstallTest(unittest.TestCase):
         self.assertIn("install.py", readme.split("Hooks run with")[1].split("\n\n")[0])
         self.assertIn("rerun", (REPO / "install.py").read_text(encoding="utf-8").split("virtualenv")[1][:400])
 
+    def test_docs_mention_force_guide(self):  # T7 -> docs step
+        for name in ("README.md", "CLAUDE.md"):
+            self.assertIn("--force-guide", (REPO / name).read_text(encoding="utf-8"), name)
+
     def test_fresh_install(self):  # T1 -> AC1, AC4
         self.run_install()
         inst = self.home / ".claude" / "agent-vault"
@@ -234,13 +238,15 @@ class InstallTest(unittest.TestCase):
         self.assertIn("Bash(ls:*)", allow)
         self.assertEqual(json.loads(cfgp.read_text())["managed_allow"], [f"Bash({self.cli()}:*)"])
 
-    def test_guide_is_the_same_with_another_python(self):  # T4 -> AC4
+    def test_guide_is_the_same_with_another_python(self):  # T5 -> AC5
         from unittest import mock
-        self.run_install()
+        clone, shas, git = self.git_clone_with_commits()
+        install.install(self.vault, self.home, repo=clone)
         first = (self.vault / "CLAUDE.md").read_bytes()
         with mock.patch.object(sys, "executable", str(self.root / "other" / "python.exe")):
-            self.run_install()
+            install.install(self.vault, self.home, repo=clone)
         self.assertEqual((self.vault / "CLAUDE.md").read_bytes(), first)
+        self.assertTrue(first.startswith(b"<!-- agent-vault "))
         self.assertIn(b"~/.claude/agent-vault/bin/vault", first)
 
     def test_no_vault_settings_created(self):
@@ -299,7 +305,10 @@ class InstallTest(unittest.TestCase):
         for i in range(n):
             (clone / "f.txt").write_text(str(i))
             git("add", ".")
-            git("commit", "-q", "-m", f"c{i}", "--date", f"2026-01-0{i + 1}T00:00:00")
+            when = f"2026-01-0{i + 1}T00:00:00"
+            subprocess.run(["git", "-C", str(clone), "commit", "-q", "-m", f"c{i}", "--date", when],
+                           check=True, capture_output=True,
+                           env={**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when})
             shas.append(git("rev-parse", "HEAD"))
         return clone, shas, git
 
@@ -343,6 +352,103 @@ class InstallTest(unittest.TestCase):
         self.assertTrue(os.path.samefile(cfg["source"], clone))
         self.assertNotIn(chr(92), cfg["source"])        # recorded with forward slashes
         self.assertEqual(real(), before)
+
+    def guide(self):
+        return (self.vault / "CLAUDE.md").read_bytes()
+
+    def marker(self, git, sha):
+        return f"<!-- agent-vault {git('log', '-1', '--format=%ct', sha)} {sha} -->\n".encode()
+
+    def held(self, report):
+        return [ln for ln in report if "warning: the vault guide is from" in ln]
+
+    def test_guide_marker_line(self):  # T1 -> AC1
+        clone, shas, git = self.git_clone_with_commits()
+        install.install(self.vault, self.home, repo=clone)
+        self.assertEqual(len(shas[1]), 40)
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[1]) + b"# Vault guide"))
+        install.install(self.vault, self.home, repo=clone, commit=shas[0], force_guide=True)
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[0]) + b"# Vault guide"))
+        self.assertNotIn(b"{{CLI}}", self.guide())
+
+    def test_older_install_keeps_newer_guide(self):  # T2 -> AC2
+        clone, shas, git = self.git_clone_with_commits()
+        install.install(self.vault, self.home, repo=clone)
+        newer = self.guide()
+        report = install.install(self.vault, self.home, repo=clone, commit=shas[0])
+        self.assertEqual(self.guide(), newer)
+        warning = self.held(report)
+        self.assertEqual(len(warning), 1, report)
+        self.assertIn("a newer agent-vault", warning[0])
+        self.assertIn(shas[1], warning[0])
+        self.assertIn("git pull", warning[0])
+        self.assertIn("--force-guide", warning[0])
+        cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
+        self.assertEqual(cfg["commit"], shas[0])
+        self.assertTrue((self.home / ".claude" / "agent-vault" / "vault.py").is_file())
+
+    def test_newer_install_rewrites_older_guide(self):  # T3 -> AC3
+        clone, shas, git = self.git_clone_with_commits()
+        install.install(self.vault, self.home, repo=clone, commit=shas[0])
+        old = self.guide()
+        report = install.install(self.vault, self.home, repo=clone)
+        self.assertNotEqual(self.guide(), old)
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[1])))
+        self.assertEqual(self.held(report), [])
+        again = self.guide()
+        install.install(self.vault, self.home, repo=clone)       # the same commit: the same bytes
+        self.assertEqual(self.guide(), again)
+
+    def test_force_guide_rewrites_from_older(self):  # T3 -> AC3
+        clone, shas, git = self.git_clone_with_commits()
+        install.install(self.vault, self.home, repo=clone)
+        report = install.install(self.vault, self.home, repo=clone, commit=shas[0], force_guide=True)
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[0])))
+        self.assertEqual(self.held(report), [])
+        out = subprocess.run([sys.executable, str(REPO / "install.py"), "--vault", str(self.vault),
+                              "--home", str(self.home), "--repo", str(clone), "--commit", shas[1],
+                              "--force-guide"], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[1])))
+
+    def test_unmarked_and_missing_guide_written_by_older_install(self):  # T3 -> AC3
+        clone, shas, git = self.git_clone_with_commits()
+        self.assertFalse((self.vault / "CLAUDE.md").exists())      # no guide at all
+        install.install(self.vault, self.home, repo=clone, commit=shas[0])
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[0])))
+        (self.vault / "CLAUDE.md").write_text("# Vault guide\nold, no marker\n", encoding="utf-8")
+        install.install(self.vault, self.home, repo=clone, commit=shas[0])
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[0])))
+        self.assertNotIn(b"old, no marker", self.guide())
+
+    def test_no_commit_info(self):  # T4 -> AC4
+        clone, shas, git = self.git_clone_with_commits()
+        plain = self.root / "plain"
+        plain.mkdir()
+        install.install(self.vault, self.home, repo=clone)
+        marked = self.guide()
+        for kwargs in ({"repo": clone, "commit": "0" * 40}, {"repo": plain}):
+            report = install.install(self.vault, self.home, **kwargs)
+            self.assertEqual(self.guide(), marked)
+            self.assertEqual(len(self.held(report)), 1, report)
+            install.install(self.vault, self.home, force_guide=True, **kwargs)
+            self.assertEqual(self.guide().decode().splitlines()[0], "# Vault guide")
+            (self.vault / "CLAUDE.md").write_bytes(marked)
+        (self.vault / "CLAUDE.md").write_text("# Vault guide\nunmarked\n", encoding="utf-8")
+        report = install.install(self.vault, self.home, repo=plain)
+        self.assertEqual(self.held(report), [])
+        self.assertNotIn(b"unmarked", self.guide())
+        self.assertEqual(self.guide().decode().splitlines()[0], "# Vault guide")
+
+    def test_unparsable_marker_is_kept(self):  # T4 -> AC4
+        clone, shas, git = self.git_clone_with_commits()
+        junk = "<!-- agent-vault garbage -->\n# Vault guide\n"
+        (self.vault / "CLAUDE.md").write_text(junk, encoding="utf-8")
+        report = install.install(self.vault, self.home, repo=clone)
+        self.assertEqual((self.vault / "CLAUDE.md").read_text(encoding="utf-8"), junk)
+        self.assertEqual(len(self.held(report)), 1, report)
+        install.install(self.vault, self.home, repo=clone, force_guide=True)
+        self.assertTrue(self.guide().startswith(self.marker(git, shas[1])))
 
     def test_shared_pre_push_hook(self):  # T9 -> AC9
         self.run_install()

@@ -21,7 +21,7 @@ The installer is safe to rerun after every `git pull`. It:
 - merges every hook and the permission to run the CLI into `~/.claude/settings.json`,
   only ever replacing entries it created, backing the file up to `.bak` first, and removes
   the entries older versions put in `<vault>/.claude/settings.json`;
-- writes `<vault>/CLAUDE.md`, which names the CLI as `~/.claude/agent-vault/bin/vault`: the same text on every machine, a launcher that runs the recorded Python on the installed `vault.py` (in Bash; on Windows the installer also prints a PowerShell form of its closing check);
+- writes `<vault>/CLAUDE.md`, which names the CLI as `~/.claude/agent-vault/bin/vault`: the same text on every machine, a launcher that runs the recorded Python on the installed `vault.py` (in Bash; on Windows the installer also prints a PowerShell form of its closing check). The guide's first line records the commit it was written from, and an install from an older clone leaves a newer guide alone and warns you to `git pull` and rerun (`--force-guide` writes it anyway);
 - deletes the v1 scripts from `<vault>/Agent/_system/` if they're still there (the phone log is kept);
 - turns on this repo's git hooks (`agent_vault/githooks/`); other repos get the installed copy from `repo-init`.
 
