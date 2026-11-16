@@ -681,20 +681,32 @@ def cmd_seal_retro(args) -> None:
             die(f"{lib.rel(path)} is already sealed")
 
     top = require_clone(slug)
-    info = github.issue_info(slug, args.issue)
-    closed = info["state"] != "OPEN"
+    jira = args.ticket_data is not None
+    for w in ticket_changed(args.repo, args.issue, args.ticket_data):
+        print(f"warning: {w}")
     no_pr = plan_is_no_pr(args.repo, args.issue)
     if no_pr != (retro_fm.get("pr") == lib.NO_PR):
         die(f"{lib.rel(retro_path)} says pr: {retro_fm.get('pr')}, but the plan "
             f"{'declares pr: none' if no_pr else 'has a PR'}; they must agree")
     readying, bump_done = False, False
     pr = retro_fm.get("pr", "")
+    info = None
+    if jira:    # no issue read (D3 of #114): the impl note's PR says whether the work is open, merged or closed
+        closed = False
+        if not no_pr:
+            if not lib.NUMBER_RE.match(pr):
+                die(f"{lib.rel(retro_path)} has no PR number in 'pr:'; a Jira ticket's story is judged by its PR")
+            closed = github.pr_closing(slug, pr)["state"] != "OPEN"
+    else:
+        info = github.issue_info(slug, args.issue)
+        closed = info["state"] != "OPEN"
     if not no_pr:     # an issue with a PR: the branch, the PR and the merge (a no-PR one has none of them)
         current_branch = github.git("branch", "--show-current", cwd=top)
         if closed:
             default = github.default_branch(slug)
             if current_branch == default or not current_branch:
-                die(f"issue #{args.issue} is closed; check out a branch other than {default} "
+                die(f"{'PR #' + pr + ' is not open' if jira else 'issue #' + args.issue + ' is closed'}; "
+                    f"check out a branch other than {default} "
                     f"(currently {current_branch or '(detached)'}; the impl note's own branch "
                     "may already be deleted)")
         else:
@@ -803,7 +815,7 @@ def cmd_seal_retro(args) -> None:
         else:
             github.git("push", cwd=top)
 
-    if no_pr and not closed:
+    if no_pr and not closed and not jira:      # a Jira ticket is closed by the retro skill, through the connector
         try:
             github.close_issue(slug, args.issue, lib.closing_comment(retro_body))
         except github.CmdError as e:
@@ -829,8 +841,9 @@ def cmd_seal_retro(args) -> None:
         return
     print(f"sealed {lib.rel(impl_path)} and {lib.rel(retro_path)}; set audited: {today} "
           f"on {lib.rel(project_path)}{bumped_text}"
-          + (f"; closed issue #{args.issue}" if no_pr and not closed else ""))
-    close_finished_feature(index, args.repo, slug, args.issue, info, "retro")
+          + (f"; closed issue #{args.issue}" if no_pr and not closed and not jira else ""))
+    if not jira:        # a Jira setup closes no feature (D6 of #114)
+        close_finished_feature(index, args.repo, slug, args.issue, info, "retro")
 
 
 def cmd_merge(args) -> None:
@@ -904,7 +917,8 @@ def cmd_merge(args) -> None:
     log_event(args.repo, args.issue, "merged")
     what = f"PR #{pr} was already merged; sealed" if resume else f"merged PR #{pr} ({style}) at {commit[:12]}; sealed"
     print(f"{what} {lib.rel(impl_path)}")
-    close_finished_feature(index, args.repo, slug, args.issue, None, "merge")
+    if setup["tracker"] != "jira":      # a Jira setup closes no feature (D6 of #114)
+        close_finished_feature(index, args.repo, slug, args.issue, None, "merge")
     sync_default_branch(top, default, pr)
     update_install(top)
 
@@ -1985,6 +1999,9 @@ def feature_to_close(index: lib.Index, slug: str, issue: str, info: dict) -> tup
 
 def cmd_closes_feature(args) -> None:
     slug = issue_context(args)
+    if lib.read_setup()["tracker"] == "jira":
+        print("a Jira setup closes no feature: the CLI can't read a ticket's parent, so nothing is closed")
+        return
     try:
         feature, reason = feature_to_close(lib.Index(), slug, args.issue, github.issue_info(slug, args.issue))
     except github.CmdError as e:

@@ -2540,6 +2540,115 @@ class JiraPrTest(JiraTicketBase):  # T4, T6 -> AC4, AC6 (#114)
         self.assertEqual(self.calls("issue"), [])
 
 
+class JiraRetroTest(JiraTicketBase):  # T5, T1 -> AC5, AC1 (#114)
+    fill_retro = SealRetroTest.fill_retro
+
+    def commit_docs(self, branch):
+        (self.clone / "CLAUDE.md").write_text(CLAUDE_MD, encoding="utf-8", newline=chr(10))
+        (self.clone / "README.md").write_text(README_MD, encoding="utf-8", newline=chr(10))
+        git("add", "CLAUDE.md", "README.md", cwd=self.clone)
+        git("commit", "-q", "-m", "docs: claude.md and readme", cwd=self.clone)
+        git("push", "-q", "origin", branch, cwd=self.clone)
+
+    def prep(self):
+        self.name = f"feat/{self.KEY}-frob-widgets"
+        self.jira()
+        self.seal_jira()
+        self.ok(self.cli("branch", "widget", self.KEY, "--ticket", self.ticket()))
+        self.commit_docs(self.name)
+        self.ok(self.cli("open-pr", "widget", self.KEY, "--ticket", self.ticket()))
+        self.ok(self.cli("new", "retro", "widget", self.KEY))
+        self.retro = self.note_of("retro")
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+
+    def seal(self, ticket=None):
+        return self.cli("seal", "retro", "widget", self.KEY, "--ticket", ticket or self.ticket())
+
+    def set_pr(self, **changes):
+        self.load()
+        for pr in self.state["repos"][SLUG]["prs"]:
+            pr.update(changes)
+        self.save()
+
+    def no_issue_calls(self):
+        self.assertEqual(self.calls("issue"), [])
+        self.assertEqual(self.calls("label"), [])
+        self.assertEqual([c for c in self.calls("api", "graphql")], [])
+
+    def test_open_pr_is_readied_and_nothing_reads_the_issue(self):
+        self.prep()
+        out = self.ok(self.seal()).stdout
+        self.assertIn("is ready at", out)
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertEqual(self.fm(self.note_of("impl"))["status"], "open")
+        self.assertIn("commit", self.fm(self.retro))
+        self.no_issue_calls()
+        self.assert_valid()
+
+    def test_title_without_the_key_is_refused(self):
+        self.prep()
+        self.set_pr(title="Frob widgets")
+        self.refused(self.seal(), "title", self.KEY)
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+
+    def test_changed_ticket_warns(self):
+        self.prep()
+        out = self.ok(self.seal(self.ticket("c.json", title="Frob more"))).stdout
+        self.assertIn("ticket_hash differs", out)
+
+    def test_merged_pr_takes_the_backfill_path_sealing_both_notes(self):
+        self.prep()
+        self.set_pr(state="MERGED")
+        out = self.ok(self.seal()).stdout
+        self.assertIn("sealed", out)
+        self.assertEqual(self.fm(self.note_of("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertNotIn("commit", self.fm(self.retro))
+        self.no_issue_calls()
+
+    def test_closed_unmerged_pr_seals_both_notes(self):
+        self.prep()
+        self.set_pr(state="CLOSED")
+        self.ok(self.seal())
+        self.assertEqual(self.fm(self.note_of("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.no_issue_calls()
+
+    def test_whole_run_through_merge_reads_and_writes_no_issue(self):
+        self.prep()
+        self.ok(self.seal())
+        out = self.ok(self.cli("merge", "widget", self.KEY)).stdout
+        self.assertIn("merged PR", out)
+        self.assertEqual(self.fm(self.note_of("impl"))["status"], "sealed")
+        self.assertEqual(self.calls("pr", "merge")[0][:3], ["pr", "merge", "20"])
+        self.no_issue_calls()
+
+    def test_no_pr_plan_seals_both_notes_without_closing_anything(self):
+        self.jira()
+        self.jira_plan(NO_PR_PLAN)
+        self.ok(self.cli("seal", "plan", "widget", self.KEY, "--ticket", self.ticket()))
+        self.commit_docs("main")
+        self.ok(self.cli("new", "retro", "widget", self.KEY))
+        self.retro = self.note_of("retro")
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+        text = self.retro.read_text(encoding="utf-8")
+        text = text.replace("<!-- The comment the issue is closed with; the user approves it with this retro. -->" + chr(10),
+                            "<!-- hint -->" + chr(10) + "Done in the vault." + chr(10))
+        self.retro.write_text(text, encoding="utf-8", newline=chr(10))
+        out = self.ok(self.seal()).stdout
+        self.assertNotIn("closed issue", out)
+        self.assertEqual(self.fm(self.note_of("impl"))["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertEqual(self.calls("issue", "close"), [])
+        self.no_issue_calls()
+
+    def test_closes_feature_says_a_jira_setup_closes_none(self):
+        self.jira()
+        out = self.ok(self.cli("closes-feature", "widget", self.KEY)).stdout
+        self.assertIn("closes no feature", out)
+        self.assertEqual(self.calls(), [])
+
+
 class GhHelperTest(GhCase):  # T10 -> AC10
     def test_signed_out(self):
         self.state["signed_out"] = True
