@@ -263,6 +263,31 @@ Asked to act on review comments for an issue that already has an open PR
    re-review the PR next.
 5. Leave the impl note open; don't reseal or reopen anything else.
 
+## Jira setup
+
+Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+section. If it prints `tracker: jira`, the issue is a Jira ticket and its
+identity is the ticket key (e.g. `PROJ-12`), and:
+
+- The command's output names the connector (the MCP server that reaches Jira),
+  the project's key, the issue types and the planned label, and the fields of
+  the ticket file; learn them there and never read `Agent/Setup.md` yourself.
+- Fetch the ticket through that connector and write the ticket file: JSON with
+  exactly `key`, `title`, `body`, `type`, `labels` and `parent`, in a scratchpad
+  or temp folder outside both the clone and the vault (an untracked file in the
+  clone fails the clean-tree checks, and the vault holds notes only). Fetch it
+  again before each command that takes it, so a ticket edited meanwhile shows.
+- Pass `--ticket <file>` to `preflight`, `branch` and `open-pr` (and `stage`); those commands never read the
+  ticket from GitHub, and a ticket edited since the plan was sealed only warns.
+  Follow what the CLI prints.
+- `branch` takes the bug word when the ticket's type is the setup's bug type,
+  else the feature word, and `open-pr` titles the PR `<KEY>: <ticket title>`
+  with a line naming the key instead of `Closes #<n>`; the PR's branch and
+  title must carry the key. This applies to **Steps only** too.
+- Never change a ticket's status (no transition, no "Done"): that is the
+  user's; agent-vault only ever adds the planned label (plan-story) or posts a
+  closing comment (retro), through the connector.
+
 ## Stop and ask if
 
 - `vault.py preflight` fails, or passes with a warning that means the plan
