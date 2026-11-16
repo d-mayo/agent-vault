@@ -142,10 +142,11 @@ def impl_note(repo: str, issue: str) -> str:
             "## Discoveries\nNone\n")
 
 
-def retro_note(repo: str, issue: str, pr: str) -> str:
-    """A fresh retro; a `pr: none` one also gets the closing comment `seal retro` posts."""
+def retro_note(repo: str, issue: str, pr: str, name: str | None = None) -> str:
+    """A fresh retro (`name` is its file stem, which is also its title); a `pr: none` one also gets the
+    closing comment `seal retro` posts."""
     fm = lib.render_frontmatter({"type": "retro", "repo": repo, "issue": issue, "pr": pr, "status": "open"})
-    return (f"{fm}# {repo}-{issue}-retro\n\n"
+    return (f"{fm}# {name or f'{repo}-{issue}-retro'}\n\n"
             "## Summary\n<!-- What was built and how it went. -->\n\n"
             "## CLAUDE.md audit\n\n"
             "## README audit\n\n"
@@ -242,19 +243,36 @@ def cmd_new_retro(args) -> None:
     index = lib.Index()
     require_number(args.issue)
     require_repo(index, args.repo)
-    impl, retro = work_path(args.repo, args.issue, "impl"), work_path(args.repo, args.issue, "retro")
+    impl = work_path(args.repo, args.issue, "impl")
     if not impl.is_file():
         die(f"{lib.rel(impl)} doesn't exist; a retro needs the impl note")
-    if retro.exists():
-        die(f"{lib.rel(retro)} already exists")
     fm, _, _ = lib.split_frontmatter(lib.read_text(impl))
-    pr = (fm or {}).get("pr")
-    if plan_is_no_pr(args.repo, args.issue):
+    fm = fm or {}
+    existing = retro_paths(args.repo, args.issue)
+    no_pr = plan_is_no_pr(args.repo, args.issue)
+    if existing:       # a follow-up retro covers the commits after the latest one (D2)
+        latest = existing[-1]
+        latest_fm, _, _ = lib.split_frontmatter(lib.read_text(latest))
+        latest_fm = latest_fm or {}
+        if no_pr:
+            die(f"{lib.rel(latest)} already exists, and a pr: none story has just the one retro")
+        if latest_fm.get("status") != "sealed":
+            die(f"{lib.rel(latest)} already exists and isn't sealed yet; seal it (`seal retro {args.repo} "
+                f"{args.issue}`) before starting a follow-up")
+        if fm.get("status") == "sealed":
+            die(f"{lib.rel(impl)} is sealed: {args.repo}#{args.issue} is finished, so there's nothing to follow up")
+        if not latest_fm.get("commit"):
+            die(f"{lib.rel(latest)} records no readied commit, so no commits can come after it; "
+                "a follow-up retro follows a retro that readied an open PR")
+    kind = f"retro-{len(existing) + 1}" if existing else "retro"
+    path, name = work_path(args.repo, args.issue, kind), f"{args.repo}-{args.issue}-{kind}"
+    pr = fm.get("pr")
+    if no_pr:
         pr = lib.NO_PR
     elif not isinstance(pr, str) or not lib.NUMBER_RE.match(pr):
         die(f"{lib.rel(impl)} has no 'pr:' yet; open the PR first")
-    commit_note(retro, retro_note(args.repo, args.issue, pr))
-    print("created " + lib.rel(retro))
+    commit_note(path, retro_note(args.repo, args.issue, pr, name))
+    print("created " + lib.rel(path))
 
 
 def design_note(project: str, title: str) -> str:
@@ -449,25 +467,32 @@ def finding_numbers(impl_body: str) -> tuple[set[int], set[int]]:
     return allnums, left_open
 
 
-def followup_problems(impl_body: str, follow_lines: list[str]) -> list[str]:
-    """Left-open findings with no follow-up line, findings settled twice, references to missing ones (D4, D5)."""
+def followup_problems(impl_body: str, follow_lines: list[str], earlier_lines: list[str] = ()) -> list[str]:
+    """Left-open findings with no follow-up line, findings settled twice, references to missing ones (D4, D5).
+    A finding an earlier retro of the issue settled (`earlier_lines`) stays settled: it needs no line here and
+    a second line for it counts as settling it twice (D2 of #111)."""
     allnums, left_open = finding_numbers(impl_body)
-    counts: dict[int, int] = {}
-    for ln in follow_lines:
-        m = lib.FINDING_REFS_RE.search(ln)
-        if m:
-            for n in re.findall(r"R(\d+)", m.group(1)):
-                counts[int(n)] = counts.get(int(n), 0) + 1
+
+    def refs(lines) -> dict[int, int]:
+        counts: dict[int, int] = {}
+        for ln in lines:
+            m = lib.FINDING_REFS_RE.search(ln)
+            if m:
+                for n in re.findall(r"R(\d+)", m.group(1)):
+                    counts[int(n)] = counts.get(int(n), 0) + 1
+        return counts
+
+    counts, settled = refs(follow_lines), set(refs(earlier_lines))
 
     def fmt(nums) -> str:
         return ", ".join(f"R{n}" for n in sorted(nums))
 
     out = []
-    unsorted = left_open - set(counts)
+    unsorted = left_open - set(counts) - settled
     if unsorted:
         out.append(f"Follow-ups: no follow-up line for the left-open review finding(s) {fmt(unsorted)}; "
                    "end one with ' (R<n>)' (issue, idea or dropped)")
-    twice = {n for n, c in counts.items() if c > 1}
+    twice = {n for n, c in counts.items() if c > 1 or n in settled}
     if twice:
         out.append(f"Follow-ups: more than one follow-up line for {fmt(twice)}")
     unknown = set(counts) - allnums
@@ -601,6 +626,13 @@ def cmd_seal_retro(args) -> None:
             readying = pr_info["state"] == "OPEN"
             if readying:
                 bump_done = check_ready(top, pr, pr_info, args.issue)
+                previous = retro_paths(args.repo, args.issue)[:-1]       # D5: a follow-up needs something new
+                if previous:
+                    prev_fm, _, _ = lib.split_frontmatter(lib.read_text(previous[-1]))
+                    prev_commit = (prev_fm or {}).get("commit") or ""
+                    if prev_commit and github.git("rev-parse", "HEAD", cwd=top).startswith(prev_commit):
+                        die(f"nothing to follow up: the local branch is still at {prev_commit[:12]}, the commit "
+                            f"{lib.rel(previous[-1])} readied; commit the changes first, then run this again")
 
     claude_path = top / "CLAUDE.md"
     if not claude_path.is_file():
@@ -636,7 +668,11 @@ def cmd_seal_retro(args) -> None:
                         "the README audit must be 'None'")
     if problems:
         die(f"{lib.rel(retro_path)} doesn't cover every heading yet:\n  " + "\n  ".join(problems))
-    follow_problems = followup_problems(impl_body, retro_secs.get("Follow-ups", []))
+    earlier_lines = []
+    for earlier in retro_paths(args.repo, args.issue)[:-1]:         # follow-ups only: the retros before this one
+        _, earlier_body, _ = lib.split_frontmatter(lib.read_text(earlier))
+        earlier_lines += dict(lib.split_sections(lib.blank_code_blocks(earlier_body))).get("Follow-ups", [])
+    follow_problems = followup_problems(impl_body, retro_secs.get("Follow-ups", []), earlier_lines)
     if follow_problems:
         die(f"{lib.rel(retro_path)} has unsorted review findings:\n  " + "\n  ".join(follow_problems))
 

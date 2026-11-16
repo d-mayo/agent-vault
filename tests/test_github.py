@@ -1561,6 +1561,105 @@ class MergeTest(GhCase):  # T5-T9 -> AC5 to AC9: vault.py merge merges only what
         self.assertRegex(self.daily(), r"widget#7 merged\n")
 
 
+class FollowUpRetroTest(GhCase):  # T3 -> AC3: commits after a retro get a follow-up retro of their own
+    prep = SealRetroTest.prep
+    build_prep = SealRetroTest.build_prep
+    fill_retro = SealRetroTest.fill_retro
+    filled_prep = SealRetroTest.filled_prep
+    add_findings = SealRetroTest.add_findings
+    set_follow_ups = SealRetroTest.set_follow_ups
+    bare_rev = SealRetroTest.bare_rev
+    bump_subjects = SealRetroTest.bump_subjects
+
+    def ready(self):
+        """The first retro, sealed: the PR is ready at its commit."""
+        self.filled_prep()
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        return self.fm(self.retro)["commit"]
+
+    def late_commit(self):
+        (self.clone / "late.txt").write_text("late\n", encoding="utf-8")
+        git("add", ".", cwd=self.clone)
+        git("commit", "-q", "-m", "feat: late", cwd=self.clone)
+        git("push", "-q", cwd=self.clone)
+        return git("rev-parse", "HEAD", cwd=self.clone)
+
+    def follow_up(self):
+        """`new retro` (retro-2), filled with the audits; self.retro points at it."""
+        self.ok(self.cli("new", "retro", "widget", "7"))
+        self.retro = self.note("retro-2")
+        self.fill_retro(FULL_CLAUDE_AUDIT, FULL_README_AUDIT, FULL_OVERVIEW_AUDIT)
+
+    def test_retro_a_new_commit_merge_refused_follow_up_ready_and_merged(self):    # T3 -> AC3
+        first = self.ready()
+        late = self.late_commit()
+        self.refused(self.cli("merge", "widget", "7"), "new retro")
+        self.assertEqual(self.calls("pr", "merge"), [])
+        self.follow_up()
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assertEqual(self.fm(self.retro)["commit"], late)
+        self.assertNotEqual(late, first)
+        self.assertEqual(self.fm(self.note("retro"))["commit"], first)          # the first retro is untouched
+        self.assertEqual(self.fm(self.note("impl"))["status"], "open")
+        self.ok(self.cli("merge", "widget", "7"))
+        self.assertEqual(self.calls("pr", "merge")[0][-1], late)
+        self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
+        self.assertEqual(git("branch", "--show-current", cwd=self.clone), "main")
+        self.assert_valid()
+
+    def test_seal_retro_refuses_a_follow_up_with_nothing_new(self):    # T3 -> AC3 (D5)
+        first = self.ready()
+        self.follow_up()
+        self.refused(self.cli("seal", "retro", "widget", "7"), "nothing to follow up", first[:12])
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+        self.assertEqual(self.bare_rev(self.name), first)
+        self.late_commit()
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+
+    def settled_prep(self):
+        self.filled_prep()
+        self.add_findings("- R1 (minor): Review 1: odd name → left open")
+        self.set_follow_ups("- dropped: cosmetic only (R1)")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.late_commit()
+        self.follow_up()
+
+    def test_a_finding_settled_by_an_earlier_retro_needs_no_line(self):    # T3 -> AC3 (D2)
+        self.settled_prep()
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.assertEqual(self.fm(self.retro)["status"], "sealed")
+        self.assert_valid()
+
+    def test_settling_it_again_is_refused(self):    # T3 -> AC3 (D2)
+        self.settled_prep()
+        self.set_follow_ups("- dropped: still cosmetic (R1)")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "more than one", "R1")
+        self.assertEqual(self.fm(self.retro)["status"], "open")
+
+    def test_a_new_left_open_finding_still_needs_a_line_in_the_follow_up(self):    # T3 -> AC3
+        self.settled_prep()
+        impl = self.note("impl")
+        impl.write_text(impl.read_text(encoding="utf-8").replace(
+            "odd name → left open\n", "odd name → left open\n- R2 (minor): Review 2: another → left open\n"),
+            encoding="utf-8", newline="\n")
+        self.refused(self.cli("seal", "retro", "widget", "7"), "unsorted", "R2")
+        self.set_follow_ups("- dropped: fine (R2)")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+
+    def test_new_retro_is_refused_while_the_latest_is_open_and_after_the_merge(self):    # T3 -> AC3
+        self.ready()
+        self.late_commit()
+        self.follow_up()
+        self.refused(self.cli("new", "retro", "widget", "7"), "isn't sealed yet")
+        self.ok(self.cli("seal", "retro", "widget", "7"))
+        self.ok(self.cli("merge", "widget", "7"))
+        self.refused(self.cli("new", "retro", "widget", "7"), "finished")
+        self.assertFalse(self.note("retro-3").exists())
+
+
 class NoPrRetroTest(GhCase):  # T6, T7 -> AC6, AC7
     add_feature = add_feature
     assert_feature_closed = assert_feature_closed

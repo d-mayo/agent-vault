@@ -196,6 +196,53 @@ class NewRetroTest(CliCase):
         self.refused("new", "retro", "demo", "7", why="already exists")
         self.refused("new", "retro", "demo", "x", why="must be a number")
 
+    # --- follow-up retros (#111 AC3) ---
+    def sealed_retro(self, name="retro", commit="abc1234"):
+        p = self.path(f"Work/demo/demo-7-{name}.md")
+        extra = f"commit: {commit}\n" if commit else ""
+        p.write_text(p.read_text(encoding="utf-8").replace("status: open", f"{extra}status: sealed"),
+                     encoding="utf-8", newline="\n")
+
+    def test_follow_up_retros_are_numbered_and_titled_by_their_file(self):     # T3 -> AC3
+        self.cli("new", "plan", "demo", "7")
+        self.set_pr("21")
+        self.cli("new", "retro", "demo", "7")
+        self.sealed_retro()
+        self.cli("new", "retro", "demo", "7")
+        retro2 = self.text("Work/demo/demo-7-retro-2.md")
+        self.assertIn("# demo-7-retro-2\n", retro2)
+        self.assertRegex(retro2, r"(?m)^pr: 21$")
+        self.validate()
+        self.refused("new", "retro", "demo", "7", why="isn't sealed yet")      # the latest is open
+        self.sealed_retro("retro-2", commit="def5678")
+        self.cli("new", "retro", "demo", "7")
+        self.assertTrue(self.path("Work/demo/demo-7-retro-3.md").is_file())
+        self.validate()
+
+    def test_follow_up_retro_refusals(self):                  # T3 -> AC3
+        self.cli("new", "plan", "demo", "7")
+        self.set_pr("21")
+        self.cli("new", "retro", "demo", "7")
+        self.sealed_retro(commit=None)                        # sealed without a readied commit (a backfill)
+        self.refused("new", "retro", "demo", "7", why="no readied commit")
+        self.assertFalse(self.path("Work/demo/demo-7-retro-2.md").exists())
+        self.path("Work/demo/demo-7-retro.md").unlink()
+        self.cli("new", "retro", "demo", "7")
+        self.sealed_retro()
+        impl = self.path("Work/demo/demo-7-impl.md")
+        impl.write_text(impl.read_text(encoding="utf-8").replace("status: open", "status: sealed"),
+                        encoding="utf-8", newline="\n")
+        self.refused("new", "retro", "demo", "7", why="finished")
+        self.assertFalse(self.path("Work/demo/demo-7-retro-2.md").exists())
+
+    def test_a_no_pr_story_has_only_one_retro(self):          # T3 -> AC3
+        self.cli("new", "plan", "demo", "7")
+        p = self.path("Work/demo/demo-7-plan.md")
+        p.write_text(p.read_text(encoding="utf-8").replace("status: draft", "pr: none\nstatus: draft"),
+                     encoding="utf-8", newline="\n")
+        self.cli("new", "retro", "demo", "7")
+        self.refused("new", "retro", "demo", "7", why="just the one retro")
+
     def test_impl_branch_is_optional(self):               # T6 -> AC6
         self.cli("new", "plan", "demo", "7")
         self.validate()                                   # fresh impl has no branch
