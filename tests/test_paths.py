@@ -101,5 +101,13 @@ class PathHelpersTest(unittest.TestCase):
         self.assertIsNone(lib.parts_under("/vault/Notes2/x.md", "/Vault/Notes"))
 
 
+class WorkflowTest(unittest.TestCase):
+    def test_ci_workflow_names_what_it_runs(self):           # T1 -> AC1
+        text = (CODE.parent / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+        for needle in ("pull_request", "push:", "branches: [main]", "windows-latest", "macos-latest",
+                       '"3.9"', '"3.12"', "ruff check .", "python -m unittest discover -s tests -t ."):
+            self.assertIn(needle, text)
+
+
 if __name__ == "__main__":
     unittest.main()
