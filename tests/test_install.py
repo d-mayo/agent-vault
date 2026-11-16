@@ -106,6 +106,10 @@ class InstallTest(unittest.TestCase):
         self.assertIn("install.py", readme.split("Hooks run with")[1].split("\n\n")[0])
         self.assertIn("rerun", (REPO / "install.py").read_text(encoding="utf-8").split("virtualenv")[1][:400])
 
+    def test_docs_mention_force_guide(self):  # T7 -> docs step
+        for name in ("README.md", "CLAUDE.md"):
+            self.assertIn("--force-guide", (REPO / name).read_text(encoding="utf-8"), name)
+
     def test_fresh_install(self):  # T1 -> AC1, AC4
         self.run_install()
         inst = self.home / ".claude" / "agent-vault"
