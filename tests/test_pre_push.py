@@ -1,12 +1,11 @@
 import json
 import os
-import shutil
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
-from tests.helpers import REPO, make_vault, run_py, tmpdir
+from tests.helpers import REPO, find_bash, make_vault, run_py, tmpdir
 
 HOOK = REPO / "agent_vault" / "githooks" / "pre-push"
 Z = "0" * 40
@@ -17,7 +16,7 @@ def git(*args, cwd):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
 
 
-@unittest.skipUnless(shutil.which("bash"), "bash not available")
+@unittest.skipUnless(find_bash(), "bash not available")
 class PrePushTest(unittest.TestCase):  # T4 -> AC5; T7, T8 -> AC7, AC8 (#33)
     def setUp(self):
         self._t = tmpdir()
@@ -45,7 +44,7 @@ class PrePushTest(unittest.TestCase):  # T4 -> AC5; T7, T8 -> AC7, AC8 (#33)
         env.pop("AGENT_VAULT_CONFIG", None)
         cfg = self.cfg if config == "default" else config
         env["AGENT_VAULT_CONFIG"] = str(cfg if cfg is not None else self.root / "none.json")
-        return subprocess.run(["bash", HOOK.as_posix(), "origin", "url"], input=line + "\n", text=True,
+        return subprocess.run([find_bash(), HOOK.as_posix(), "origin", "url"], input=line + "\n", text=True,
                               capture_output=True, cwd=clone or self.clone, env=env)
 
     def test_cases(self):

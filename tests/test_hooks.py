@@ -206,6 +206,12 @@ class GuardTest(HookCase):  # T5 -> AC5, AC6, T12
         self.allowed(self.home / "elsewhere.txt", tool="Write")
         self.allowed(self.root / "elsewhere.txt", tool="Write", cwd=self.repo)
 
+    @unittest.skipUnless(sys.platform in ("win32", "darwin"), "file names fold case on Windows and macOS only")
+    def test_mixed_case_vault_path_is_still_the_vault(self):          # AC3
+        mixed = Path(str(self.vault).swapcase()) / "Agent" / "Daily" / "2026-01-05.md"
+        self.blocked(mixed, says="log")
+        self.blocked(Path(str(self.vault).swapcase()) / "Inbox" / "idea.md", says="phone side")
+
     def test_relative_paths_use_cwd(self):
         r = self.hook("guard.py", {"tool_name": "Edit", "cwd": str(self.vault / "Agent" / "Daily"),
                                    "tool_input": {"file_path": "2026-01-05.md"}})
@@ -233,6 +239,17 @@ class PostEditTest(HookCase):  # T6 -> AC7, T12
         self.assertEqual(r.returncode, 2)
         self.assertIn("Projects/demo.md", r.stderr)
         self.assertIn("status", r.stderr)
+
+    @unittest.skipUnless(sys.platform in ("win32", "darwin"), "file names fold case on Windows and macOS only")
+    def test_mixed_case_edit_is_validated(self):                      # AC3
+        p = self.agent("Projects/demo.md")
+        p.write_text(p.read_text(encoding="utf-8").replace("status: active", "status: bogus"),
+                     encoding="utf-8", newline="\n")
+        mixed = Path(str(self.vault).swapcase()) / "Agent" / "Projects" / "demo.md"
+        r = self.tool("post_edit.py", "Edit", mixed, cwd=self.repo)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("breaks the vault schema", r.stderr)
+        self.assertIn("Projects/demo.md", r.stderr)
 
     def test_valid_and_warning_only_notes_pass(self):
         self.assertEqual(self.tool("post_edit.py", "Edit", self.agent("Projects/demo.md")).returncode, 0)

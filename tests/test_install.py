@@ -6,7 +6,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from tests.helpers import REPO, make_vault, tmpdir
+from tests.helpers import REPO, find_bash, make_vault, tmpdir
 
 sys.path.insert(0, str(REPO))
 import install  # noqa: E402
@@ -63,12 +63,13 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((inst / "hooks" / "push_guard.py").exists())
         self.assertFalse(list(inst.rglob("__pycache__")))
         cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
-        self.assertEqual(cfg["vault"], self.vault.resolve().as_posix())
+        self.assertTrue(os.path.samefile(cfg["vault"], self.vault))          # however spelled
+        self.assertNotIn(chr(92), cfg["vault"])        # recorded with forward slashes
         self.assertEqual(cfg["python"], Path(sys.executable).as_posix())        # T8 -> AC8 (#33)
-        if shutil.which("bash"):                    # the hook's own line reads it back from this file
+        if find_bash():                    # the hook's own line reads it back from this file
             hook = (REPO / "agent_vault" / "githooks" / "pre-push").read_text(encoding="utf-8")
             read_line = next(ln.strip() for ln in hook.splitlines() if ln.strip().startswith("py=$(sed"))
-            out = subprocess.run(["bash", "-c", f'config="$1"; {read_line}; printf %s "$py"', "bash",
+            out = subprocess.run([find_bash(), "-c", f'config="$1"; {read_line}; printf %s "$py"', "bash",
                                   (self.home / ".claude" / "agent-vault.json").as_posix()],
                                  capture_output=True, text=True)
             self.assertEqual(out.stdout, cfg["python"])
@@ -230,7 +231,8 @@ class InstallTest(unittest.TestCase):
         install.install(self.vault, self.home, repo=clone)
         cfgp = self.home / ".claude" / "agent-vault.json"
         cfg = json.loads(cfgp.read_text())
-        self.assertEqual(cfg["source"], clone.resolve().as_posix())
+        self.assertTrue(os.path.samefile(cfg["source"], clone))
+        self.assertNotIn(chr(92), cfg["source"])        # recorded with forward slashes
         self.assertEqual(cfg["commit"], shas[1])
         self.assertEqual(cfg["commit_time"], int(git("log", "-1", "--format=%ct")))
         self.assertEqual(git("config", "core.hooksPath"), install.HOOKS_DIR)
@@ -247,7 +249,8 @@ class InstallTest(unittest.TestCase):
         install.install(self.vault, self.home, repo=plain)
         cfg = json.loads(cfgp.read_text())
         self.assertNotIn("commit", cfg)
-        self.assertEqual(cfg["source"], plain.resolve().as_posix())
+        self.assertTrue(os.path.samefile(cfg["source"], plain))
+        self.assertNotIn(chr(92), cfg["source"])        # recorded with forward slashes
 
     def test_commit_option_as_subprocess(self):  # T1 -> AC1 (#98)
         clone, shas, git = self.git_clone_with_commits()
@@ -260,7 +263,8 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
         self.assertEqual(cfg["commit"], shas[0])
-        self.assertEqual(cfg["source"], clone.resolve().as_posix())
+        self.assertTrue(os.path.samefile(cfg["source"], clone))
+        self.assertNotIn(chr(92), cfg["source"])        # recorded with forward slashes
         self.assertEqual(real(), before)
 
     def test_shared_pre_push_hook(self):  # T9 -> AC9
@@ -378,7 +382,7 @@ class InstallTest(unittest.TestCase):
         calls = []
 
         def flaky(a, b):
-            if Path(b).name == "vault.py" and Path(b).parent == inst and len(calls) < 2:
+            if Path(b).name == "vault.py" and os.path.samefile(Path(b).parent, inst) and len(calls) < 2:
                 calls.append(b)
                 raise PermissionError("in use")
             real(a, b)
@@ -392,7 +396,7 @@ class InstallTest(unittest.TestCase):
         (inst / "stale.py").write_text("old")
 
         def stuck(a, b):
-            if Path(b).name == "vault.py" and Path(b).parent == inst:
+            if Path(b).name == "vault.py" and os.path.samefile(Path(b).parent, inst):
                 raise PermissionError("in use")
             real(a, b)
 

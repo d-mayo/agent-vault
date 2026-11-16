@@ -15,6 +15,25 @@ REPO = Path(__file__).resolve().parent.parent
 CODE = REPO / "agent_vault"
 
 
+def find_bash():
+    """A bash that runs scripts: Git's on Windows (the first `bash` on PATH there can be System32's
+    WSL launcher, which has no distro), else the one on PATH; None if there is none."""
+    if sys.platform == "win32":
+        try:
+            out = subprocess.run(["git", "--exec-path"], capture_output=True, text=True, check=True).stdout.strip()
+            for rel in ("bin/bash.exe", "usr/bin/bash.exe"):
+                found = Path(out).parents[2] / rel
+                if found.is_file():
+                    return str(found)
+        except (OSError, subprocess.CalledProcessError, IndexError):
+            pass
+        for d in os.environ.get("PATH", "").split(os.pathsep):
+            if d and "system32" not in d.lower() and (Path(d) / "bash.exe").is_file():
+                return str(Path(d) / "bash.exe")
+        return None
+    return shutil.which("bash")
+
+
 def make_vault(root: Path) -> Path:
     vault = root / "Notes"
     (vault / ".obsidian").mkdir(parents=True)

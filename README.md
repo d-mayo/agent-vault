@@ -135,6 +135,9 @@ python ~/.claude/agent-vault/vault.py lint    # claudemd-lint, then the repo's L
 python -m unittest discover -s tests -t .     # the tests, classes in parallel; ruff on PATH too (AGENT_VAULT_TESTS_SERIAL=1: one process)
 ```
 
+CI (`.github/workflows/test.yml`) runs the lint and the tests on Windows and macOS with Python 3.9
+and 3.12 for every pull request and push to `main`.
+
 The pre-push hook refuses a branch whose name doesn't follow the setup's branch pattern
 (`vault.py check-branch`), runs `vault.py lint` before any push that creates or updates a branch, and
 implement-story runs it before every review.

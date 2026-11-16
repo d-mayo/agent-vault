@@ -246,6 +246,12 @@ class _Pool:
 
 # --- the worker side ---
 
+def _test_id(test):
+    """The id of the test a result hook got: a subtest (a skip inside `with self.subTest()`, say)
+    reports as its parent test, the only id the parent process knows."""
+    return getattr(test, "test_case", test).id()
+
+
 class _EventResult(unittest.TestResult):
     def __init__(self, out):
         super().__init__()
@@ -269,13 +275,13 @@ class _EventResult(unittest.TestResult):
         return self._exc_info_to_string(err, test)
 
     def addSuccess(self, test):
-        self.emit(e="ok", id=test.id())
+        self.emit(e="ok", id=_test_id(test))
 
     def addFailure(self, test, err):
-        self.emit(e="fail", id=test.id(), tb=self._tb(err, test))
+        self.emit(e="fail", id=_test_id(test), tb=self._tb(err, test))
 
     def addError(self, test, err):
-        self.emit(e="error", id=test.id(), tb=self._tb(err, test))
+        self.emit(e="error", id=_test_id(test), tb=self._tb(err, test))
 
     def addSubTest(self, test, subtest, err):
         if err is not None:
@@ -283,13 +289,13 @@ class _EventResult(unittest.TestResult):
             self.emit(e=kind, id=test.id(), tb=f"[{subtest._subDescription()}]\n" + self._tb(err, subtest))
 
     def addSkip(self, test, reason):
-        self.emit(e="skip", id=test.id(), reason=reason)
+        self.emit(e="skip", id=_test_id(test), reason=reason)
 
     def addExpectedFailure(self, test, err):
-        self.emit(e="xfail", id=test.id(), tb=self._tb(err, test))
+        self.emit(e="xfail", id=_test_id(test), tb=self._tb(err, test))
 
     def addUnexpectedSuccess(self, test):
-        self.emit(e="xpass", id=test.id())
+        self.emit(e="xpass", id=_test_id(test))
 
 
 def worker_main():

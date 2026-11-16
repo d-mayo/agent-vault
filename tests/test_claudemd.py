@@ -133,7 +133,9 @@ class CommandCheckTest(ClaudemdCase):        # T1 -> AC1
     def test_executable_on_path_resolves(self):
         bin_dir = Path(self._t.name) / "bin"
         bin_dir.mkdir()
-        (bin_dir / "mytool.exe").write_text("", encoding="utf-8")
+        tool = bin_dir / ("mytool.exe" if sys.platform == "win32" else "mytool")
+        tool.write_text("", encoding="utf-8")
+        tool.chmod(0o755)
         self.claude("# demo\n\n## Commands\n- Lint: `git --version`\n- Run: `mytool --flag`\n")
         self.commit("init")
         with mock.patch.dict(os.environ, {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}):

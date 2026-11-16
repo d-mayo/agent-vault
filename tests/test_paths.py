@@ -1,7 +1,13 @@
+import posixpath
+import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.helpers import CODE, make_vault, run_py, tmpdir, write_config
+
+sys.path.insert(0, str(CODE))
+import lib  # noqa: E402
 
 CLI = CODE / "vault.py"
 HOOKS = CODE / "hooks"
@@ -58,6 +64,49 @@ class PathsTest(unittest.TestCase):
         r = run_py(CLI, ["phone", "list"], config=self.cfg)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Ideas.md", r.stdout)
+
+
+class PathHelpersTest(unittest.TestCase):
+    """norm_path and parts_under follow the platform rule (D1 of #43); posix paths and a patched
+    sys.platform make this hold on every machine."""
+
+    def on(self, platform):
+        p = mock.patch.object(sys, "platform", platform)
+        q = mock.patch.object(lib.os, "path", posixpath)
+        p.start(), q.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(q.stop)
+
+    def test_darwin_folds_case(self):
+        self.on("darwin")
+        self.assertEqual(lib.norm_path("/Vault/Notes/A.md"), lib.norm_path("/vault/NOTES/a.md"))
+        self.assertEqual(lib.parts_under("/VAULT/notes/Agent/Foo.md", "/Vault/Notes"), ["Agent", "Foo.md"])
+
+    def test_linux_does_not_fold_case(self):
+        self.on("linux")
+        self.assertNotEqual(lib.norm_path("/Vault/A.md"), lib.norm_path("/vault/a.md"))
+        self.assertIsNone(lib.parts_under("/VAULT/notes/Agent", "/Vault/Notes"))
+        self.assertEqual(lib.parts_under("/Vault/Notes/Agent", "/Vault/Notes"), ["Agent"])
+
+    def test_parts_under_keeps_the_spelling_below_the_root(self):
+        self.on("darwin")
+        self.assertEqual(lib.parts_under("/vault/NOTES/Agent/Work/Mixed-Case.md", "/Vault/Notes"),
+                         ["Agent", "Work", "Mixed-Case.md"])
+        self.assertEqual(lib.parts_under("/vault/notes", "/Vault/Notes"), [])
+
+    def test_parts_under_is_none_outside_the_root(self):
+        self.on("darwin")
+        self.assertIsNone(lib.parts_under("/vault/Other/x.md", "/Vault/Notes"))
+        self.assertIsNone(lib.parts_under("/vault", "/Vault/Notes"))
+        self.assertIsNone(lib.parts_under("/vault/Notes2/x.md", "/Vault/Notes"))
+
+
+class WorkflowTest(unittest.TestCase):
+    def test_ci_workflow_names_what_it_runs(self):           # T1 -> AC1
+        text = (CODE.parent / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+        for needle in ("pull_request", "push:", "branches: [main]", "windows-latest", "macos-latest",
+                       '"3.9"', '"3.12"', "ruff check .", "python -m unittest discover -s tests -t ."):
+            self.assertIn(needle, text)
 
 
 if __name__ == "__main__":

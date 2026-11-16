@@ -26,12 +26,13 @@ def main() -> None:
     path = Path(target)
     if not path.is_absolute():
         path = Path(data.get("cwd") or ".") / path
+    path = lib.VAULT.joinpath(*lib.parts_under(path, lib.VAULT))   # the vault's own spelling of its root
     if path.suffix.lower() != ".md" or not path.exists():
         return
-    problems = lib.validate_file(path.resolve()).errors   # warnings never block
+    problems = lib.validate_file(path).errors   # warnings never block
     if problems:
         msg = "\n".join(f"- {p}" for p in problems)
-        print(f"{lib.rel(path.resolve())} breaks the vault schema. Fix it now:\n{msg}\n"
+        print(f"{lib.rel(path)} breaks the vault schema. Fix it now:\n{msg}\n"
               f"(Run `{lib.CLI} schema` for the rules.)", file=sys.stderr)
         sys.exit(2)
 
