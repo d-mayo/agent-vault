@@ -51,9 +51,10 @@ as the answer if the user has no preference. Topics, in this order:
 2. Merge style: how a finished PR is merged, `squash`, `merge` or `rebase`.
 3. Approvals: whether a PR needs a team approval before it merges
    (`required`) or not (`none`).
-4. Repo settings: whether `repo-init` may set a repo's merge settings and
-   labels (`managed`), or only check them because the team owns them
-   (`checked`).
+4. Repo settings: whether `repo-init` may set a repo's merge settings
+   (`managed`), or only check that the repo allows the merge style because
+   the team owns the settings (`checked`). Labels and the issue template
+   follow the tracker (GitHub only), either way.
 5. Branch names: the pattern, built from `{type}`, `{issue}` and `{slug}`
    (`{issue}` and `{type}` exactly once, `{slug}` at most once, something
    between two placeholders), and the words `{type}` becomes for a story

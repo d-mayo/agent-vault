@@ -2104,7 +2104,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "open-pr":
             p.add_argument("--body-file")
         p.set_defaults(fn=fn)
-    p = sub.add_parser("repo-init", help="set up a repo's merge settings, label, hooks, CLAUDE.md and issue template")
+    p = sub.add_parser("repo-init", help="set up a repo as the vault setup says: merge style (set or only checked), hooks, CLAUDE.md, and in a GitHub setup the labels and issue template")
     p.add_argument("path")
     p.set_defaults(fn=cmd_repo_init)
     p = sub.add_parser("claudemd-lint", help="check a repo's CLAUDE.md (default: the current clone)")
