@@ -397,6 +397,12 @@ class ThisRepoTest(unittest.TestCase):          # T11 -> AC11 (#27)
         self.assertIn("~/.claude/agent-vault/bin/vault", text)
         self.assertNotIn("<installer's python>", text)
 
+    def test_repo_claude_md_describes_the_hook_launcher(self):  # T5 -> AC5 (#45)
+        text = (CODE.parent / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("agent_vault/bin/hook", text)
+        self.assertNotIn("exit 0 silently.", text)
+        self.assertNotIn("installer's Python (`sys.executable`) and the script", text)
+
 
 class RuffConfigTest(unittest.TestCase):         # T9 -> AC9 (#33)
     def test_ruff_toml_pins_the_rules(self):
