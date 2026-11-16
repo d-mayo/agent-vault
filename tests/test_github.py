@@ -1675,7 +1675,7 @@ class MergeTest(GhCase):  # T5-T9 -> AC5 to AC9: vault.py merge merges only what
         r = self.merge()
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("merged", r.stderr)
-        self.assertIn(str(wt), r.stderr)
+        self.assertTrue(any(p in r.stderr for p in (str(wt), os.path.realpath(wt))), r.stderr)   # however spelled
         self.assertIn("pull --ff-only origin main", r.stderr)
         self.assertEqual(self.fm(self.note("impl"))["status"], "sealed")
         self.assertRegex(self.daily(), r"widget#7 merged\n")
