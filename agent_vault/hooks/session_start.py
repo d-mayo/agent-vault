@@ -70,11 +70,9 @@ def stage_line(info: dict, branch: str) -> list[str]:
     if issue is None:
         return [f"Branch {branch or '(none)'} isn't tied to an issue (branches follow the pattern {setup['branch']})."]
     out = [f"Branch {branch} → {info['repo']}#{issue}. Notes: {notes_line(info['repo'], issue)}."]
-    if setup["tracker"] == "jira":     # stage_of reads the issue from GitHub, which can't answer for a key (D7 of #113)
-        out.append("Stage isn't available in a Jira setup yet.")
-        return out
     github.DEADLINE = time.monotonic() + GITHUB_SECONDS
     try:
+        # in a Jira setup stage_of answers from the notes, the ticket map and GitHub's PRs, never Jira (#116)
         stage, why = vault.stage_of(info["slug"], info["repo"], issue)
         out.append(f"Stage: {stage} ({why}).")
     except Exception as e:  # a slow, offline or signed-out GitHub must never delay a session
