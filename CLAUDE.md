@@ -10,7 +10,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - Lint: `ruff check .`
 - Reviewer evals: after changing a reviewer file (the ones `evals/score.py` maps), run them in a session in this clone: "run the reviewer evals for <reviewer>" (the reviewer-evals skill). `python evals/score.py --status` shows which reviewer files changed since their baseline.
 - Install locally: `python install.py --vault <path to Notes>`
-- CLI after install: `<installer's python> ~/.claude/agent-vault/vault.py <command>`; the exact string (which the vault's permission rule matches) is lib.CLI, printed by the installer and written into the vault's CLAUDE.md.
+- CLI after install: `~/.claude/agent-vault/bin/vault <command>`, a POSIX sh launcher that install.py writes, which runs the recorded Python on the installed vault.py; the exact string (which the vault's permission rule matches) is lib.CLI, the same on every machine, and is written into the vault's CLAUDE.md. It runs in Bash only; in PowerShell or cmd use the recorded Python and vault.py (the installer prints that line).
 
 ## Layout
 <!-- covers: agent_vault/**, install.py, templates/**, skills/**, agent_vault/githooks/**, .github/**, evals/**, .claude/skills/**; verified: 2026-11-16 -->
@@ -48,7 +48,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 
 ## Gotchas
 <!-- covers: agent_vault/hooks/**, install.py; verified: 2026-11-16 -->
-- Hook commands are absolute forward-slash paths to the installer's Python (`sys.executable`) and the script, so they don't depend on PATH or how the Windows hook runner expands `$HOME`. `lib.CLI` builds the same string at runtime; the vault's `Bash(...)` permission must match it exactly.
+- Hook commands are absolute forward-slash paths to the installer's Python (`sys.executable`) and the script, so they don't depend on PATH or how the Windows hook runner expands `$HOME`. `lib.CLI` is the constant launcher string `~/.claude/agent-vault/bin/vault`, never built from `sys.executable`; the vault's `Bash(~/.claude/agent-vault/bin/vault:*)` permission must match it exactly. The launcher needs the executable bit (git mode 100755, `.gitattributes` pins LF) and a `~/` command in this file is only a warning when the file is missing.
 - `.gitattributes` pins LF endings: a CRLF `agent_vault/githooks/pre-push` fails in bash and blocks every push.
 - `agent_vault/hooks/push_guard.py` tokenizes quote-aware and treats heredoc bodies as data; add a test case for every new command shape it must handle. Its `gh issue create` rule reads the vault config, so those tests must pass a temp config (`AGENT_VAULT_CONFIG`) or they read the real machine's.
 - The history lives in the config's folder (`lib.history_dir()`, read from `lib.CONFIG` at call time), so a test or fixture must keep its config in its own temp folder or the snapshot lands in the real `~/.claude/`; an in-process test patches `lib.CONFIG` and `lib.VAULT` first. A snapshot is time-boxed to 5 seconds and fails silently, so a hook that depends on one must read the id from the session state, which may be `None`.

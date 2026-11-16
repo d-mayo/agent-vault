@@ -352,6 +352,28 @@ class LintLineTest(ClaudemdCase):            # T1 -> AC1 (#33)
     def test_resolvable_command_passes(self):
         self.assertEqual(self.errors("# demo\n\n## Commands\n- Lint: `git --version`\n"), [])
 
+    def home_lint(self, home, make_launcher):
+        if make_launcher:
+            launcher = Path(home) / ".claude" / "agent-vault" / "bin" / "vault"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        self.claude("# demo\n\n## Commands\n- Run: `~/.claude/agent-vault/bin/vault status`\n- Lint: `git --version`\n")
+        self.commit("init")
+        with mock.patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+            return self.lint()
+
+    def test_home_command_resolves_when_the_file_exists(self):  # T6 -> AC6
+        with tmpdir() as t:
+            r = self.home_lint(t, True)
+        self.assertEqual(r.errors, [])
+        self.assertFalse([w for w in r.warnings if "bin/vault" in w])
+
+    def test_missing_home_command_is_a_warning_not_an_error(self):  # T6 -> AC6
+        with tmpdir() as t:
+            r = self.home_lint(t, False)
+        self.assertEqual(r.errors, [])
+        self.assertTrue(any("bin/vault" in w and "install.py" in w for w in r.warnings), r.warnings)
+
     def test_lint_command_reads_the_first_backticked_string(self):
         text = "# demo\n\n## Commands\n- Lint: `git --version` (or `other`)\n"
         sections, _ = claudemd.parse(text)
@@ -372,6 +394,8 @@ class ThisRepoTest(unittest.TestCase):          # T11 -> AC11 (#27)
         self.assertIn("skills/issue/", text)
         self.assertIn(".github/ISSUE_TEMPLATE/issue.md", text)
         self.assertEqual(claudemd.lint(repo).errors, [])
+        self.assertIn("~/.claude/agent-vault/bin/vault", text)
+        self.assertNotIn("<installer's python>", text)
 
 
 class RuffConfigTest(unittest.TestCase):         # T9 -> AC9 (#33)
