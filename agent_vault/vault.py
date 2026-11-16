@@ -605,6 +605,18 @@ def sync_default_branch(top: Path, default: str, pr: str) -> None:
             f"to date: {e.stderr or e}\nfix that, then run:{by_hand}")
 
 
+def pr_link_missing(link: dict, key: str, setup: dict) -> list[str]:
+    """What keeps a PR from being linked to a Jira ticket (D6 of #113): the key as the branch pattern's
+    `{issue}` in its head branch name, and as a whole key in its title. [] when it is linked."""
+    missing = []
+    if lib.branch_issue(setup, link["head"]) != key:
+        missing.append(f"its head branch '{link['head']}' doesn't carry {key} where the branch pattern "
+                       f"{setup['branch']} puts the issue")
+    if not re.search(rf"(?<![A-Z0-9_]){re.escape(key)}(?![0-9])", link["title"]):
+        missing.append(f"its title doesn't contain {key}")
+    return missing
+
+
 def cmd_seal_retro(args) -> None:
     index = lib.Index()
     require_issue(index, args.repo, args.issue)
@@ -644,7 +656,15 @@ def cmd_seal_retro(args) -> None:
             die("the working tree isn't clean; commit or stash your changes first")
         if not closed:
             pr_info = github.pr_closing(slug, pr)
-            if (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
+            if lib.read_setup()["tracker"] == "jira":
+                missing = pr_link_missing(github.pr_link(slug, pr), args.issue, lib.read_setup())
+                if missing and pr_info["state"] == "OPEN":
+                    die(f"PR #{pr} isn't linked to ticket {args.issue}: {' and '.join(missing)}; fix that "
+                        "on GitHub, then run this again")
+                if missing:
+                    die(f"PR #{pr} is {pr_info['state']} and wasn't linked to ticket {args.issue} "
+                        f"({' and '.join(missing)}); finish the ticket by hand, then run this again")
+            elif (args.issue, slug.lower()) not in [(n, r.lower()) for n, r in pr_info["closes"]]:
                 if pr_info["state"] == "OPEN":
                     die(f"PR #{pr} will not close issue #{args.issue} when it merges; restore a "
                         f"`Closes #{args.issue}` line in its description, then run this again")

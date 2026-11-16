@@ -304,6 +304,12 @@ def pr_closing(slug: str, number: str) -> dict:
             "decision": data.get("reviewDecision") or ""}
 
 
+def pr_link(slug: str, number: str) -> dict:
+    """`title` and `head` (its head branch's name) of a PR: what links it to a Jira ticket (D6 of #113)."""
+    data = gh_json("pr", "view", str(number), "--repo", slug, "--json", "title,headRefName")
+    return {"title": data.get("title") or "", "head": data.get("headRefName") or ""}
+
+
 MERGE_STYLES = {"squash": "allow_squash_merge", "merge": "allow_merge_commit", "rebase": "allow_rebase_merge"}
 
 

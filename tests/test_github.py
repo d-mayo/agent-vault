@@ -17,6 +17,7 @@ from tests.helpers import (CODE, FAKE_INSTALLER, REPO, copy_scenario, make_vault
 sys.path.insert(0, str(CODE))
 import github  # noqa: E402
 import lib  # noqa: E402
+import vault  # noqa: E402
 
 VAULT_PY = CODE / "vault.py"
 FAKE_GH = REPO / "tests" / "fake_gh.py"
@@ -2274,6 +2275,46 @@ class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
         git("config", "core.hooksPath", str(theirs), cwd=self.clone)
         self.refused(self.init(), "core.hooksPath", "isn't agent-vault's")
         self.assertEqual(self.calls("api"), [])
+
+
+class JiraPrLinkTest(GhCase):  # T6 -> AC5 (#113)
+    JIRA = {**lib.SETUP_DEFAULTS, "tracker": "jira"}
+
+    def open_pr(self, head, title):
+        body = self.body_file("Closes #7" + chr(10))
+        url = github.gh("pr", "create", "--repo", SLUG, "--head", head, "--base", "main",
+                        "--title", title, "--body-file", body).strip()
+        return url.rsplit("/", 1)[1]
+
+    def missing(self, head, title, key="PROJ-12"):
+        n = self.open_pr(head, title)
+        return vault.pr_link_missing(github.pr_link(SLUG, n), key, self.JIRA)
+
+    def test_linked_by_branch_and_title(self):
+        self.assertEqual(self.missing("feat/PROJ-12-x", "PROJ-12: Do it"), [])
+        self.assertEqual(self.missing("feat/PROJ-12-y", "Do PROJ-12"), [])
+
+    def test_title_must_hold_the_whole_key(self):
+        for title in ("Do it", "PROJ-123: Do it", "XPROJ-12: Do it"):
+            with self.subTest(title):
+                out = self.missing("feat/PROJ-12-x", title)
+                self.assertEqual(len(out), 1)
+                self.assertIn("title", out[0])
+
+    def test_branch_must_carry_the_key(self):
+        for head in ("feat/PROJ-13-x", "feat/PROJ-123-x", "feat/12-x"):
+            with self.subTest(head):
+                out = self.missing(head, "PROJ-12: Do it")
+                self.assertEqual(len(out), 1)
+                self.assertIn("branch", out[0])
+
+    def test_both_missing_names_both(self):
+        self.assertEqual(len(self.missing("feat/PROJ-13-x", "Do it")), 2)
+
+    def test_the_pr_read_does_not_change_what_closing_references_read(self):
+        n = self.open_pr("feat/7-x", "t")
+        self.assertEqual(github.pr_link(SLUG, n), {"title": "t", "head": "feat/7-x"})
+        self.assertEqual(github.pr_closing(SLUG, n)["closes"], [("7", SLUG)])
 
 
 class GhHelperTest(GhCase):  # T10 -> AC10

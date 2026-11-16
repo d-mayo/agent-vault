@@ -4,7 +4,7 @@ Run as AGENT_VAULT_GH=<this file> with FAKE_GH_STATE=<state.json>. State shape:
   {"signed_out": false, "hang": false,
    "repos": {"owner/name": {"default_branch": "main", "head_sha": "<40 hex>", "labels": [...],
        "settings": {...}, "refuse_settings": false, "branches": ["feat/1-x"],
-       "prs": [{"number": 1, "headRefName": "feat/1-x", "url": "...", "state": "OPEN",
+       "prs": [{"number": 1, "headRefName": "feat/1-x", "url": "...", "state": "OPEN", "title": "...",
                 "closes": [{"number": 7, "repo": "owner/name"}],
                 "checks": [{"__typename": "CheckRun", "name": "ci", "status": "COMPLETED",
                             "conclusion": "SUCCESS"}],
@@ -272,7 +272,7 @@ def main():
         body = Path(opt(args, "--body-file")).read_text(encoding="utf-8")
         closes = [{"number": int(m), "repo": slug} for m in re.findall(r"(?im)^closes #(\d+)", body)]
         pr = {"number": n, "headRefName": opt(args, "--head"), "url": url}
-        repo["prs"].append({**pr, "state": "OPEN", "closes": closes})
+        repo["prs"].append({**pr, "state": "OPEN", "closes": closes, "title": opt(args, "--title")})
         repo["created_prs"].append({**pr, "title": opt(args, "--title"), "base": opt(args, "--base"),
                                     "body": body})
         print(url)
@@ -284,6 +284,7 @@ def main():
                                                        "owner": {"login": c["repo"].split("/")[0]}}}
                 for c in pr.get("closes", [])]
         print(json.dumps({"state": pr.get("state", "OPEN"), "closingIssuesReferences": refs,
+                          "title": pr.get("title", ""), "headRefName": pr["headRefName"],
                           "headRefOid": pr_head(repo, pr), "statusCheckRollup": pr.get("checks", []),
                           "reviewDecision": pr.get("reviewDecision", "")}))
     elif cmd == ["pr", "merge"]:
