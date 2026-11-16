@@ -64,6 +64,7 @@ class InstallTest(unittest.TestCase):
         self.assertFalse(list(inst.rglob("__pycache__")))
         cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
         self.assertTrue(os.path.samefile(cfg["vault"], self.vault))          # however spelled
+        self.assertNotIn(chr(92), cfg["vault"])        # recorded with forward slashes
         self.assertEqual(cfg["python"], Path(sys.executable).as_posix())        # T8 -> AC8 (#33)
         if find_bash():                    # the hook's own line reads it back from this file
             hook = (REPO / "agent_vault" / "githooks" / "pre-push").read_text(encoding="utf-8")
@@ -231,6 +232,7 @@ class InstallTest(unittest.TestCase):
         cfgp = self.home / ".claude" / "agent-vault.json"
         cfg = json.loads(cfgp.read_text())
         self.assertTrue(os.path.samefile(cfg["source"], clone))
+        self.assertNotIn(chr(92), cfg["source"])        # recorded with forward slashes
         self.assertEqual(cfg["commit"], shas[1])
         self.assertEqual(cfg["commit_time"], int(git("log", "-1", "--format=%ct")))
         self.assertEqual(git("config", "core.hooksPath"), install.HOOKS_DIR)
@@ -247,7 +249,8 @@ class InstallTest(unittest.TestCase):
         install.install(self.vault, self.home, repo=plain)
         cfg = json.loads(cfgp.read_text())
         self.assertNotIn("commit", cfg)
-        self.assertEqual(cfg["source"], plain.resolve().as_posix())
+        self.assertTrue(os.path.samefile(cfg["source"], plain))
+        self.assertNotIn(chr(92), cfg["source"])        # recorded with forward slashes
 
     def test_commit_option_as_subprocess(self):  # T1 -> AC1 (#98)
         clone, shas, git = self.git_clone_with_commits()
@@ -261,6 +264,7 @@ class InstallTest(unittest.TestCase):
         cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
         self.assertEqual(cfg["commit"], shas[0])
         self.assertTrue(os.path.samefile(cfg["source"], clone))
+        self.assertNotIn(chr(92), cfg["source"])        # recorded with forward slashes
         self.assertEqual(real(), before)
 
     def test_shared_pre_push_hook(self):  # T9 -> AC9
