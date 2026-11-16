@@ -2073,6 +2073,89 @@ class RepoInitTest(GhCase):  # T7, T8 -> AC7, AC8
         r = self.refused(self.init(), "gh auth login")
         self.assertNotIn("Pull Requests", r.stderr)
 
+    # --- repo-init follows the vault's setup (#112) ---
+    JIRA = ("--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+            "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+
+    def setup_note(self, *flags):
+        self.ok(self.cli("setup", *(flags or ("--tracker", "github"))))
+
+    def reload(self):
+        self.load()
+        return self.state
+
+    def test_managed_sets_only_the_setups_style(self):             # T1 -> AC1
+        for style, key in (("merge", "allow_merge_commit"), ("rebase", "allow_rebase_merge")):
+            with self.subTest(style=style):
+                self.setup_note("--tracker", "github", "--merge", style, "--replace")
+                r = self.ok(self.init())
+                want = {k: k == key for k in ("allow_squash_merge", "allow_merge_commit", "allow_rebase_merge")}
+                self.assertEqual(self.load()["settings"], {**want, "delete_branch_on_merge": True})
+                self.assertIn(f"merge settings: {style}-only, delete branch on merge (updated)", r.stdout)
+                n = len(self.reload()["calls"])
+                r = self.ok(self.init())
+                self.assertIn(f"already {style}-only", r.stdout)
+                self.assertEqual([c for c in self.reload()["calls"][n:] if "PATCH" in c], [])
+
+    def test_no_setup_note_reports_as_before(self):                # T1 -> AC1
+        self.assertIn("merge settings: squash-only, delete branch on merge (updated)", self.ok(self.init()).stdout)
+        self.assertIn("merge settings: already squash-only with delete branch on merge", self.ok(self.init()).stdout)
+
+    def test_managed_refusal_names_the_setups_style(self):         # T2 -> AC2
+        self.setup_note("--tracker", "github", "--merge", "merge")
+        self.state["repos"][SLUG]["refuse_settings"] = True
+        self.save()
+        r = self.refused(self.init(), "Settings", "Pull Requests", "Merge commits")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("planned", self.load()["labels"])
+        self.assertFalse((self.clone / "CLAUDE.md").exists())
+        self.assertEqual(git("config", "--local", "--get", "core.hooksPath", cwd=self.clone, check=False), "")
+
+    def test_checked_allowed_style_changes_nothing_on_the_repo(self):     # T3 -> AC3
+        self.setup_note("--tracker", "github", "--repo-settings", "checked")
+        out = self.ok(self.init()).stdout
+        self.assertIn("squash merges are allowed (checked, changed nothing)", out)
+        self.assertEqual([c for c in self.reload()["calls"] if "PATCH" in c], [])
+        self.assertIn("planned", self.load()["labels"])                  # T4 -> AC4
+        self.assertTrue((self.clone / lib.ISSUE_TEMPLATE_PATH).is_file())
+        self.assertTrue((self.clone / "CLAUDE.md").is_file())
+
+    def test_checked_disallowed_style_refuses_before_any_change(self):   # T3 -> AC3
+        self.setup_note("--tracker", "github", "--merge", "rebase", "--repo-settings", "checked")
+        self.state["repos"][SLUG]["settings"]["allow_rebase_merge"] = False
+        self.save()
+        r = self.refused(self.init(), "rebase", "allow_rebase_merge", "repo admin")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual([c for c in self.reload()["calls"] if "PATCH" in c], [])
+        self.assertNotIn("planned", self.load()["labels"])
+        self.assertFalse((self.clone / "CLAUDE.md").exists())
+        self.assertFalse((self.clone / lib.ISSUE_TEMPLATE_PATH).exists())
+        self.assertEqual(git("config", "--local", "--get", "core.hooksPath", cwd=self.clone, check=False), "")
+
+    def test_jira_setup_skips_labels_and_template(self):           # T5, T6 -> AC5, AC6
+        for repo_settings in ("managed", "checked"):
+            with self.subTest(repo_settings=repo_settings):
+                self.setup_note(*self.JIRA, "--repo-settings", repo_settings, "--replace")
+                r = self.ok(self.init())
+                self.assertEqual([c for c in self.reload()["calls"] if c[:1] == ["label"]], [])
+                self.assertFalse((self.clone / lib.ISSUE_TEMPLATE_PATH).exists())
+                self.assertIn("labels: skipped for a Jira setup", r.stdout)
+                self.assertIn("issue.md: skipped for a Jira setup", r.stdout)
+                self.assertTrue((self.clone / "CLAUDE.md").is_file())
+                self.assertEqual(Path(git("config", "--local", "core.hooksPath", cwd=self.clone)), CODE / "githooks")
+                before = (self.load(), (self.clone / "CLAUDE.md").read_bytes())
+                self.ok(self.init())
+                self.assertEqual(before, (self.load(), (self.clone / "CLAUDE.md").read_bytes()))
+
+    def test_foreign_hooks_path_refused_in_a_checked_setup(self):       # T6 -> AC6
+        self.setup_note("--tracker", "github", "--repo-settings", "checked")
+        theirs = self.root / "theirs"
+        theirs.mkdir()
+        (theirs / "pre-push").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        git("config", "core.hooksPath", str(theirs), cwd=self.clone)
+        self.refused(self.init(), "core.hooksPath", "isn't agent-vault's")
+        self.assertEqual(self.calls("api"), [])
+
 
 class GhHelperTest(GhCase):  # T10 -> AC10
     def test_signed_out(self):

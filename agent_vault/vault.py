@@ -308,10 +308,17 @@ def cmd_new_design(args) -> None:
 
 
 # --- git and GitHub commands (design §4, §10) ------------------------------------------
-REPO_SETTINGS = {"allow_squash_merge": True, "allow_merge_commit": False,
-                 "allow_rebase_merge": False, "delete_branch_on_merge": True}
-MANUAL_SETTINGS = ("on GitHub, Settings → General → Pull Requests: allow only 'Squash merging' "
-                   "and turn on 'Automatically delete head branches'")
+MERGE_STYLE_NAMES = {"squash": "Squash merging", "merge": "Merge commits", "rebase": "Rebase merging"}
+
+
+def repo_settings_for(style: str) -> dict:
+    """The settings `repo-init` wants for a merge style (managed): only that style allowed, head branches deleted."""
+    return {**{key: s == style for s, key in github.MERGE_STYLES.items()}, "delete_branch_on_merge": True}
+
+
+def manual_settings(style: str) -> str:
+    return (f"on GitHub, Settings → General → Pull Requests: allow only '{MERGE_STYLE_NAMES[style]}' "
+            "and turn on 'Automatically delete head branches'")
 
 
 def update_note(path: Path, **fields) -> None:
@@ -1346,24 +1353,38 @@ def cmd_repo_init(args) -> None:
             "it. Change or unset it by hand, then rerun repo-init")
     report = []
 
+    setup = lib.read_setup()
+    style, github_tracker = setup["merge"], setup["tracker"] == "github"
     have = github.gh_json("api", f"repos/{slug}")
-    change = {k: v for k, v in REPO_SETTINGS.items() if have.get(k) != v}
-    if change:
-        fields = [a for k, v in change.items() for a in ("-F", f"{k}={'true' if v else 'false'}")]
-        try:
-            github.gh("api", "-X", "PATCH", f"repos/{slug}", *fields)
-        except github.CmdError as e:
-            if e.kind != "failed":
-                raise
-            die(f"GitHub refused the merge settings for {slug} ({e.stderr or e}). Set them by hand "
-                f"{MANUAL_SETTINGS}, then rerun repo-init")
-        report.append("merge settings: squash-only, delete branch on merge (updated)")
+    if setup["repo_settings"] == "checked":
+        if have.get(github.MERGE_STYLES[style]) is not True:
+            die(f"{slug} doesn't allow the {style} merge style this vault's setup uses, and the setup leaves "
+                f"repo settings to the repo's admins. Ask a repo admin to turn on "
+                f"'{MERGE_STYLE_NAMES[style]}' ({github.MERGE_STYLES[style]}) under Settings, General, "
+                "Pull Requests, then rerun repo-init")
+        report.append(f"merge settings: {style} merges are allowed (checked, changed nothing)")
     else:
-        report.append("merge settings: already squash-only with delete branch on merge")
+        wanted = repo_settings_for(style)
+        change = {k: v for k, v in wanted.items() if have.get(k) != v}
+        if change:
+            fields = [a for k, v in change.items() for a in ("-F", f"{k}={'true' if v else 'false'}")]
+            try:
+                github.gh("api", "-X", "PATCH", f"repos/{slug}", *fields)
+            except github.CmdError as e:
+                if e.kind != "failed":
+                    raise
+                die(f"GitHub refused the merge settings for {slug} ({e.stderr or e}). Set them by hand "
+                    f"{manual_settings(style)}, then rerun repo-init")
+            report.append(f"merge settings: {style}-only, delete branch on merge (updated)")
+        else:
+            report.append(f"merge settings: already {style}-only with delete branch on merge")
 
-    for label, color, desc in (lib.PLANNED_LABEL, lib.FEATURE_LABEL, lib.BUG_LABEL):
-        made = github.ensure_label(slug, label, color, desc)
-        report.append(f"label '{label}': " + ("created" if made else "already exists"))
+    if github_tracker:
+        for label, color, desc in (lib.PLANNED_LABEL, lib.FEATURE_LABEL, lib.BUG_LABEL):
+            made = github.ensure_label(slug, label, color, desc)
+            report.append(f"label '{label}': " + ("created" if made else "already exists"))
+    else:
+        report.append("labels: skipped for a Jira setup")
 
     if state == "unset":
         github.git("config", "--local", "core.hooksPath", hooks.as_posix(), cwd=top)
@@ -1379,7 +1400,9 @@ def cmd_repo_init(args) -> None:
         lib.write_text(claude, tpl.replace("{{PROJECT}}", index.repos[name][0]).replace("{{REPO}}", name))
         report.append("CLAUDE.md: wrote a skeleton (not committed; fill it in)")
     issue_tpl = top / lib.ISSUE_TEMPLATE_PATH
-    if issue_tpl.exists():
+    if not github_tracker:
+        report.append(f"{lib.ISSUE_TEMPLATE_PATH}: skipped for a Jira setup")
+    elif issue_tpl.exists():
         report.append(f"{lib.ISSUE_TEMPLATE_PATH}: already exists, left alone")
     else:
         lib.write_text(issue_tpl, lib.issue_template_file())
