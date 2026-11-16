@@ -59,6 +59,51 @@ class InstallTest(unittest.TestCase):
         (self.repo / ".git").mkdir(parents=True, exist_ok=True)
         return install.install(self.vault, self.home, repo=self.repo)
 
+    def our_hook_commands(self):
+        us = json.loads((self.home / ".claude" / "settings.json").read_text())
+        return [(g, h["command"]) for ev in us["hooks"].values() for g in ev for h in g["hooks"]
+                if "/.claude/agent-vault/" in h["command"]]
+
+    def test_hooks_call_the_launcher(self):  # T2 -> AC2
+        self.run_install()
+        launcher = (self.home / ".claude" / "agent-vault" / "bin" / "hook").as_posix()
+        cmds = [c for _, c in self.our_hook_commands()]
+        self.assertEqual(len(cmds), 5)
+        for c in cmds:
+            self.assertTrue(c.startswith(f'"{launcher}" '), c)
+            self.assertNotIn(Path(sys.executable).as_posix(), c)
+            self.assertEqual(c.endswith(" --blocking"), "guard.py" in c, c)
+        self.assertEqual(sum(c.endswith(" --blocking") for c in cmds), 2)
+
+    def test_reinstall_replaces_python_path_hooks_keeps_foreign(self):  # T2 -> AC2
+        self.run_install()
+        us_path = self.home / ".claude" / "settings.json"
+        us = json.loads(us_path.read_text())
+        old = f'{install.python_cmd()} "{(self.home / ".claude" / "agent-vault" / "hooks" / "stop_check.py").as_posix()}"'
+        us["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": old}]})
+        us_path.write_text(json.dumps(us))
+        self.run_install()
+        cmds = [h["command"] for ev in json.loads(us_path.read_text())["hooks"].values()
+                for g in ev for h in g["hooks"]]
+        self.assertNotIn(old, cmds)
+        self.assertIn(FOREIGN["command"], cmds)
+        self.assertEqual(len([c for c in cmds if "/.claude/agent-vault/" in c]), 5)
+
+    @unittest.skipUnless(find_bash(), "needs bash")
+    def test_installed_hook_commands_run(self):  # T2 -> AC2: each command, end to end
+        self.run_install()
+        env = dict(os.environ, HOME=str(self.home),
+                   AGENT_VAULT_CONFIG=str(self.home / ".claude" / "agent-vault.json"))
+        for _, cmd in self.our_hook_commands():
+            out = subprocess.run([find_bash(), "-c", cmd], input="{}", capture_output=True, text=True, env=env)
+            self.assertEqual(out.returncode, 0, (cmd, out.stderr))
+
+    def test_readme_and_warning_say_what_a_deleted_python_does(self):  # T5 -> AC5
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("Hooks run with the same Python", readme)
+        self.assertIn("install.py", readme.split("Hooks run with")[1].split("\n\n")[0])
+        self.assertIn("rerun", (REPO / "install.py").read_text(encoding="utf-8").split("virtualenv")[1][:400])
+
     def test_fresh_install(self):  # T1 -> AC1, AC4
         self.run_install()
         inst = self.home / ".claude" / "agent-vault"
@@ -78,8 +123,8 @@ class InstallTest(unittest.TestCase):
             self.assertEqual(out.stdout, cfg["python"])
         us = json.loads((self.home / ".claude" / "settings.json").read_text())
         ours = [h["command"] for g in sum(us["hooks"].values(), []) for h in g["hooks"]
-                if "/.claude/agent-vault/hooks/" in h["command"]]
-        self.assertEqual(sorted(Path(c.split('" "')[1].rstrip('"')).name for c in ours),
+                if "/.claude/agent-vault/bin/hook" in h["command"]]
+        self.assertEqual(sorted(c.split('" ')[1].split()[0] for c in ours),
                          sorted(["session_start.py", "guard.py", "push_guard.py", "post_edit.py",
                                  "stop_check.py"]))
         self.assertEqual([a for a in us["permissions"]["allow"] if "agent-vault" in a],

@@ -25,8 +25,9 @@ The installer is safe to rerun after every `git pull`. It:
 - deletes the v1 scripts from `<vault>/Agent/_system/` if they're still there (the phone log is kept);
 - turns on this repo's git hooks (`agent_vault/githooks/`); other repos get the installed copy from `repo-init`.
 
-Hooks run with the same Python that ran the installer, so if you switch Python
-installs, rerun it.
+Hooks run with the Python recorded in the config, the one that ran the installer. If that Python
+is deleted, the guards block tool calls and the other hooks report an error until you rerun
+`install.py`, so rerun it whenever you switch Python installs.
 
 After that first run you don't have to rerun it by hand: the installed copy keeps itself current
 with `main`. `~/.claude/agent-vault/bin/vault merge`, after it merges a PR in the clone you installed from, installs what
