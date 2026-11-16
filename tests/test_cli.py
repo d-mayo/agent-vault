@@ -148,6 +148,28 @@ class NewPlanTest(CliCase):
         for rule in ("PLAN-AC", "PLAN-STEP", "PLAN-T", "PLAN-FULL"):
             self.assertIn(f"error: [{rule}]", r.stdout)
 
+    def test_sealed_plan_stamp_validated(self):     # T2 -> AC2 (#114): exactly one of issue_updated, ticket_hash
+        self.cli("new", "plan", "demo", "7")
+        p = self.path("Work/demo/demo-7-plan.md")
+        original = p.read_text(encoding="utf-8")
+        h = "a" * 64
+        cases = {"neither": ["base_sha: e66091b"],
+                 "both": ["issue_updated: 2026-09-27T00:20:58Z", f"ticket_hash: {h}", "base_sha: e66091b"],
+                 "short hash": ["ticket_hash: abc", "base_sha: e66091b"],
+                 "upper hash": [f"ticket_hash: {'A' * 64}", "base_sha: e66091b"],
+                 "no base": [f"ticket_hash: {h}"]}
+        for name, stamp in cases.items():
+            with self.subTest(name):
+                p.write_text(original.replace("status: draft", "status: sealed" + chr(10) + chr(10).join(stamp)),
+                             encoding="utf-8", newline=chr(10))
+                r = run_py(CLI, ["validate"], config=self.cfg)
+                self.assertIn("error: [PLAN-SEALED]", r.stdout)
+        ok = chr(10).join(["ticket_hash: " + h, "base_sha: e66091b"])
+        p.write_text(original.replace("status: draft", "status: sealed" + chr(10) + ok), encoding="utf-8", newline=chr(10))
+        r = run_py(CLI, ["validate"], config=self.cfg)
+        self.assertNotIn("PLAN-SEALED", r.stdout)
+        self.assertNotIn("FM-UNKNOWN", r.stdout)
+
 
 class NewRetroTest(CliCase):
     def setUp(self):

@@ -269,6 +269,12 @@ def open_prs(slug: str) -> list[dict]:
                    "--json", "number,headRefName,url")
 
 
+def merged_prs(slug: str) -> list[dict]:
+    """The merged PRs (number, head branch, URL): how a Jira setup knows a ticket's work has merged (D3 of #114)."""
+    return gh_json("pr", "list", "--repo", slug, "--state", "merged", "--limit", "200",
+                   "--json", "number,headRefName,url")
+
+
 PASSED_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
 
 

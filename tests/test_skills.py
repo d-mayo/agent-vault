@@ -620,7 +620,7 @@ class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (
         for line in refs:
             self.assertTrue(any(rx.match(line) for _, rx in lib.LINE_FORMATS["RETRO-FOLLOW"]),
                             f"{line!r} should match lib.py's RETRO-FOLLOW format")
-        self.assertLessEqual(len(text.splitlines()), 310)
+        self.assertLessEqual(len(text.splitlines()), 340)     # 310 before the Jira setup section (#114)
 
 
 class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC9, AC10 (#36)
@@ -1147,6 +1147,34 @@ class CleanupTest(unittest.TestCase):
 
     def test_readme_has_no_stale_install_note(self):
         self.assertNotIn("After pulling this change", (REPO / "README.md").read_text(encoding="utf-8"))
+
+
+class JiraSkillsTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#114)
+    def jira_section(self, skill):
+        text = read(skill, "SKILL.md")
+        self.assertIn("## Jira setup", text)
+        return text.split("## Jira setup", 1)[1].split(chr(10) + "## ", 1)[0]
+
+    def test_each_pipeline_story_skill_has_the_jira_instructions(self):
+        for skill in ("plan-story", "implement-story", "retro", "merge"):
+            with self.subTest(skill):
+                self.assertMentions("vault.py tracker", "--ticket", "outside both the clone and the vault",
+                                    "never change a ticket's status", "connector",
+                                    text=self.jira_section(skill))
+
+    def test_plan_story_names_the_planned_label_step(self):
+        self.assertMentions("planned label", "`none`", "add nothing", text=self.jira_section("plan-story"))
+
+    def test_retro_posts_the_closing_comment_and_judges_by_the_pr(self):
+        self.assertMentions("closing comment", "through the connector", "before `seal retro`",
+                            "gh pr view <pr> --json state", "never `gh issue view`",
+                            text=self.jira_section("retro"))
+
+    def test_guide_readme_and_repo_claudemd_describe_ticket_files_and_tracker(self):
+        for text in ((REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8"),
+                     (REPO / "README.md").read_text(encoding="utf-8"),
+                     (REPO / "CLAUDE.md").read_text(encoding="utf-8")):
+            self.assertMentions("ticket file", "vault.py tracker", "--ticket", text=text.replace("{{CLI}}", "vault.py"))
 
 
 if __name__ == "__main__":

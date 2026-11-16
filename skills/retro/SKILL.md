@@ -277,6 +277,33 @@ giving that branch an upstream itself if it somehow doesn't have one yet. A
 backfill's approval merges nothing: `seal retro` never merges a closed
 issue, and seals its impl note and retro together.
 
+## Jira setup
+
+Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+section. If it prints `tracker: jira`, the issue is a Jira ticket and its
+identity is the ticket key (e.g. `PROJ-12`), and:
+
+- The command's output names the connector (the MCP server that reaches Jira),
+  the project's key, the issue types and the planned label, and the fields of
+  the ticket file; learn them there and never read `Agent/Setup.md` yourself.
+- Fetch the ticket through that connector and write the ticket file: JSON with
+  exactly `key`, `title`, `body`, `type`, `labels` and `parent`, in a scratchpad
+  or temp folder outside both the clone and the vault (an untracked file in the
+  clone fails the clean-tree checks, and the vault holds notes only). Fetch it
+  again before each command that takes it, so a ticket edited meanwhile shows.
+- Pass `--ticket <file>` to `seal retro` (and `stage`); those commands never read the
+  ticket from GitHub, and a ticket edited since the plan was sealed only warns.
+  Follow what the CLI prints.
+- Preflight judges the story by the impl note's PR, not the issue: with `gh pr
+  view <pr> --json state`, an open PR takes the open path, a merged one the
+  backfill path, and a closed unmerged one seals both notes; never `gh issue
+  view`. A `pr: none` plan has no PR: before `seal retro`, post the retro's
+  `## Closing comment` on the ticket through the connector (`seal retro` closes
+  nothing and seals both notes). No feature is closed in a Jira setup.
+- Never change a ticket's status (no transition, no "Done"): that is the
+  user's; agent-vault only ever adds the planned label (plan-story) or posts a
+  closing comment (retro), through the connector.
+
 ## Stop and ask if
 
 - `seal retro` prints a feature-close warning (the check failed, or GitHub

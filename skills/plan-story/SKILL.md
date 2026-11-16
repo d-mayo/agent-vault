@@ -192,6 +192,32 @@ already on another issue's branch), then "implement #<issue>" (the
 `implement-story` skill). This skill never creates the branch itself. Send
 the push notification here, naming `implement #<issue>` as the next stage.
 
+## Jira setup
+
+Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+section. If it prints `tracker: jira`, the issue is a Jira ticket and its
+identity is the ticket key (e.g. `PROJ-12`), and:
+
+- The command's output names the connector (the MCP server that reaches Jira),
+  the project's key, the issue types and the planned label, and the fields of
+  the ticket file; learn them there and never read `Agent/Setup.md` yourself.
+- Fetch the ticket through that connector and write the ticket file: JSON with
+  exactly `key`, `title`, `body`, `type`, `labels` and `parent`, in a scratchpad
+  or temp folder outside both the clone and the vault (an untracked file in the
+  clone fails the clean-tree checks, and the vault holds notes only). Fetch it
+  again before each command that takes it, so a ticket edited meanwhile shows.
+- Pass `--ticket <file>` to `seal plan` (and `preflight`, if you run it); those commands never read the
+  ticket from GitHub, and a ticket edited since the plan was sealed only warns.
+  Follow what the CLI prints.
+- A ticket of the feature issue type is never planned: `seal plan` refuses it.
+- After `seal plan` seals the plan, it prints the planned-label step: add the
+  planned label to the ticket through the connector, or, when the setup's
+  planned label is `none`, add nothing. Do that step; if it was missed, a rerun
+  of `seal plan` prints it again until the ticket has the label.
+- Never change a ticket's status (no transition, no "Done"): that is the
+  user's; agent-vault only ever adds the planned label (plan-story) or posts a
+  closing comment (retro), through the connector.
+
 ## Stop and ask if
 
 - The issue is labelled `feature`: a feature is never planned; only its

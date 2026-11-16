@@ -68,6 +68,14 @@ branches `{type}/{issue}-{slug}`. Every command that takes an issue takes its nu
 setup its ticket key (`PROJ-12`, with the prefix of the project's `jira_project`); branch names, the
 pre-push hook and the retro's PR check all follow the setup's branch pattern.
 
+In a Jira setup the CLI never calls Jira: a skill fetches the ticket through the connector and writes a
+ticket file, JSON with `key`, `title`, `body`, `type`, `labels` and `parent`, outside the clone and the
+vault, and hands it to `seal plan`, `preflight`, `branch`, `open-pr`, `seal retro` and `stage` with
+`--ticket <file>`. The plan records a hash of the ticket's title and body instead of GitHub's edit time (a
+changed ticket only warns), a story counts as merged when a PR carrying its key has, and nothing changes
+a ticket's status. `vault.py tracker <repo>` prints the tracker and, for Jira, the connector, the
+project's key, the ticket file's fields and the issue types, so a skill learns them without reading the setup note.
+
 After `install.py`, start Claude Code in the vault and say "set up this vault" (the `setup` skill):
 it interviews you on each value, shows exactly what it will write, and runs `vault.py setup` only
 after you say yes. `vault.py setup` refuses an incomplete or contradictory setup, and refuses to

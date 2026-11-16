@@ -99,7 +99,7 @@ REQUIRED = {
 }
 OPTIONAL = {
     "project": ["audited", "jira_project"],
-    "plan": ["issue_updated", "base_sha", "pr"],
+    "plan": ["issue_updated", "ticket_hash", "base_sha", "pr"],
     "impl": ["branch", "pr"],
     "retro": ["commit"],
     "idea": ["project", "promoted_to"],
@@ -109,7 +109,7 @@ OPTIONAL = {
     "setup": list(SETUP_JIRA),
 }
 CONDITIONAL = {                            # shown by `schema`; enforced by FM-COND / PLAN-SEALED
-    "plan": "issue_updated and base_sha are required when status is sealed; pr, if present, is none (the issue ends without a pull request)",
+    "plan": "base_sha and exactly one of issue_updated (a GitHub setup) and ticket_hash (a Jira setup; 64 lowercase hex characters) are required when status is sealed; pr, if present, is none (the issue ends without a pull request)",
     "retro": "pr is a number, or none when the plan declares pr: none; then a non-empty '## Closing comment' section follows Follow-ups, and only then; "
              "commit (7-40 hex characters) is the PR commit `seal retro` readied, set by `seal retro` only; a follow-up retro <repo>-<n>-retro-<k>.md needs retro-<k-1> (retro for k = 2) of the same issue",
     "idea": "promoted_to is required if and only if status is promoted",
@@ -301,7 +301,7 @@ RULES = {
     "PLAN-COVER": ("error", "Every acceptance criterion is referenced by at least one test (warning while draft)"),
     "PLAN-REF": ("error", "Every AC a test references must exist"),
     "PLAN-FULL": ("error", "The Tests section has a 'Full check:' line (warning while draft)"),
-    "PLAN-SEALED": ("error", "A sealed plan has issue_updated and base_sha"),
+    "PLAN-SEALED": ("error", "A sealed plan has base_sha and exactly one of issue_updated and ticket_hash (64 lowercase hex characters)"),
     "DESIGN-SEALED": ("error", "A sealed design has 'sealed' (a date), and a draft has none"),
     "DESIGN-DEC": ("error", "Design decisions are '### D<n>. <title>' entries (no [[ ]] in the title) with 'Decision:' and 'Why:' lines and an optional 'Replaces: [[<record>]]'; at least one (warning while draft)"),
     "DESIGN-STORY": ("error", "Design stories are '### S<n>. <title>' entries with 'Outcome:' and 'Depends on:' (None, or earlier stories like S1, S2) lines and an optional 'Repo: <name>'; at least one (warning while draft)"),
@@ -675,6 +675,50 @@ def read_setup() -> dict:
     return out
 
 
+# --- Ticket files (a Jira setup: what a skill read through the connector, handed to the CLI) ------
+TICKET_FIELDS = ["key", "title", "body", "type", "labels", "parent"]
+TICKET_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class TicketError(ValueError):
+    pass
+
+
+def read_ticket(path: str, issue: str) -> dict:
+    """The one reader and checker of a ticket file (D1 of #114): JSON with exactly the TICKET_FIELDS, whose
+    `key` is `issue`. Raises TicketError naming the file or field at fault."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as e:
+        raise TicketError(f"can't read the ticket file: {e}")
+    except ValueError as e:
+        raise TicketError(f"the ticket file {path} isn't valid JSON: {e}")
+    if not isinstance(data, dict):
+        raise TicketError(f"the ticket file {path} must hold a JSON object with {', '.join(TICKET_FIELDS)}")
+    missing = [k for k in TICKET_FIELDS if k not in data]
+    if missing:
+        raise TicketError(f"the ticket file {path} lacks {', '.join(missing)} (it needs {', '.join(TICKET_FIELDS)})")
+    for k in ("key", "title", "body", "type"):
+        if not isinstance(data[k], str):
+            raise TicketError(f"the ticket file's '{k}' must be a string")
+    if not data["key"] or not data["title"] or not data["type"]:
+        raise TicketError("the ticket file's 'key', 'title' and 'type' must not be empty")
+    if not isinstance(data["labels"], list) or not all(isinstance(x, str) for x in data["labels"]):
+        raise TicketError("the ticket file's 'labels' must be a list of strings")
+    parent = data["parent"]
+    if parent is not None and not (isinstance(parent, str) and ISSUE_ID_RE.match(parent) and not parent.isdigit()):
+        raise TicketError("the ticket file's 'parent' must be a ticket key or null")
+    if data["key"] != issue:
+        raise TicketError(f"the ticket file's key is {data['key']!r}, not {issue!r}")
+    return {k: data[k] for k in TICKET_FIELDS}
+
+
+def ticket_hash(ticket: dict) -> str:
+    """sha256 of the title, a newline and the body, CRLF turned into LF and surrounding whitespace stripped (D2)."""
+    text = (ticket["title"] + "\n" + ticket["body"]).replace("\r\n", "\n").strip()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 # --- Vault index ---------------------------------------------------------------
 class Index:
     """Everything a link, project or repo reference could resolve to."""
@@ -959,9 +1003,14 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
         if (status == "sealed") != (fm.get("sealed") not in (None, "")) and status in STATUSES["design"]:
             res.add("DESIGN-SEALED", "'sealed' (the date it was sealed) must be set if and only if status is sealed")
     if ntype == "plan" and status == "sealed":
-        for key in ("issue_updated", "base_sha"):
-            if fm.get(key) in (None, ""):
-                res.add("PLAN-SEALED", f"a sealed plan needs '{key}'")
+        if fm.get("base_sha") in (None, ""):
+            res.add("PLAN-SEALED", "a sealed plan needs 'base_sha'")
+        stamps = [k for k in ("issue_updated", "ticket_hash") if fm.get(k) not in (None, "")]
+        if len(stamps) != 1:
+            res.add("PLAN-SEALED", "a sealed plan needs exactly one of 'issue_updated' and 'ticket_hash' "
+                    f"(has {' and '.join(stamps) or 'neither'})")
+        elif stamps == ["ticket_hash"] and not (isinstance(fm["ticket_hash"], str) and TICKET_HASH_RE.match(fm["ticket_hash"])):
+            res.add("PLAN-SEALED", f"'ticket_hash' must be 64 lowercase hex characters (got {fm['ticket_hash']!r})")
     for key, want in derived.items():
         if isinstance(fm.get(key), str) and fm[key] != want:
             res.add("FM-MATCH", f"'{key}' is {fm[key]!r} but the file name says {want!r}")
@@ -1403,7 +1452,7 @@ def schema_text() -> str:
     out.append(f"Daily events: {', '.join(EVENTS)} (with <repo>#<n>); {', '.join(IDEA_EVENTS)} (with <title> and idea link); {DECISION_EVENT} (with <title> and record link); {DESIGN_EVENT} (with <title> and design link).")
     out.append("Plan checks: every AC is referenced by a test and every referenced AC exists; "
                "each step has Files: and Done when:; Tests ends with a Full check: line; "
-               "a sealed plan has issue_updated and base_sha. On a draft plan the completeness checks "
+               "a sealed plan has base_sha and exactly one of issue_updated and ticket_hash. On a draft plan the completeness checks "
                f"({', '.join(DRAFT_SOFT)}) only warn.")
     out.append("Rules (validate exits 1 on errors only):")
     out += [f"  {rid:13} {sev:8} {desc}" for rid, (sev, desc) in RULES.items()]
