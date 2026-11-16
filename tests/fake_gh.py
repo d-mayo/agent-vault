@@ -264,7 +264,8 @@ def main():
         repo = repo_state(state, args[2])
         print(json.dumps({"defaultBranchRef": {"name": repo["default_branch"]}}))
     elif cmd == ["pr", "list"]:
-        print(json.dumps(repo["prs"]))
+        wanted = opt(args, "--state", "open").upper()      # open | merged | closed | all
+        print(json.dumps([p for p in repo["prs"] if wanted == "ALL" or p.get("state", "OPEN") == wanted]))
     elif cmd == ["pr", "create"]:
         n = repo["next_number"]
         repo["next_number"] += 1

@@ -2332,6 +2332,23 @@ class JiraTicketBase(GhCase):
         p.write_text(p.read_text(encoding="utf-8").replace("status: active", f"status: active{chr(10)}jira_project: PROJ"),
                      encoding="utf-8", newline=chr(10))
 
+    def jira_plan(self, text=SEALED_PLAN):
+        self.ok(self.cli("new", "plan", "widget", self.KEY))
+        self.note_of("plan").write_text(text.replace("issue: 7", "issue: " + self.KEY), encoding="utf-8", newline=chr(10))
+
+    def note_of(self, name):
+        return self.vault / "Agent" / "Work" / "widget" / f"widget-{self.KEY}-{name}.md"
+
+    def seal_jira(self, **changes):
+        self.jira_plan()
+        return self.ok(self.cli("seal", "plan", "widget", self.KEY, "--ticket", self.ticket(**changes)))
+
+    def merged_pr(self, head, number=5):
+        self.load()
+        self.state["repos"][SLUG]["prs"].append({"number": number, "headRefName": head, "state": "MERGED",
+                                                 "url": f"https://github.com/{SLUG}/pull/{number}", "title": "t"})
+        self.save()
+
     def ticket(self, name="ticket.json", **changes):
         data = {**self.TICKET, **changes}
         data = {k: v for k, v in data.items() if v is not ...}
@@ -2386,6 +2403,83 @@ class TicketFileTest(JiraTicketBase):  # T1, T7 -> AC1, AC7 (#114)
                      "labels", "parent"):
             self.assertIn(word, out)
         self.refused(self.cli("tracker", "nope"), "repo")
+
+
+class JiraPlanTest(JiraTicketBase):  # T2, T3, T4 -> AC2, AC3, AC4 (#114)
+    def test_feature_type_ticket_is_refused_leaving_a_draft(self):
+        self.jira()
+        self.jira_plan()
+        self.refused(self.cli("seal", "plan", "widget", self.KEY, "--ticket", self.ticket(type="Epic")), "feature")
+        self.assertEqual(self.fm(self.note_of("plan"))["status"], "draft")
+
+    def test_seals_with_ticket_hash_and_base_sha(self):
+        self.jira(label="planned")
+        out = self.seal_jira().stdout
+        fm = self.fm(self.note_of("plan"))
+        self.assertEqual(fm["status"], "sealed")
+        self.assertEqual(fm["ticket_hash"], lib.ticket_hash(self.TICKET))
+        self.assertIn("base_sha", fm)
+        self.assertNotIn("issue_updated", fm)
+        self.assertIn("'planned'", out)
+        self.assertIn(self.KEY, out)
+        self.assertIn("atlassian", out)
+        self.assert_valid()
+        self.assertEqual(self.calls("issue"), [])
+        self.assertEqual(self.calls("label"), [])
+
+    def test_label_none_adds_no_label_and_a_rerun_refuses(self):
+        self.jira()
+        out = self.seal_jira().stdout
+        self.assertIn("no label", out)
+        self.refused(self.cli("seal", "plan", "widget", self.KEY, "--ticket", self.ticket()), "already sealed")
+
+    def test_rerun_prints_the_label_step_until_the_ticket_has_it(self):
+        self.jira(label="planned")
+        self.seal_jira()
+        again = self.ok(self.cli("seal", "plan", "widget", self.KEY, "--ticket", self.ticket())).stdout
+        self.assertIn("'planned'", again)
+        self.refused(self.cli("seal", "plan", "widget", self.KEY, "--ticket", self.ticket(labels=["planned"])),
+                     "already sealed")
+
+    def test_a_changed_ticket_warns_and_line_endings_do_not(self):
+        self.jira()
+        self.seal_jira()
+        changed = self.ticket("c.json", body="Something else.")
+        crlf = self.ticket("crlf.json", body=self.TICKET["body"].replace(chr(10), chr(13) + chr(10)) + chr(10))
+        for cmd in (("preflight",),):
+            with self.subTest(cmd):
+                out = self.ok(self.cli(*cmd, "widget", self.KEY, "--ticket", changed)).stdout
+                self.assertIn("ticket_hash differs", out)
+                same = self.ok(self.cli(*cmd, "widget", self.KEY, "--ticket", crlf)).stdout
+                self.assertNotIn("ticket_hash differs", same)
+        out = self.ok(self.cli("branch", "widget", self.KEY, "--ticket", changed)).stdout
+        self.assertIn("warning", out)
+
+    def test_a_merged_pr_on_the_key_refuses_preflight_and_branch(self):
+        self.jira()
+        self.seal_jira()
+        self.merged_pr("feat/PROJ-12-x")
+        for cmd in ("preflight", "branch"):
+            with self.subTest(cmd):
+                self.refused(self.cli(cmd, "widget", self.KEY, "--ticket", self.ticket()), "merged")
+        self.merged_pr("feat/PROJ-123-x", number=6)
+
+    def test_other_keys_merged_pr_does_not_refuse(self):
+        self.jira()
+        self.seal_jira()
+        self.merged_pr("feat/PROJ-123-x")
+        self.ok(self.cli("preflight", "widget", self.KEY, "--ticket", self.ticket()))
+
+    def branch_for(self, ticket_type):
+        self.jira()
+        self.seal_jira(type=ticket_type)
+        return self.ok(self.cli("branch", "widget", self.KEY, "--ticket", self.ticket(type=ticket_type))).stdout
+
+    def test_branch_of_a_bug_ticket(self):      # T4 -> AC4
+        self.assertIn(f"fix/{self.KEY}-frob-widgets", self.branch_for("Bug"))
+
+    def test_branch_of_a_story_ticket(self):
+        self.assertIn(f"feat/{self.KEY}-frob-widgets", self.branch_for("Story"))
 
 
 class GhHelperTest(GhCase):  # T10 -> AC10

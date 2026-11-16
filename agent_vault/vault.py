@@ -417,8 +417,53 @@ def add_planned_label(slug: str, issue: str) -> None:
     github.gh("issue", "edit", issue, "--repo", slug, "--add-label", name)
 
 
+def seal_plan_problems(path: Path, fm: dict, body: str, stamp: dict) -> None:
+    """Dies unless the plan, sealed with `stamp` (its issue_updated or ticket_hash) and a placeholder
+    base_sha, passes validation; and unless a `pr: none` plan names no file."""
+    if fm.get("pr") == lib.NO_PR:
+        paths = [f for f in plan_files(body) if f != "none"]
+        if paths:
+            die(f"{lib.rel(path)} declares pr: none, so no step may name a file; a step with nothing to edit "
+                "says 'Files: none' (describe vault and GitHub work in Do:). Named: " + ", ".join(paths))
+    trial = {**fm, "status": "sealed", **stamp, "base_sha": "0000000"}
+    errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
+    if errors:
+        die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
+
+
+def planned_label_step(ticket: dict, setup: dict) -> str:
+    """What the skill does after `seal plan` in a Jira setup (AC2 of #114): the CLI never calls Jira."""
+    label = setup["jira_planned_label"]
+    if label == "none":
+        return "this setup's jira_planned_label is none: add no label to the ticket"
+    return (f"add the label '{label}' to ticket {ticket['key']} through the {setup['jira_connector']} connector "
+            "(the CLI never changes a ticket)")
+
+
+def cmd_seal_plan_jira(args, slug: str) -> None:
+    ticket, setup = args.ticket_data, lib.read_setup()
+    if ticket["type"] == setup["jira_feature_type"]:
+        die(f"ticket {args.issue} is a {ticket['type']}, the setup's feature type; a feature is never planned, "
+            "only its stories are")
+    path, fm, body = load_plan(args.repo, args.issue)
+    label = setup["jira_planned_label"]
+    if fm.get("status") == "sealed":
+        if label != "none" and label not in ticket["labels"]:
+            print(f"the plan was already sealed; the ticket lacks its '{label}' label: " + planned_label_step(ticket, setup))
+            return
+        die(f"{lib.rel(path)} is already sealed")
+    digest = lib.ticket_hash(ticket)
+    seal_plan_problems(path, fm, body, {"ticket_hash": digest})
+    sha = github.head_sha(slug, github.default_branch(slug))[:7]
+    update_note(path, status="sealed", ticket_hash=digest, base_sha=sha)
+    log_event(args.repo, args.issue, "planned")
+    print(f"sealed {lib.rel(path)} (ticket_hash {digest[:12]}, base_sha {sha}); " + planned_label_step(ticket, setup))
+
+
 def cmd_seal_plan(args) -> None:
     slug = issue_context(args)
+    if args.ticket_data:
+        return cmd_seal_plan_jira(args, slug)
     info = github.issue_info(slug, args.issue)      # the one read: its `edited` is what the plan records (D6)
     if lib.FEATURE_LABEL[0] in info["labels"]:
         die(f"{args.repo}#{args.issue} is a feature (labelled '{lib.FEATURE_LABEL[0]}'); a feature is never "
@@ -431,15 +476,7 @@ def cmd_seal_plan(args) -> None:
         add_planned_label(slug, args.issue)     # `stage` reports this state as backlog and points here
         print(f"the plan was already sealed; added the '{name}' label to {slug}#{args.issue}")
         return
-    if fm.get("pr") == lib.NO_PR:
-        paths = [f for f in plan_files(body) if f != "none"]
-        if paths:
-            die(f"{lib.rel(path)} declares pr: none, so no step may name a file; a step with nothing to edit "
-                "says 'Files: none' (describe vault and GitHub work in Do:). Named: " + ", ".join(paths))
-    trial = {**fm, "status": "sealed", "issue_updated": "2000-01-01T00:00:00Z", "base_sha": "0000000"}
-    errors = lib.validate_file(path, text=lib.render_frontmatter(trial) + body.lstrip("\n")).errors
-    if errors:
-        die(f"{lib.rel(path)} can't be sealed yet:\n  " + "\n  ".join(errors))
+    seal_plan_problems(path, fm, body, {"issue_updated": "2000-01-01T00:00:00Z"})
     sha = github.head_sha(slug, github.default_branch(slug))[:7]
     update_note(path, status="sealed", issue_updated=info["edited"], base_sha=sha)
     log_event(args.repo, args.issue, "planned")
@@ -993,39 +1030,69 @@ def plan_files(body: str) -> list[str]:
     return sorted({f.replace("\\", "/").strip() for f in found if f.strip()})
 
 
-def check_preflight(repo: str, issue: str, slug: str) -> tuple[dict, list[str]]:
+def ticket_changed(repo: str, issue: str, ticket: dict | None) -> list[str]:
+    """A warning when a Jira ticket's hash differs from the sealed plan's `ticket_hash` (D2 of #114)."""
+    if not ticket:
+        return []
+    _, fm, _ = load_plan(repo, issue)
+    if fm.get("ticket_hash") and fm["ticket_hash"] != lib.ticket_hash(ticket):
+        return [f"ticket {issue}'s title or body changed since the plan was sealed (ticket_hash differs); "
+                "re-plan it (plan-story) if the change matters"]
+    return []
+
+
+def merged_pr_for(slug: str, issue: str) -> dict | None:
+    """A merged PR whose head branch carries the Jira key (D3 of #114), or None."""
+    setup = lib.read_setup()
+    for pr in github.merged_prs(slug):
+        if lib.branch_issue(setup, pr["headRefName"]) == issue:
+            return pr
+    return None
+
+
+def check_preflight(repo: str, issue: str, slug: str, ticket: dict | None = None) -> tuple[dict, list[str]]:
     """Dies unless the plan is sealed, the issue is open and its title and body are unchanged
-    since sealing. Returns (issue info, warnings)."""
+    since sealing. Returns (issue info, warnings). In a Jira setup `ticket` stands for the issue: a changed
+    ticket only warns, and the work counts as merged when a PR carrying the key has."""
     path, fm, body = load_plan(repo, issue)
     if fm.get("status") != "sealed":
         die(f"{lib.rel(path)} is not sealed; seal it with `seal plan {repo} {issue}`")
-    info = github.issue_info(slug, issue)
-    if info["state"] != "OPEN":
-        die(f"issue #{issue} is {info['state'].lower()}")
-    if info["edited"] > fm["issue_updated"]:
-        die(f"issue #{issue}'s title or body was edited at {info['edited']}, after the plan was "
-            f"sealed ({fm['issue_updated']}); re-plan it (plan-story) before implementing")
+    warnings = []
+    if ticket:
+        info = ticket
+        merged = merged_pr_for(slug, issue)
+        if merged:
+            die(f"ticket {issue}'s work has merged: PR #{merged['number']} ({merged['headRefName']}) is merged")
+        warnings += ticket_changed(repo, issue, ticket)
+    else:
+        info = github.issue_info(slug, issue)
+        if info["state"] != "OPEN":
+            die(f"issue #{issue} is {info['state'].lower()}")
+        if info["edited"] > fm["issue_updated"]:
+            die(f"issue #{issue}'s title or body was edited at {info['edited']}, after the plan was "
+                f"sealed ({fm['issue_updated']}); re-plan it (plan-story) before implementing")
     try:
         cmp = github.compare(slug, fm["base_sha"], github.default_branch(slug))
     except github.CmdError as e:
         if e.kind != "failed":
             raise
-        return info, [f"could not compare base_sha {fm['base_sha']} with the default branch: {e}"]
+        return info, warnings + [f"could not compare base_sha {fm['base_sha']} with the default branch: {e}"]
     named = plan_files(body)
     touched = sorted({f["filename"] for f in cmp.get("files", [])
                       if any(f["filename"] == n or f["filename"].endswith("/" + n) for n in named)})
     if not touched:
-        return info, []
-    return info, [f"{cmp.get('total_commits', '?')} commit(s) since base_sha {fm['base_sha']} "
+        return info, warnings
+    return info, warnings + [f"{cmp.get('total_commits', '?')} commit(s) since base_sha {fm['base_sha']} "
                   f"touch files the plan names: {', '.join(touched)}"]
 
 
 def cmd_preflight(args) -> None:
     slug = issue_context(args)
-    _, warnings = check_preflight(args.repo, args.issue, slug)
+    _, warnings = check_preflight(args.repo, args.issue, slug, args.ticket_data)
     for w in warnings:
         print(f"warning: {w}")
-    print(f"preflight OK: {args.repo}#{args.issue} has a sealed plan and the issue is unchanged")
+    print(f"preflight OK: {args.repo}#{args.issue} has a sealed plan and the "
+          f"{'ticket' if args.ticket_data else 'issue'} is unchanged")
 
 
 def require_clone(slug: str) -> Path:
@@ -1069,11 +1136,12 @@ def branch_type(requested, is_bug: bool, setup: dict | None = None) -> str:
 def cmd_branch(args) -> None:
     slug = issue_context(args)
     refuse_no_pr(args.repo, args.issue, "there is nothing to branch")
-    info, warnings = check_preflight(args.repo, args.issue, slug)
+    info, warnings = check_preflight(args.repo, args.issue, slug, args.ticket_data)
     for w in warnings:
         print(f"warning: {w}")
     setup = lib.read_setup()
-    btype = branch_type(args.type, lib.BUG_LABEL[0] in info["labels"], setup)
+    is_bug = info["type"] == setup["jira_bug_type"] if args.ticket_data else lib.BUG_LABEL[0] in info["labels"]
+    btype = branch_type(args.type, is_bug, setup)
     impl, _ = load_impl(args.repo, args.issue)
     top = require_clone(slug)
     name = lib.branch_name(setup, btype, args.issue, args.slug or default_slug(info['title']))
