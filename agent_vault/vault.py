@@ -40,6 +40,7 @@ CLAUDE.md (the installer's Python plus this file). Commands:
   repo-init <path>
   claudemd-lint [<repo path>]
   lint
+  check-branch <name>            (exit 1 unless the name follows the setup's branch pattern; the pre-push hook runs it)
   validate
   status
   schema
@@ -907,6 +908,19 @@ def cmd_claudemd_lint(args) -> None:
     if result.errors:
         sys.exit(1)
     print(f"claudemd-lint OK ({result.stale} stale section(s))" if result.stale else "claudemd-lint OK")
+
+
+def cmd_check_branch(args) -> None:
+    """Exit 1, naming the setup's branch pattern, unless the branch name follows it (D4 of #113). Runs without a
+    vault, then judging by the default setup, like `lint`."""
+    setup = lib.read_setup()
+    if not lib.branch_regex(setup).match(args.name):
+        shown = ", ".join(sorted({setup["branch_feature"], setup["branch_bug"]}))
+        issue = "a Jira ticket key like PROJ-12" if setup["tracker"] == "jira" else "an issue number"
+        die(f"branch '{args.name}' must follow the branch pattern {setup['branch']} "
+            f"({{type}} a branch type such as {shown}, {{issue}} {issue}, {{slug}} lowercase a-z0-9-), "
+            "e.g. " + lib.branch_name(setup, setup["branch_feature"],
+                                      "PROJ-12" if setup["tracker"] == "jira" else "12", "note-schema"))
 
 
 def cmd_lint(args) -> None:
@@ -2142,6 +2156,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_claudemd_lint)
     p = sub.add_parser("lint", help="claudemd-lint plus the repo's declared lint command (current clone)")
     p.set_defaults(fn=cmd_lint)
+    p = sub.add_parser("check-branch", help="exit 1 unless a branch name follows the setup's branch pattern")
+    p.add_argument("name")
+    p.set_defaults(fn=cmd_check_branch)
 
     idea = sub.add_parser("idea", help="add, drop or promote an idea").add_subparsers(
         dest="action", required=True, metavar="add|drop|promote")
@@ -2255,7 +2272,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     lib.setup_io()
-    if lib.VAULT is None and sys.argv[1:2] != ["lint"]:      # `lint` reads nothing from the vault
+    if lib.VAULT is None and sys.argv[1:2] not in (["lint"], ["check-branch"]):  # these need no vault
         die(f"no usable vault: {lib.CONFIG} is missing, or its vault path has no .obsidian folder; "
             "run install.py --vault <path>")
     args = build_parser().parse_args()

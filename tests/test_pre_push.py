@@ -6,7 +6,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from tests.helpers import REPO, tmpdir
+from tests.helpers import REPO, make_vault, run_py, tmpdir
 
 HOOK = REPO / "agent_vault" / "githooks" / "pre-push"
 Z = "0" * 40
@@ -63,6 +63,43 @@ class PrePushTest(unittest.TestCase):  # T4 -> AC5; T7, T8 -> AC7, AC8 (#33)
         for line, want in cases.items():
             with self.subTest(line=line):
                 self.assertEqual(self.run_hook(line).returncode, want)
+
+    def with_setup(self, *flags):
+        """A config whose vault holds a setup note made with `vault.py setup <flags>`."""
+        vault = make_vault(self.root)
+        cfg = self.write_config({"vault": vault.as_posix(), "python": PY, "managed_allow": []})
+        r = run_py(HOOK.parent.parent / "vault.py", ["setup", *flags], config=cfg)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return cfg
+
+    def push(self, name, cfg):
+        return self.run_hook(f"refs/heads/x abc refs/heads/{name} {Z}", config=cfg)
+
+    def test_default_names_are_unchanged(self):     # T5 -> AC4
+        for name, want in {"hotfix/12-x": 0, "feat/0-x": 0, "feat/PROJ-12-x": 1, "feat/12": 1, "Feat/12-x": 1}.items():
+            with self.subTest(name):
+                self.assertEqual(self.push(name, self.cfg).returncode, want)
+
+    def test_custom_pattern(self):     # T5 -> AC4
+        cfg = self.with_setup("--tracker", "github", "--branch", "{issue}/{type}-{slug}",
+                              "--branch-feature", "story", "--branch-bug", "bugfix")
+        self.assertEqual(self.push("12/story-x", cfg).returncode, 0)
+        self.assertEqual(self.push("12/hotfix-x", cfg).returncode, 0)
+        r = self.push("feat/12-x", cfg)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("{issue}/{type}-{slug}", r.stderr)
+
+    def test_jira_setup_takes_keys(self):     # T5 -> AC4
+        cfg = self.with_setup("--tracker", "jira", "--jira-feature-type", "Epic", "--jira-story-type", "Story",
+                              "--jira-bug-type", "Bug", "--jira-planned-label", "none", "--jira-connector", "atlassian")
+        self.assertEqual(self.push("feat/PROJ-12-x", cfg).returncode, 0)
+        self.assertEqual(self.push("feat/12-x", cfg).returncode, 1)
+
+    def test_main_is_refused_before_python_is_looked_up(self):     # T5 -> AC4
+        r = self.run_hook(f"refs/heads/x abc refs/heads/main {Z}", config=None)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("main", r.stderr)
+        self.assertNotIn("install.py", r.stderr)
 
     def test_failing_lint_refuses_a_valid_branch(self):
         bad = self.make_clone("git not-a-subcommand", "bad")
