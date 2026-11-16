@@ -10,12 +10,9 @@ interview, a draft checked by an independent reviewer, a plain-language
 summary, and sealing only on explicit approval. The reviewer's brief and
 findings format are in `plan-reviewer.md`, next to this file.
 
-Every `vault.py <command>` below means the exact CLI string embedded in any
-command shown in the current vault's `CLAUDE.md` (the `{{CLI}}` placeholder
-there is expanded to it at install time); it always ends in `vault.py`, so
-`vault.py new plan <repo> <issue>` means "run that string followed by
-`new plan <repo> <issue>`". `<repo>` is always the plain repo name (e.g.
-`agent-vault`), never `owner/name`.
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`. `<repo>` is always the plain repo
+name (e.g. `agent-vault`), never `owner/name`.
 
 ## Never
 
@@ -51,10 +48,8 @@ there is expanded to it at install time); it always ends in `vault.py`, so
 
 ## Resolve the repo and issue
 
-- Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
-  path; the exact `vault.py` invocation is embedded in any command shown in
-  `<vault>/CLAUDE.md`. A repo session's own startup context doesn't carry
-  either.
+- Vault: `~/.claude/agent-vault.json`'s `vault` field is the vault path. A repo
+  session's own startup context doesn't carry it.
 - Repo: `git config --get remote.origin.url` in the current clone gives a
   URL such as `git@github.com:owner/name.git` or `https://github.com/owner/name`;
   strip the host and any trailing `.git` to get `owner/name`. The part after
@@ -78,7 +73,7 @@ Before asking the user anything:
 4. Read the repo's `CLAUDE.md`.
 5. Read the project overview note in the vault (`Agent/Projects/<id>.md`) —
    the project whose `repos:` lists this repo's `owner/name`.
-6. Read the project's active decision records: `vault.py decisions
+6. Read the project's active decision records: `~/.claude/agent-vault/bin/vault decisions
    --project <id>` lists them (`<id>` as in step 5), then read the ones
    that bear on this issue in `Agent/Decisions/<id>/`. A plan must not
    contradict one unless a decision in it replaces that record.
@@ -107,7 +102,7 @@ until nothing that would change the plan is still ambiguous.
    path, so describe the vault and GitHub work in `Do:`. The plan is then
    implemented with no branch and no PR, and `seal retro` closes the issue.
    Leave the field out for an issue that ends in a PR.
-1. `vault.py new plan <repo> <issue>` scaffolds the draft plan and an open
+1. `~/.claude/agent-vault/bin/vault new plan <repo> <issue>` scaffolds the draft plan and an open
    impl note.
 2. Fill in the plan format: `Goal` · `Acceptance criteria` (`- AC<n>: …`) ·
    `Decisions` (`- D<n>: <decision>, because <reason>`; a decision that came
@@ -125,7 +120,7 @@ until nothing that would change the plan is still ambiguous.
    (`### <n>. <title>`, each with `Files:`, `Do:`, `Done when:`) · `Tests`
    (`- T<n> → AC<m>: …`, then a `Full check:` line) · `Stop and ask if` ·
    `Out of scope`.
-3. `vault.py validate` must pass with no errors or warnings before moving
+3. `~/.claude/agent-vault/bin/vault validate` must pass with no errors or warnings before moving
    on; fix the draft and re-run until it's clean. `validate` checks the
    whole vault, so a problem it reports outside this plan's own file is
    pre-existing — investigate rather than treating it as blocking this
@@ -158,14 +153,14 @@ the raw plan:
 
 ## Approval
 
-Run `vault.py seal plan <repo> <issue>` only after the user has answered
+Run `~/.claude/agent-vault/bin/vault seal plan <repo> <issue>` only after the user has answered
 the summary's closing question and explicitly approved it (ask with the
 approval prompt, after the open-ended closing question), and only after
 any approved issue-hygiene edits to the planned issue (see below) are posted — sealing records the issue's
 current edit time, so an edit made afterwards would make `preflight` reject
 the sealed plan later. For requested changes: edit the draft, running
 another plan review (see Plan review) if the change is substantial, re-run
-`vault.py validate`, summarise the change list, and ask again — never seal
+`~/.claude/agent-vault/bin/vault validate`, summarise the change list, and ask again — never seal
 against a draft the user hasn't approved.
 
 ## Issue hygiene
@@ -175,10 +170,10 @@ against a draft the user hasn't approved.
   planned: propose the exact wording to the user before doing anything.
 - Post GitHub edits only after the user approves that wording, asked with
   the approval prompt.
-- A new issue is created only through `vault.py issue create` with a
+- A new issue is created only through `~/.claude/agent-vault/bin/vault issue create` with a
   placement flag (`--parent`, `--standalone` or `--bug`), after the
   user approves its exact title and body, written in the template that
-  `vault.py schema` prints; the `issue` skill does this and decides the
+  `~/.claude/agent-vault/bin/vault schema` prints; the `issue` skill does this and decides the
   placement. Edits to existing
   issues stay as above.
 - Edits to the issue being planned happen before sealing, so the sealed
@@ -194,7 +189,7 @@ the push notification here, naming `implement #<issue>` as the next stage.
 
 ## Jira setup
 
-Run `vault.py tracker <repo>` first. If it prints `tracker: github`, ignore this
+Run `~/.claude/agent-vault/bin/vault tracker <repo>` first. If it prints `tracker: github`, ignore this
 section. If it prints `tracker: jira`, the issue is a Jira ticket and its
 identity is the ticket key (e.g. `PROJ-12`), and:
 
@@ -218,9 +213,9 @@ identity is the ticket key (e.g. `PROJ-12`), and:
   user's; agent-vault only ever adds the planned label (plan-story) or posts a
   closing comment (retro), through the connector.
 - A new ticket (Issue hygiene) is filed as the `issue` skill does in a Jira setup:
-  `vault.py issue create` with a placement flag (`--parent <KEY>`, `--standalone` or `--bug`)
+  `~/.claude/agent-vault/bin/vault issue create` with a placement flag (`--parent <KEY>`, `--standalone` or `--bug`)
   prints the fields; post exactly those, unchanged, through the connector, then run
-  `vault.py issue record <repo> <KEY> --pending <file>`. Never post anything that wasn't printed.
+  `~/.claude/agent-vault/bin/vault issue record <repo> <KEY> --pending <file>`. Never post anything that wasn't printed.
 
 ## Stop and ask if
 
@@ -233,6 +228,6 @@ identity is the ticket key (e.g. `PROJ-12`), and:
 - The user's answers still leave something ambiguous that would change the
   plan.
 - A GitHub edit is needed but the user hasn't approved its exact wording.
-- `vault.py new plan` refuses: a plan or impl note for the issue already
+- `~/.claude/agent-vault/bin/vault new plan` refuses: a plan or impl note for the issue already
   exists (a draft from an earlier session, or an already-sealed plan), or
   `<repo>` isn't listed in any vault project's `repos:`.

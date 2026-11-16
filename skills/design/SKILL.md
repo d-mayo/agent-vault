@@ -14,10 +14,8 @@ and findings format are in `design-reviewer.md`, next to this file.
 By convention a design session runs on Opus: design is judgment work. The
 reviewer is a separate subagent on Opus, whatever model this session runs on.
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
-`vault.py`, so `vault.py new design <project> "<title>"` means "run that
-string followed by `new design <project> "<title>"`". `<repo>` is always the
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`. `<repo>` is always the
 plain repo name (e.g. `agent-vault`), never `owner/name`; `<design>` is the
 design's file name without `.md`.
 
@@ -27,7 +25,7 @@ design's file name without `.md`.
   normal pipeline afterwards.
 - Never edit a sealed design. A change is a later design that extends or
   replaces it (`extends:` or `replaces:` in its frontmatter).
-- Never write a decision record by hand: `vault.py seal design` creates them
+- Never write a decision record by hand: `~/.claude/agent-vault/bin/vault seal design` creates them
   from the design's `### D<n>` entries.
 - Never seal before the user has approved the summary, and never create an
   issue before the user has approved its exact title and body.
@@ -59,11 +57,10 @@ design's file name without `.md`.
   one short sentence: the facts the user most needs to know, with nothing after
   them.
 
-## Resolve the vault, CLI and project
+## Resolve the vault and project
 
-- Vault and CLI: `~/.claude/agent-vault.json`'s `vault` field is the vault
-  path; the exact `vault.py` invocation is the line under "CLI after
-  install" in `<vault>/CLAUDE.md`.
+- Vault: `~/.claude/agent-vault.json`'s `vault` field is the vault path. A repo
+  session's own startup context doesn't carry it.
 - Project: the one the user names, or the project whose `repos:` lists the
   current clone's `origin`. A brand-new project has no note yet: its id is a
   lowercase-kebab-case name you agree with the user, and the note is created
@@ -79,11 +76,11 @@ Before asking the user anything:
 
 1. Read the project overview (`Agent/Projects/<id>.md`), if the project
    exists.
-2. Read the project's active decision records: `vault.py decisions
+2. Read the project's active decision records: `~/.claude/agent-vault/bin/vault decisions
    --project <id>` lists them; read the ones that bear on the idea. A design
    must not contradict one unless a decision in it says `Replaces:` that
    record.
-3. Read the open ideas (`vault.py ideas --project <id>`, and the ones with
+3. Read the open ideas (`~/.claude/agent-vault/bin/vault ideas --project <id>`, and the ones with
    no project), and the ones the user names; these are what the design may
    absorb.
 4. Read the repo's open issues (`gh issue list --state open --limit 200`)
@@ -127,7 +124,7 @@ Every design is held to these rules:
 
 ## Draft
 
-1. `vault.py new design <project> "<title>"` scaffolds the draft (it is
+1. `~/.claude/agent-vault/bin/vault new design <project> "<title>"` scaffolds the draft (it is
    fine for the project not to exist yet). Fill in, in order: `Problem` ·
    `Goals` · `Non-goals` · `Ideas` (`- [[<idea>]]` for each idea the design
    absorbs, or `None`) · `Options considered` · `Chosen design` ·
@@ -140,7 +137,7 @@ Every design is held to these rules:
    as `S1, S2`) and, in a project with several repos, `Repo: <name>`. Each
    story must be buildable and shippable on its own once its dependencies
    are done.
-4. `vault.py validate` checks the draft; format problems show as warnings on
+4. `~/.claude/agent-vault/bin/vault validate` checks the draft; format problems show as warnings on
    a draft and become errors once sealed, so clear every warning about the
    draft before review.
 
@@ -176,14 +173,14 @@ design:
 
 1. Seal only after the user has answered the closing question and explicitly
    approved, asked with the approval prompt. For requested changes: edit the draft, run another review if
-   the change is substantial, re-run `vault.py validate`, summarise the
+   the change is substantial, re-run `~/.claude/agent-vault/bin/vault validate`, summarise the
    change, and ask again.
 2. For a new project, create its note now, after approval and before
-   sealing: `vault.py new project <id> --repo <owner/name> --purpose "..."`
+   sealing: `~/.claude/agent-vault/bin/vault new project <id> --repo <owner/name> --purpose "..."`
    (leave `--repo` out when no repo exists yet; the project then has none
    and its stories wait). A project must exist before its design can be
    sealed.
-3. `vault.py seal design <design>` refuses, changing nothing, if anything is
+3. `~/.claude/agent-vault/bin/vault seal design <design>` refuses, changing nothing, if anything is
    wrong, and names each problem. Fix the draft and run it again. When it
    succeeds, the design is sealed, every decision has its record, each
    listed idea is promoted to the design and the project overview's
@@ -203,7 +200,7 @@ design:
    names. A project with no repo yet files neither the feature nor its
    stories: say so. Show the user the title and body exactly as they will be
    posted and, after they approve that wording, write the body to a temporary
-   file outside the clone and the vault and run `vault.py issue create <repo>
+   file outside the clone and the vault and run `~/.claude/agent-vault/bin/vault issue create <repo>
    --title "<title>" --body-file <file> --feature <design>`. It attaches the
    stories already filed that have no parent; if it exits non-zero, some
    attach failed: it printed the `gh issue edit` command for each, so run
@@ -221,13 +218,13 @@ design:
    story of a project with no repo yet waits: say so, and don't file it.
 4. Show the user every title and body, exactly as they will be posted, and
    file each only after they approve that wording (the approval prompt). Write each body to a
-   temporary file outside the clone and the vault, then run `vault.py issue
+   temporary file outside the clone and the vault, then run `~/.claude/agent-vault/bin/vault issue
    create <repo> --title "<title>" --body-file <file> --parent <n>`, where
    `<n>` is the feature's number; for a story whose repo isn't the feature's,
    `--parent <feature repo>#<n>`. Never run `gh issue create`. If the CLI
    refuses a body, fix what it names, show the user the changed wording and
    ask the approval prompt again.
-5. Finish with `vault.py design stories <design>`: it should show the feature
+5. Finish with `~/.claude/agent-vault/bin/vault design stories <design>`: it should show the feature
    and every story filed under it. Report any story still "not filed" and why
    (a new project with no repo yet, or one the user chose to hold back), and
    any story marked as not under the feature. Then send the push notification:
@@ -237,7 +234,7 @@ design:
 ## Filing later
 
 Asked to file a sealed design's stories later ("file the stories of
-<design>"): run `vault.py design stories <design>`. When it says `no feature
+<design>"): run `~/.claude/agent-vault/bin/vault design stories <design>`. When it says `no feature
 yet`, create the feature first, exactly as in File the stories step 1, even
 when every story is already filed (it attaches them). Then, for each story it
 shows as "not filed", draft, show, get approval for and create the issue
@@ -248,15 +245,15 @@ notification, naming a story to plan next (or which stories wait and why).
 
 ## Jira setup
 
-Run `vault.py tracker <repo>` first. If it prints `tracker: jira`, File the stories
+Run `~/.claude/agent-vault/bin/vault tracker <repo>` first. If it prints `tracker: jira`, File the stories
 changes only in how an issue is posted: the CLI posts nothing, it hands you the fields.
 
-- File the feature first: run `vault.py issue create <repo> --title "<title>"
+- File the feature first: run `~/.claude/agent-vault/bin/vault issue create <repo> --title "<title>"
   --body-file <file> --feature <design>`, post exactly the printed fields, unchanged,
-  through the connector `vault.py tracker` names, then run `vault.py issue record <repo> <KEY>
+  through the connector `~/.claude/agent-vault/bin/vault tracker` names, then run `~/.claude/agent-vault/bin/vault issue record <repo> <KEY>
   --pending <file>` with the key the connector returned.
-- Then each story: `vault.py issue create` with `--parent <feature key>`, post the printed
-  fields unchanged, and `vault.py issue record` it. A story can't be filed before its feature
+- Then each story: `~/.claude/agent-vault/bin/vault issue create` with `--parent <feature key>`, post the printed
+  fields unchanged, and `~/.claude/agent-vault/bin/vault issue record` it. A story can't be filed before its feature
   is recorded; `design stories` shows the keys.
 - Never post anything that wasn't printed, and never change a ticket's status.
 
@@ -268,7 +265,7 @@ changes only in how an issue is posted: the CLI posts nothing, it hands you the 
   this session's own model.
 - The user's answers still leave something ambiguous that would change the
   design.
-- `vault.py seal design` refuses for a reason you can't fix in the draft
+- `~/.claude/agent-vault/bin/vault seal design` refuses for a reason you can't fix in the draft
   (for example, a record it would replace is no longer active).
 - A rigor rule can't be met for a choice without inventing options the user
   didn't ask for.

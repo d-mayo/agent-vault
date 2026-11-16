@@ -1,6 +1,6 @@
 ---
 name: setup
-description: 'Record how stories and PRs work in this vault (tracker, merge style, approvals, who owns repo settings, branch names and, for Jira, the connector, issue types and planned label) by interviewing the user and writing Agent/Setup.md through vault.py setup once they say yes. Use for requests like "set up this vault", "run the setup", "change the vault setup", or "switch this vault to Jira".'
+description: 'Record how stories and PRs work in this vault (tracker, merge style, approvals, who owns repo settings, branch names and, for Jira, the connector, issue types and planned label) by interviewing the user and writing Agent/Setup.md through ~/.claude/agent-vault/bin/vault setup once they say yes. Use for requests like "set up this vault", "run the setup", "change the vault setup", or "switch this vault to Jira".'
 ---
 
 # setup
@@ -12,10 +12,8 @@ repo settings managed by `repo-init`, branches `{type}/{issue}-{slug}`).
 The setup's tracker decides how issues are read and filed. Run this once
 after `install.py` on a new vault, or whenever the way of working changes.
 
-Every `vault.py <command>` below means the exact CLI string in the current
-vault's `CLAUDE.md` (the line under "CLI after install"); it always ends in
-`vault.py`, so `vault.py schema` means "run that string followed by
-`schema`".
+The CLI is `~/.claude/agent-vault/bin/vault`; every command below is written in full, as
+`~/.claude/agent-vault/bin/vault <command>`.
 
 This is not a pipeline skill: it is a one-time interview, not a stage of a
 story, so it sends no push notification and uses no approval prompt. It still
@@ -24,7 +22,7 @@ writes nothing until the user has said an explicit yes to the exact values.
 ## Never
 
 - Never edit `Agent/Setup.md` with the edit tools (the guard blocks it);
-  only `vault.py setup` writes it, because it checks the whole setup first.
+  only `~/.claude/agent-vault/bin/vault setup` writes it, because it checks the whole setup first.
 - Never pass `--replace` before you have shown the user what changes.
 - Never put a path, a machine name or anything else that differs between the
   user's machines into a value: the note is shared by every machine on the
@@ -33,7 +31,7 @@ writes nothing until the user has said an explicit yes to the exact values.
 
 ## 1. Read what is there
 
-- Run `vault.py schema` and read its "Setup note" lines: the fields, their
+- Run `~/.claude/agent-vault/bin/vault schema` and read its "Setup note" lines: the fields, their
   allowed values and defaults, and the branch-pattern rules.
 - Read `Agent/Setup.md` if it exists. If it does, this run changes an
   existing setup: keep its values as the starting point of every question.
@@ -76,7 +74,7 @@ Ask a follow-up wherever an answer is unclear; don't guess.
 
 ## 3. Show the exact values, then write
 
-- Show the exact command you will run, `vault.py setup --tracker github|jira`
+- Show the exact command you will run, `~/.claude/agent-vault/bin/vault setup --tracker github|jira`
   with every flag the answers set, and the full list of values the note will
   hold (every field, defaults included).
 - If a setup note exists, show only what changes, each as old value → new
@@ -84,14 +82,14 @@ Ask a follow-up wherever an answer is unclear; don't guess.
 - Ask the user, in prose, whether to write it. Run the command only on an
   explicit yes; on anything else, take up what they want changed and show
   the values again.
-- Run it: `vault.py setup --tracker <tracker> --merge <style> --approvals <a> --repo-settings <r> --branch <pattern> --branch-feature <word> --branch-bug <word>`,
+- Run it: `~/.claude/agent-vault/bin/vault setup --tracker <tracker> --merge <style> --approvals <a> --repo-settings <r> --branch <pattern> --branch-feature <word> --branch-bug <word>`,
   plus, for Jira, `--jira-feature-type <type> --jira-story-type <type> --jira-bug-type <type> --jira-planned-label <label> --jira-connector <name>`,
   and `--replace` when a note exists. Quote the branch pattern for the shell.
 - If the command refuses, it has written nothing: tell the user what it
   said, settle the value with them, and show the values again.
 - In a Jira setup, tell the user to add `jira_project: <KEY>` to each
-  project note with repos (the keys from step 2); `vault.py validate` warns
+  project note with repos (the keys from step 2); `~/.claude/agent-vault/bin/vault validate` warns
   for any project still without one. A GitHub setup refuses while any
   project has `jira_project`, so in a switch back to GitHub those lines
   come out first.
-- Finish with `vault.py validate` and report what it shows.
+- Finish with `~/.claude/agent-vault/bin/vault validate` and report what it shows.

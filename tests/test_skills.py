@@ -1,5 +1,5 @@
 """Checks on skills/ (design §3): frontmatter, install, and that every
-`vault.py` command and option a skill names actually exists in the CLI
+`~/.claude/agent-vault/bin/vault` command and option a skill names actually exists in the CLI
 parser (AC10/AC11 of #8, AC1/AC11 of #7)."""
 from __future__ import annotations
 
@@ -57,15 +57,20 @@ def frontmatter(text: str) -> dict:
     return data
 
 
-def vault_calls(text: str) -> list[str]:
-    """The part after 'vault.py' in every code span that mentions it."""
+LAUNCHER = "~/.claude/agent-vault/bin/vault"
+
+
+def vault_calls(text: str, names: tuple = (LAUNCHER,)) -> list[str]:
+    """The part after the CLI name in every code span that mentions it (the launcher; the reviewer
+    files, which never run the CLI, still say `vault.py`)."""
     out = []
     for span in CODE_SPAN_RE.findall(text):
-        if "vault.py" not in span:
-            continue
-        after = span.split("vault.py", 1)[1].strip()
-        if after:
-            out.append(after)
+        for name in names:
+            if name in span:
+                after = span.split(name, 1)[1].strip()
+                if after:
+                    out.append(after)
+                break
     return out
 
 
@@ -93,20 +98,20 @@ def is_placeholder(tok: str) -> bool:
 
 
 def check_call(top: argparse.ArgumentParser, call: str) -> list[str]:
-    """Problems with one 'vault.py <call>' mention, or [] if it's fine."""
+    """Problems with one CLI '<call>' mention, or [] if it's fine."""
     tokens = shlex.split(call.replace("[", "").replace("]", ""))
     if not tokens or is_placeholder(tokens[0]):
-        return []          # a generic illustration, e.g. "vault.py <command>"
+        return []          # a generic illustration, e.g. "<CLI> <command>"
     parser, path, rest = resolve(top, tokens)
     if not path:
-        return [f"'{tokens[0]}' is not a vault.py command"]
+        return [f"'{tokens[0]}' is not a CLI command"]
     problems = []
     opts = set(parser._option_string_actions)
     for tok in rest:
         if tok.startswith("--"):
             name = tok.split("=", 1)[0]
             if name not in opts:
-                problems.append(f"`{name}` is not accepted by `vault.py {' '.join(path)}`")
+                problems.append(f"`{name}` is not accepted by the CLI's `{' '.join(path)}`")
     return problems
 
 
@@ -143,17 +148,25 @@ class VaultCommandsTest(unittest.TestCase):  # T2 -> AC10 (#8), AC11 (#7)
         problems, calls = [], []
         for skill, (_pattern, ref) in SKILLS.items():
             for name in ("SKILL.md", *([ref] if ref else [])):
-                found = vault_calls(read(skill, name))
+                found = vault_calls(read(skill, name), (LAUNCHER, "vault.py") if name != "SKILL.md" else (LAUNCHER,))
                 calls += found
                 problems += [f"{skill}/{name}: {p}" for p in (p for call in found for p in check_call(top, call))]
         self.assertGreaterEqual(len(calls), 3,
-                                 "expected several 'vault.py ...' mentions to check; found none — "
+                                 "expected several launcher mentions to check; found none — "
                                  "did the extraction regex break, or did the skills stop naming any?")
         self.assertEqual(problems, [])
         for skill, (_pattern, ref) in SKILLS.items():
             with self.subTest(skill=skill):
-                found = sum(len(vault_calls(read(skill, name))) for name in ("SKILL.md", *([ref] if ref else [])))
-                self.assertGreaterEqual(found, 1, f"{skill}: expected at least one 'vault.py ...' mention")
+                found = len(vault_calls(read(skill, "SKILL.md")))
+                self.assertGreaterEqual(found, 1, f"{skill}: expected at least one launcher mention")
+
+    def test_no_skill_names_vault_py_or_the_old_install_note(self):  # T5 -> AC5
+        for skill in SKILLS:
+            text = read(skill, "SKILL.md")
+            with self.subTest(skill=skill):
+                self.assertNotIn("vault.py", text)
+                self.assertNotIn("CLI after install", text)
+                self.assertNotIn("always ends in", text)
 
 
 class AssertMentionsMixin:
@@ -171,8 +184,8 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
         self.reviewer = read("implement-story", "reviewer.md")
 
     def test_start_resolves_repo_issue_and_gates_on_preflight(self):  # AC2
-        self.assertMentions("vault.py preflight", "git config --get remote.origin.url",
-                             "vault.py branch")
+        self.assertMentions("~/.claude/agent-vault/bin/vault preflight", "git config --get remote.origin.url",
+                             "~/.claude/agent-vault/bin/vault branch")
 
     def test_per_step_commits_without_review(self):  # AC1
         self.assertMentions("(#<issue>)", "one commit per step", "run the tests relevant to this step",
@@ -240,16 +253,16 @@ class ImplementStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3
 
     def test_finish_runs_full_check_final_review_and_opens_pr(self):  # AC6
         self.assertMentions("full check", "whole diff", "## verification",
-                             "## discoveries", "vault.py open-pr")
+                             "## discoveries", "~/.claude/agent-vault/bin/vault open-pr")
 
     def test_lint_runs_with_full_check_before_every_review(self):  # T6 -> AC6 (#33)
         text = re.sub(r"\s+", " ", self.skill)
         finish = text[text.index("## Finish"):text.index("## Address PR review")]
         pr_review = text[text.index("## Address PR review"):text.rindex("## Stop and ask if")]
-        self.assertGreaterEqual(finish.count("`vault.py lint`"), 2)    # first review and each re-review
-        self.assertLess(finish.index("`vault.py lint`"), finish.index("Start the plan's"))
+        self.assertGreaterEqual(finish.count("`~/.claude/agent-vault/bin/vault lint`"), 2)    # first review and each re-review
+        self.assertLess(finish.index("`~/.claude/agent-vault/bin/vault lint`"), finish.index("Start the plan's"))
         self.assertIn("Request no review while it fails", finish)
-        self.assertLess(pr_review.index("`vault.py lint`"), pr_review.index("at the same time"))
+        self.assertLess(pr_review.index("`~/.claude/agent-vault/bin/vault lint`"), pr_review.index("at the same time"))
 
     def test_address_pr_review(self):  # AC7
         self.assertMentions("address pr review", "pr review:", "gh pr view", "--paginate",
@@ -307,7 +320,7 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
             self.assertNotIn(gone, re.sub(r"\s+", " ", self.skill.lower()))
 
     def test_draft_validated_with_user_decisions(self):  # AC4
-        self.assertMentions("vault.py new plan", "vault.py validate",
+        self.assertMentions("~/.claude/agent-vault/bin/vault new plan", "~/.claude/agent-vault/bin/vault validate",
                              "no errors or warnings", "(user decision)")
 
     def test_plan_reviewer_runs_on_opus_with_own_prompt_and_fixed_format(self):  # AC5
@@ -333,7 +346,7 @@ class PlanStoryProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T3 -> A
         self.assertMentions("answered the summary's closing question", "explicitly approved it")
 
     def test_approval_seals_only_after_explicit_approval(self):  # AC7
-        self.assertMentions("## approval", "vault.py seal plan", "explicit approval",
+        self.assertMentions("## approval", "~/.claude/agent-vault/bin/vault seal plan", "explicit approval",
                              "change list")
 
     def test_issue_hygiene_approved_before_posting(self):  # AC8
@@ -366,7 +379,7 @@ class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-A
                             "each finding is named on exactly one line")
 
     def test_audit_runs_lint_new_retro_and_reads_context(self):  # AC2
-        self.assertMentions("vault.py claudemd-lint", "vault.py new retro", "resume",
+        self.assertMentions("~/.claude/agent-vault/bin/vault claudemd-lint", "~/.claude/agent-vault/bin/vault new retro", "resume",
                              "gh pr diff", "the issue", "the sealed plan", "the impl note")
 
     def test_audits_all_three_docs_with_one_line_each(self):  # AC2, AC6
@@ -379,18 +392,18 @@ class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-A
 
     def test_follow_ups_sorted_with_approval(self):  # AC4
         self.assertMentions("issue #<n> created", "issue #<n> amended", "idea [[<idea>]]",
-                             "dropped:", "approve", "vault.py idea add", "vault.py idea drop",
-                             "vault.py ideas --project")
+                             "dropped:", "approve", "~/.claude/agent-vault/bin/vault idea add", "~/.claude/agent-vault/bin/vault idea drop",
+                             "~/.claude/agent-vault/bin/vault ideas --project")
 
     def test_seal_after_validate_and_summary_approval(self):  # AC5
-        self.assertMentions("vault.py validate", "plain-language summary", "vault.py seal retro")
+        self.assertMentions("~/.claude/agent-vault/bin/vault validate", "plain-language summary", "~/.claude/agent-vault/bin/vault seal retro")
 
     def test_merging_is_vault_py_merges_alone_and_nothing_else_pushes_main_edits_sealed_or_installs(self):  # T10 -> AC11 (#111)
         text = " ".join(self.skill.lower().split())
         self.assertNotIn("never merge a pr", text)
         never = " ".join(re.search(r"^## Never\n(.*?)^## ", self.skill, re.S | re.M).group(1).lower().split())
         self.assertIn("`seal retro` never merges", never)
-        self.assertIn("merging is `vault.py merge`'s job alone", never)
+        self.assertIn("merging is `~/.claude/agent-vault/bin/vault merge`'s job alone", never)
         self.assertIn("never `gh pr merge`", never)
         self.assertIn("github's merge button", never)
         self.assertMentions("never push to `main`", "never edit a sealed", "never run `install.py`")
@@ -406,14 +419,14 @@ class RetroProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T6 -> AC1-A
         self.assertIn("readies the pr", desc)
         intro = " ".join(self.skill.split("## Never")[0].lower().split())
         self.assertIn("never merges", intro)
-        self.assertIn("`vault.py merge`'s job", intro)
+        self.assertIn("`~/.claude/agent-vault/bin/vault merge`'s job", intro)
 
     def test_seal_readies_then_runs_merge_or_stops_by_approvals(self):  # T10 -> AC11 (#111)
         seal = " ".join(re.search(r"^## Seal\n(.*?)^## ", self.skill, re.S | re.M).group(1).lower().split())
         for needle in ("names the pr to merge afterwards and any feature the merge closes",
                        "where the setup needs no approvals", "approving the summary approves that merge",
                        "seals the retro and merges nothing", "stays open until the merge",
-                       "prints the next step", "run vault.py merge", "run the merge skill straight away",
+                       "prints the next step", "run ~/.claude/agent-vault/bin/vault merge", "run the merge skill straight away",
                        "collect the approvals, then run", "stop at ready", "runs `merge #<issue>`"):
             self.assertIn(needle, seal)
         backfill = " ".join(re.search(r"^## Backfill[^\n]*\n(.*?)^## ", self.skill, re.S | re.M)
@@ -447,7 +460,7 @@ class MergeSkillTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC10 (#1
         desc = frontmatter(self.skill)["description"].lower()
         for trigger in ('"merge #9"', '"merge issue 9"', '"merge agent-vault#9"'):
             self.assertIn(trigger, desc)
-        self.assertIn("vault.py merge", desc)
+        self.assertIn("~/.claude/agent-vault/bin/vault merge", desc)
 
     def test_is_a_pipeline_skill_with_the_shared_section_after_never(self):
         self.assertIn("merge", PIPELINE_SKILLS)
@@ -455,14 +468,14 @@ class MergeSkillTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC10 (#1
         self.assertEqual(headings[headings.index("Never") + 1], "Approvals, pings and the closing summary")
 
     def test_resolves_and_checks_the_feature(self):
-        self.assertMentions("git config --get remote.origin.url", "`vault.py closes-feature <repo> <issue>`",
+        self.assertMentions("git config --get remote.origin.url", "`~/.claude/agent-vault/bin/vault closes-feature <repo> <issue>`",
                             "whether the merge will also close", "the highest `<repo>-<issue>-retro-<n>.md`",
                             "a plan with `pr: none`", "stop and say so")
 
     def test_follow_up_retro_when_the_head_moved(self):
         self.assertMentions("the pr's head (`gh pr view <pr> --json headrefoid`)", "moved past it",
                             "follow-up retro with the retro skill", "just the commits since that commit",
-                            "`vault.py new retro <repo> <issue>`",
+                            "`~/.claude/agent-vault/bin/vault new retro <repo> <issue>`",
                             "with `approvals: required`, stop", "collect approvals again",
                             "with `approvals: none` carry on")
 
@@ -470,7 +483,7 @@ class MergeSkillTest(AssertMentionsMixin, unittest.TestCase):  # T10 -> AC10 (#1
         self.assertMentions("run straight after an approved retro", "ask nothing more",
                             "run on its own, show a short summary", "the readied commit", "the merge style",
                             "the feature the merge closes", "ask the approval prompt", "only `yes` continues")
-        self.assertMentions("`vault.py merge <repo> <issue>`", "never `gh pr merge`", "never github's merge button")
+        self.assertMentions("`~/.claude/agent-vault/bin/vault merge <repo> <issue>`", "never `gh pr merge`", "never github's merge button")
 
     def test_never_updates_the_branch_and_pings_once_merged(self):
         self.assertMentions("never update the pr's branch yourself", "`gh pr update-branch`",
@@ -494,8 +507,8 @@ class SealRetroMergeDocsTest(unittest.TestCase):  # T7 -> AC7 (#51), T12 -> AC14
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         section = self.squashed(re.search(r"^## Git conventions\n(.*?)^## ", readme, re.S | re.M).group(1))
         self.assertIn("only the owner merges", section)
-        self.assertIn("the one exception is `vault.py merge` (the `merge` skill), which merges the pr itself", section)
-        self.assertIn("`vault.py seal retro` only readies the pr", section)
+        self.assertIn("the one exception is `~/.claude/agent-vault/bin/vault merge` (the `merge` skill), which merges the pr itself", section)
+        self.assertIn("`~/.claude/agent-vault/bin/vault seal retro` only readies the pr", section)
         self.assertNotIn("squash-merges the pr itself", section)
         self.assertIn("follow-up retro", section)
 
@@ -528,7 +541,7 @@ class SealRetroMergeDocsTest(unittest.TestCase):  # T7 -> AC7 (#51), T12 -> AC14
             text = (REPO / path).read_text(encoding="utf-8")
             self.assertIn("vault.py merge", text, path)
             self.assertNotIn("`seal retro` (after a merge)", text, path)
-        self.assertIn("vault.py merge", (REPO / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("~/.claude/agent-vault/bin/vault merge", (REPO / "README.md").read_text(encoding="utf-8"))
 
 
 class ClosesFeatureDocsTest(unittest.TestCase):  # T7 -> AC4, AC5 (#59)
@@ -538,7 +551,7 @@ class ClosesFeatureDocsTest(unittest.TestCase):  # T7 -> AC4, AC5 (#59)
     def test_retro_skill_runs_the_check_and_names_the_feature(self):
         text = (SKILLS_DIR / "retro" / "SKILL.md").read_text(encoding="utf-8")
         seal = self.squashed(re.search(r"^## Seal\n(.*?)^## ", text, re.S | re.M).group(1))
-        self.assertIn("vault.py closes-feature <repo> <issue>", seal)
+        self.assertIn("~/.claude/agent-vault/bin/vault closes-feature <repo> <issue>", seal)
         self.assertIn("summary names it too", seal)
         stop = self.squashed(text.split("## Stop and ask if")[1])
         self.assertIn("feature-close warning", stop)
@@ -560,12 +573,12 @@ class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> 
         self.assertIn("turn this idea into an issue", desc)
 
     def test_drafts_asks_shows_and_creates_only_after_approval(self):  # AC5
-        self.assertMentions("vault.py schema", "open-ended questions in prose", "never multiple choice",
+        self.assertMentions("~/.claude/agent-vault/bin/vault schema", "open-ended questions in prose", "never multiple choice",
                             "the exact title and the exact body", "explicit approval",
-                             "vault.py issue create", "--idea", "## stop and ask if")
+                             "~/.claude/agent-vault/bin/vault issue create", "--idea", "## stop and ask if")
 
     def test_places_the_issue_before_drafting(self):  # T4 -> AC4 (#57)
-        self.assertMentions("vault.py features --project <id>", "gh issue list", "whether it is a bug",
+        self.assertMentions("~/.claude/agent-vault/bin/vault features --project <id>", "gh issue list", "whether it is a bug",
                             "--standalone", "--bug", "--parent", "name the placement",
                             "design skill", "never filed here")
 
@@ -574,7 +587,7 @@ class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> 
 
     def test_retro_and_plan_story_place_follow_ups(self):  # T5 -> AC5 (#57)
         self.assertMentions("the retro'd issue's feature", "clearly continues", "`--bug`",
-                            "vault.py features --project <id>", "`--standalone`", "another project's repo",
+                            "~/.claude/agent-vault/bin/vault features --project <id>", "`--standalone`", "another project's repo",
                             "<placement>", text=read("retro", "SKILL.md"))
         self.assertMentions("the `issue` skill does this and decides the placement",
                             text=read("plan-story", "SKILL.md"))
@@ -584,7 +597,7 @@ class IssueProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T9, T10 -> 
             text = read(name, "SKILL.md")
             with self.subTest(skill=name):
                 self.assertNotIn("gh issue create", text)
-                self.assertMentions("vault.py issue create", "exact title and body", text=text)
+                self.assertMentions("~/.claude/agent-vault/bin/vault issue create", "exact title and body", text=text)
 
 
 class RetroFollowFormatTest(unittest.TestCase):  # T6 -> AC4 (schema fidelity) (#9)
@@ -634,7 +647,7 @@ class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T
         return re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.S | re.M).group(1)
 
     def test_plan_story_reads_active_records_in_research(self):          # AC9
-        self.assertMentions("`vault.py decisions --project <id>`", "active decision records",
+        self.assertMentions("`~/.claude/agent-vault/bin/vault decisions --project <id>`", "active decision records",
                             "must not contradict one unless a decision in it replaces that record",
                             text=self.section(self.plan_story, "Research"))
 
@@ -657,7 +670,7 @@ class DecisionRecordsProcedureTest(AssertMentionsMixin, unittest.TestCase):  # T
         self.assertIn("active decision record that the draft doesn't name as replaced", major)
 
     def test_retro_records_decisions_before_sealing(self):               # AC10
-        self.assertMentions("vault.py decision add", "--replaces", "`- decision [[<record>]]`",
+        self.assertMentions("~/.claude/agent-vault/bin/vault decision add", "--replaces", "`- decision [[<record>]]`",
                             "ending in \" (lasting)\"", "`seal retro` refuses until every lasting plan decision",
                             "--source \"plan <repo>#<issue> D<k>\"", "--source \"retro <repo>#<issue>\"",
                             text=self.retro)
@@ -701,7 +714,7 @@ class DesignSkillTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC10-AC1
     def test_review_summary_and_sealing(self):                        # AC12
         self.assertMentions("independent reviewer subagent on opus", "never silently fall back",
                             "one pointed question", "create its note now, after approval and before sealing",
-                            "vault.py seal design", "vault.py new project")
+                            "~/.claude/agent-vault/bin/vault seal design", "~/.claude/agent-vault/bin/vault new project")
         self.assertMentions("`model: \"opus\"`", "never the drafting session's own model", text=self.reviewer)
         self.assertMentions("goal that no story delivers", "can't be built or shipped alone",
                             "active decision record", "open question, risk or unknown written up as a decision",
@@ -709,7 +722,7 @@ class DesignSkillTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC10-AC1
 
     def test_filing_the_stories(self):                                # AC13
         self.assertMentions("[[<design>]] s<n>", "under source", "depends on: s<n>", "exactly as they will be posted",
-                            "vault.py issue create", "never run `gh issue create`", "vault.py design stories",
+                            "~/.claude/agent-vault/bin/vault issue create", "never run `gh issue create`", "~/.claude/agent-vault/bin/vault design stories",
                             "not filed", "a project with no repo yet waits", "filing later", "file the stories of")
 
     def test_feature_before_stories(self):                            # T11 -> AC10 (#56)
@@ -828,7 +841,7 @@ class StepsOnlyRouteTest(AssertMentionsMixin, unittest.TestCase):  # T1 -> AC12 
 
     def test_section_content(self):
         self.assertMentions("Where **Start** or **Resume** would go on to **Finish**",
-                            "return the question as your final report", "`vault.py lint`",
+                            "return the question as your final report", "`~/.claude/agent-vault/bin/vault lint`",
                             "no review, open no PR", "no push notification",
                             "three-bullet rule doesn't apply", "fix each in its own commit",
                             text=self.section)
@@ -850,7 +863,7 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
         self.assertIn("feature", desc)
 
     def test_scan_and_order(self):  # T3
-        self.assertMentions("vault.py design stories", "other open sub-issues in issue-number order",
+        self.assertMentions("~/.claude/agent-vault/bin/vault design stories", "other open sub-issues in issue-number order",
                             "unfiled stories", "never file them", "skip closed issues",
                             "impl note is sealed", "upfront scan", "user decision", "one story at a time",
                             "only after the previous one has merged", "contradicts a later issue",
@@ -867,23 +880,23 @@ class HandoffSkillTest(AssertMentionsMixin, unittest.TestCase):  # T2-T8 -> AC1-
                             "only if that implementer can't be resumed", "answer it if you are sure",
                             "model can't be chosen", "`reviewer.md`", "`review <k>:`", "`r<n>`",
                             "`full check:` failures and lint failures", "at most two reviews",
-                            "`vault.py open-pr`", "sending no push notification")
+                            "`~/.claude/agent-vault/bin/vault open-pr`", "sending no push notification")
 
     def test_retro(self):  # T6
         self.assertMentions("an idea or dropped", "never into a created or amended issue",
                             "lasting decisions", "drop ideas the issue resolved",
-                            "`vault.py closes-feature", "feature-close warning",
-                            "`gh pr checks <pr> --watch`", "`vault.py seal retro", "without approval",
+                            "`~/.claude/agent-vault/bin/vault closes-feature", "feature-close warning",
+                            "`gh pr checks <pr> --watch`", "`~/.claude/agent-vault/bin/vault seal retro", "without approval",
                             "stop and ask")
         retro = self.skill.split("## Retro", 1)[1].split("## Merge", 1)[0]
         self.assertMentions("readies the pr", "merges nothing", text=retro)
 
     def test_merge_only_through_vault_py_merge_and_stops_at_ready_when_approvals_are_required(self):  # T10 -> AC12
-        self.assertMentions("never merge except through `vault.py merge`", "never run `install.py`")
-        self.assertNotIn("never merge except through `vault.py seal retro`", self.skill)
+        self.assertMentions("never merge except through `~/.claude/agent-vault/bin/vault merge`", "never run `install.py`")
+        self.assertNotIn("never merge except through `~/.claude/agent-vault/bin/vault seal retro`", self.skill)
         merge = self.skill.split("## Merge", 1)[1].split("## Asking the user", 1)[0]
         self.assertMentions("next step `seal retro` printed", "never read `agent/setup.md`",
-                            "`run vault.py merge` (approvals `none`)", "run `vault.py merge <repo> <issue>` right away",
+                            "`run ~/.claude/agent-vault/bin/vault merge` (approvals `none`)", "run `~/.claude/agent-vault/bin/vault merge <repo> <issue>` right away",
                             "without asking", "never update the branch yourself",
                             "`collect the approvals, then run` (approvals `required`)",
                             "the run stops here for this story", "retro sealed, pr open, the handoff comment on it",
@@ -932,13 +945,13 @@ class SetupSkillTest(AssertMentionsMixin, unittest.TestCase):  # T7 -> AC9 (#110
                             "issue types", "planned label", "jira key")
 
     def test_shows_values_and_waits_for_a_yes(self):
-        self.assertMentions("`vault.py setup --tracker github|jira`", "every field, defaults included",
+        self.assertMentions("`~/.claude/agent-vault/bin/vault setup --tracker github|jira`", "every field, defaults included",
                             "only on an explicit yes", "old value → new value", "`--replace`",
                             "never pass `--replace` before you have shown the user what changes",
-                            "`jira_project: <key>`", "`vault.py validate`")
+                            "`jira_project: <key>`", "`~/.claude/agent-vault/bin/vault validate`")
 
     def test_reads_the_current_setup(self):
-        self.assertMentions("`vault.py schema`", "`agent/setup.md` if it exists")
+        self.assertMentions("`~/.claude/agent-vault/bin/vault schema`", "`agent/setup.md` if it exists")
 
 
 class SetupDocsTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC10 (#110)
@@ -947,7 +960,7 @@ class SetupDocsTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC10 (#110
             with self.subTest(path.name):
                 text = path.read_text(encoding="utf-8")
                 self.assertIn("Setup.md", text)
-                self.assertRegex(text, r"(vault\.py|\{\{CLI\}\}) setup")
+                self.assertRegex(text, r"(vault\.py|bin/vault|\{\{CLI\}\}) setup")
                 self.assertRegex(text, r"`(skills/)?setup/?`")     # the setup skill
 
     def test_guide_says_the_tracker_decides(self):
@@ -977,9 +990,9 @@ class HandoffDocsTest(AssertMentionsMixin, unittest.TestCase):  # T9 -> AC14 (#7
 class HandoffJiraTest(AssertMentionsMixin, unittest.TestCase):  # T3, T4 -> AC3, AC4 (#116)
     def test_skill_has_the_jira_path_and_keeps_its_github_text(self):  # T3
         skill = read("handoff", "SKILL.md")
-        self.assertMentions("## Jira setup", "vault.py tracker", "through the connector", "ticket file",
+        self.assertMentions("## Jira setup", "~/.claude/agent-vault/bin/vault tracker", "through the connector", "ticket file",
                             "ticket map", "design stories", "unfiled stories in the report",
-                            "skip a story `vault.py stage", "reports `done`", "closes no feature",
+                            "skip a story `~/.claude/agent-vault/bin/vault stage", "reports `done`", "closes no feature",
                             "never create, edit or change the status of a ticket", text=skill)
         self.assertMentions("an issue labelled `feature`", "skip closed issues", text=skill)
         self.assertNotIn("## Approvals, pings and the closing summary", skill)
@@ -1080,7 +1093,7 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
                       ("Stop and ask if", "- `seal retro` prints a feature-close"),
                       ("Stop and ask if", "- `seal retro` refuses because the PR")],
             "issue": [("Approval", None), ("Create", 3)],
-            "merge": [("Merge", 4), ("Stop and ask if", "- `vault.py merge` prints a feature-close")],
+            "merge": [("Merge", 4), ("Stop and ask if", "- `~/.claude/agent-vault/bin/vault merge` prints a feature-close")],
         }
         for skill, items in checks.items():
             for heading, which in items:
@@ -1133,7 +1146,7 @@ class ApprovalsSectionTest(unittest.TestCase):  # T1, T2 -> AC1-AC4 (#74)
 
 
 class AutoInstallDocsTest(unittest.TestCase):  # T7 -> AC7 (#98)
-    RULE = ("never run `install.py` yourself: only `vault.py merge` (after a merge) and session start "
+    RULE = ("never run `install.py` yourself: only `~/.claude/agent-vault/bin/vault merge` (after a merge) and session start "
             "install, and only from `main`.")
 
     def test_four_skills_share_one_install_rule(self):
@@ -1177,7 +1190,7 @@ class JiraSkillsTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#114
     def test_each_pipeline_story_skill_has_the_jira_instructions(self):
         for skill in ("plan-story", "implement-story", "retro", "merge"):
             with self.subTest(skill):
-                self.assertMentions("vault.py tracker", "--ticket", "outside both the clone and the vault",
+                self.assertMentions("~/.claude/agent-vault/bin/vault tracker", "--ticket", "outside both the clone and the vault",
                                     "never change a ticket's status", "connector",
                                     text=self.jira_section(skill))
 
@@ -1193,7 +1206,7 @@ class JiraSkillsTest(AssertMentionsMixin, unittest.TestCase):  # T8 -> AC8 (#114
         for text in ((REPO / "templates" / "vault-CLAUDE.md").read_text(encoding="utf-8"),
                      (REPO / "README.md").read_text(encoding="utf-8"),
                      (REPO / "CLAUDE.md").read_text(encoding="utf-8")):
-            self.assertMentions("ticket file", "vault.py tracker", "--ticket", text=text.replace("{{CLI}}", "vault.py"))
+            self.assertMentions("ticket file", "tracker", "--ticket", text=text)
 
 
 if __name__ == "__main__":
