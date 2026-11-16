@@ -41,6 +41,8 @@ VAULT = _load_vault()                      # vault root (Notes), or None
 AGENT = VAULT / "Agent" if VAULT else None
 
 PHONE_LOG = AGENT / ".phone-log.json" if AGENT else None
+TICKETS = AGENT / ".tickets.json" if AGENT else None     # a Jira setup's record of the tickets filed (D1 of #115)
+PENDING = AGENT / ".pending" if AGENT else None          # fields waiting to be posted to Jira, one file each
 
 # --- Schema (design-v1.md §6-7) ----------------------------------------------
 TYPES = ["project", "plan", "impl", "retro", "idea", "decision", "design", "daily", "setup"]
@@ -242,9 +244,9 @@ LINE_FORMATS = {
     "RETRO-FOLLOW": [("- decision [[<record>]][ (R<n>[, R<m>…])]",
                       re.compile(rf"^- decision \[\[[^\]]+\]\]{FINDING_REFS}$")),
                      ("- issue #<n> created[ (R<n>[, R<m>…])]",
-                      re.compile(rf"^- issue #[1-9]\d* created{FINDING_REFS}$")),
+                      re.compile(rf"^- issue #{_ISSUE_ID} created{FINDING_REFS}$")),
                      ("- issue #<n> amended[ (R<n>[, R<m>…])]",
-                      re.compile(rf"^- issue #[1-9]\d* amended{FINDING_REFS}$")),
+                      re.compile(rf"^- issue #{_ISSUE_ID} amended{FINDING_REFS}$")),
                      ("- idea [[<idea>]][ (R<n>[, R<m>…])]",
                       re.compile(rf"^- idea \[\[[^\]]+\]\]{FINDING_REFS}$")),
                      ("- dropped: <why>[ (R<n>[, R<m>…])]",
@@ -675,6 +677,20 @@ def read_setup() -> dict:
     return out
 
 
+# --- The ticket map (a Jira setup: which ticket each issue the CLI filed became, D1 of #115) ----------
+def read_tickets() -> dict:
+    """{repo: {KEY: {kind, title, design, story, parent}}} from Agent/.tickets.json; {} when there is none."""
+    try:
+        data = json.loads(read_text(TICKETS))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_tickets(data: dict) -> None:
+    write_text(TICKETS, json.dumps(data, indent=2, sort_keys=True) + chr(10))
+
+
 # --- Ticket files (a Jira setup: what a skill read through the connector, handed to the CLI) ------
 TICKET_FIELDS = ["key", "title", "body", "type", "labels", "parent"]
 TICKET_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -976,9 +992,9 @@ def _check_frontmatter(res: Result, ntype: str, fm: dict, derived: dict) -> None
             res.add("FM-FORMAT", "project is a plain project id, not a link")
         promoted = fm.get("promoted_to") not in (None, "")
         target = scalar("promoted_to")
-        if target and not ISSUE_URL_RE.match(target) and not (
+        if target and not ISSUE_URL_RE.match(target) and not ISSUE_KEY_RE.match(target) and not (
                 link_target(target) and DESIGN_NAME_RE.match(link_target(target))):
-            res.add("FM-FORMAT", "promoted_to must be a GitHub issue URL or a link to a design, "
+            res.add("FM-FORMAT", "promoted_to must be a GitHub issue URL, a Jira ticket key or a link to a design, "
                                  'quoted: promoted_to: "[[<design>]]"')
         if (status == "promoted") != promoted and status in STATUSES["idea"]:
             res.add("FM-COND", "promoted_to must be set if and only if status is promoted")
@@ -1428,7 +1444,7 @@ def schema_text() -> str:
                "and optional 'Repo: <name>' lines; Ideas are '- [[<idea>]]' lines or None "
                f"({', '.join(DESIGN_SOFT)}). A sealed design has `sealed`, an existing project, a record per "
                "decision with source 'design <design> D<n>' and each listed idea promoted to it; "
-               "`seal design` does all of that. An idea's promoted_to is an issue URL or a link to a design.")
+               "`seal design` does all of that. An idea's promoted_to is an issue URL, a Jira ticket key (PROJ-12) or a link to a design.")
     out.append(f"Setup note (Agent/{SETUP_FILE}, type: setup, frontmatter only, written by `vault.py setup`; "
                "it always holds every field, defaults included):")
     for key, default in SETUP_DEFAULTS.items():
@@ -1449,6 +1465,8 @@ def schema_text() -> str:
         for sec, (rule, none_ok) in secs.items():
             out.append(f"  {t} '## {sec}' [{rule}]{' (None allowed)' if none_ok else ''}:")
             out += [f"    {shape}" for shape, _ in LINE_FORMATS[rule]]
+    out.append("Retro follow-up lines name an issue by number or, in a Jira setup, by ticket key: "
+               "'- issue #<n|KEY> created' and '- issue #<n|KEY> amended' (for example '- issue #PROJ-12 created').")
     out.append(f"Daily events: {', '.join(EVENTS)} (with <repo>#<n>); {', '.join(IDEA_EVENTS)} (with <title> and idea link); {DECISION_EVENT} (with <title> and record link); {DESIGN_EVENT} (with <title> and design link).")
     out.append("Plan checks: every AC is referenced by a test and every referenced AC exists; "
                "each step has Files: and Done when:; Tests ends with a Full check: line; "

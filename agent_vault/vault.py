@@ -23,6 +23,8 @@ CLAUDE.md (the installer's Python plus this file). Commands:
       (--parent <n>|<repo>#<n> | --standalone | --bug)
   issue create <repo> --title "..." --body-file <file> [--idea <file>]
       (--feature <design> | --parent <n>|<repo>#<n> | --standalone | --bug)
+      (in a Jira setup it writes Agent/.pending/<repo>-<n>.json and prints the fields to post; --parent is a KEY)
+  issue record <repo> <KEY> --pending <file>      (Jira setup: records the key of the ticket posted from the file)
   decision add <project> "<title>" --decision "..." --why "..." --source "..." [--replaces <record>]
   decisions [--project <id>] [--all]
   ideas [--project <id>] [--status open|promoted|dropped]
@@ -95,6 +97,17 @@ def require_number(value: str, what: str = "issue") -> str:
     return value
 
 
+def jira_prefix(index: lib.Index, repo: str) -> str:
+    """The `jira_project` key of the project listing `repo`, or die naming the field to set."""
+    project = index.repos[repo][0]
+    fm, _, _ = lib.split_frontmatter(lib.read_text(index.projects[project]))
+    prefix = (fm or {}).get("jira_project")
+    if not isinstance(prefix, str) or not prefix:
+        die(f"the vault's setup has tracker: jira, but project '{project}' (which lists repo '{repo}') has no "
+            f"jira_project; set jira_project: <KEY> in {lib.rel(index.projects[project])} first")
+    return prefix
+
+
 def require_issue(index: lib.Index, repo: str, value: str) -> str:
     """The one argument check for an `<issue>` (D1 of #113): in a Jira setup a ticket key whose prefix is
     the `jira_project` of the project listing `repo`, otherwise a number. Refuses before anything reads
@@ -105,12 +118,7 @@ def require_issue(index: lib.Index, repo: str, value: str) -> str:
             die(f"issue must be a number like 12 (got {value!r}); the vault's setup has tracker: github, "
                 "so a Jira ticket key isn't an issue here")
         return require_number(value)
-    project = index.repos[repo][0]
-    fm, _, _ = lib.split_frontmatter(lib.read_text(index.projects[project]))
-    prefix = (fm or {}).get("jira_project")
-    if not isinstance(prefix, str) or not prefix:
-        die(f"the vault's setup has tracker: jira, but project '{project}' (which lists repo '{repo}') has no "
-            f"jira_project; set jira_project: <KEY> in {lib.rel(index.projects[project])} first")
+    prefix = jira_prefix(index, repo)
     if not lib.ISSUE_KEY_RE.match(str(value)) or not str(value).startswith(prefix + "-"):
         die(f"issue must be a Jira ticket key like {prefix}-12 with the project's prefix {prefix} (got {value!r}); "
             "the vault's setup has tracker: jira")
@@ -1318,6 +1326,90 @@ def checked_issue(index: lib.Index, repo: str, title: str, body_file: str) -> tu
     return title, body
 
 
+STORY_LINK_RE = re.compile(r"\[\[([^\]]+)\]\] S([1-9]\d*)\b")
+
+
+def recorded_feature(tickets: dict, design: str) -> tuple[str, str, dict] | None:
+    """(repo, key, entry) of the design's recorded feature in the ticket map, or None."""
+    for repo, entries in sorted(tickets.items()):
+        for key, entry in sorted(entries.items()):
+            if entry.get("kind") == "feature" and entry.get("design") == design:
+                return repo, key, entry
+    return None
+
+
+def source_stories(body: str) -> list[tuple[str, int]]:
+    """(design, story number) for each '[[<design>]] S<n>' in a body's Source section, in order."""
+    source = "\n".join(source_lines({"body": body}))
+    return list(dict.fromkeys((m.group(1), int(m.group(2))) for m in STORY_LINK_RE.finditer(source)))
+
+
+def resolve_jira_parent(index: lib.Index, repo: str, value: str, body: str) -> str:
+    """The key `value` names as a parent for a story of `repo` with this body: a recorded feature of a repo
+    sharing a project, and the feature of every design whose story the Source names (D3 of #115)."""
+    if not lib.ISSUE_KEY_RE.match(value):
+        die(f"--parent '{value}' must be a Jira ticket key like PROJ-12 in a Jira setup")
+    tickets = lib.read_tickets()
+    found = next(((r, e[value]) for r, e in sorted(tickets.items()) if value in e), None)
+    if found is None:
+        die(f"{value} isn't a recorded feature: file the design's feature first (`issue create <repo> --feature "
+            "<design>`) and record it with `issue record`")
+    parent_repo, entry = found
+    if entry.get("kind") != "feature":
+        die(f"{value} is recorded as a {entry.get('kind')}, not a feature; only a feature can be a parent")
+    if parent_repo not in index.repos or not set(index.repos[parent_repo]) & set(index.repos[repo]):
+        die(f"repos '{parent_repo}' and '{repo}' share no project, so {value} can't be a parent")
+    for design, _ in source_stories(body):
+        if design not in index.designs:
+            die(f"the Source links [[{design}]] S<n>, but no design of that name is in the vault; "
+                "fix the link before filing")
+        feature = recorded_feature(tickets, design)
+        if feature is None or feature[1] != value:
+            die(f"{value} isn't the feature of {design}; "
+                + (f"it is {feature[1]}" if feature else f"{design} has no recorded feature yet: file it first "
+                   f"with `issue create <repo> --feature {design}`"))
+    return value
+
+
+def write_pending(index: lib.Index, repo: str, title: str, body: str, kind: str, parent: str | None = None,
+                  design: str | None = None, idea: Path | None = None) -> None:
+    """Jira setup: write the fields to post to Agent/.pending/<repo>-<n>.json, with the vault-side facts
+    `issue record` needs, and print them (D2 of #115). Nothing is posted and no GitHub call is made."""
+    setup = lib.read_setup()
+    story = None
+    if kind == "story" and design is None:
+        stories = source_stories(body)
+        design, story = stories[0] if stories else (None, None)
+    jira_type = {"feature": setup["jira_feature_type"], "bug": setup["jira_bug_type"]}.get(
+        kind, setup["jira_story_type"])
+    fields = {"project": jira_prefix(index, repo), "type": jira_type, "summary": title, "description": body,
+              "parent": parent, "labels": []}
+    facts = {"repo": repo, "kind": kind, "title": title, "design": design, "story": story, "parent": parent,
+             "idea": lib.rel(idea) if idea else None}
+    folder = lib.PENDING
+    folder.mkdir(parents=True, exist_ok=True)
+    taken = [int(m.group(1)) for p in folder.glob(f"{repo}-*.json")
+             if (m := re.fullmatch(rf"{re.escape(repo)}-([1-9]\d*)\.json", p.name))]
+    path = folder / f"{repo}-{max(taken, default=0) + 1}.json"
+    lib.write_text(path, json.dumps({"fields": fields, "vault": facts}, indent=2) + "\n")
+    print(f"pending file: {path.as_posix()}")
+    print("post exactly these fields through the connector, change nothing:")
+    print(json.dumps(fields, indent=2))
+    print(f"then record the new key: {lib.CLI} issue record {repo} <KEY> --pending {path.as_posix()}")
+
+
+def file_jira_issue(index: lib.Index, repo: str, title: str, body: str, idea: Path | None,
+                    parent: str | None, bug: bool) -> None:
+    if parent:
+        write_pending(index, repo, title, body, "story", parent=resolve_jira_parent(index, repo, parent, body),
+                      idea=idea)
+        return
+    if source_stories(body):
+        die("this body's Source names a design's story; a story is filed under its design's feature "
+            "with `--parent <KEY>`, not with --standalone or --bug")
+    write_pending(index, repo, title, body, "bug" if bug else "standalone", idea=idea)
+
+
 def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Path | None = None,
                parent: str | None = None, bug: bool = False) -> None:
     """Create an issue from a body file that matches the template; with an idea, promote it; with a
@@ -1325,6 +1417,8 @@ def file_issue(index: lib.Index, repo: str, title: str, body_file: str, idea: Pa
     standalone, labelled `bug` when `bug`. A design's story is refused without a parent.
     Everything is checked before `gh` runs. The body is posted exactly as the file has it."""
     title, body = checked_issue(index, repo, title, body_file)
+    if lib.read_setup()["tracker"] == "jira":
+        return file_jira_issue(index, repo, title, body, idea, parent, bug)
     label = None
     if parent:
         parent_url = resolve_parent(index, repo, parent, body)
@@ -1432,6 +1526,11 @@ def cmd_issue_create_feature(args, index: lib.Index) -> None:
         die(f"the body's Source section must link [[{design}]]")
     if re.search(r"\[\[[^\]]+\]\] S[1-9]", source):
         die("a feature's Source names no story: remove the 'S<n>' after the design link")
+    if lib.read_setup()["tracker"] == "jira":
+        recorded = recorded_feature(lib.read_tickets(), design)
+        if recorded:
+            die(f"{design} already has a feature: {recorded[1]}; change it in Jira by hand")
+        return write_pending(index, args.repo, title, body, "feature", design=design)
     issues = project_issues(index, project)
     existing = feature_issues(issues, design)
     if existing:
@@ -1470,6 +1569,44 @@ def cmd_issue_create(args) -> None:
         return cmd_issue_create_feature(args, index)
     idea = idea_for_issue(index, args.idea, args.repo) if args.idea else None
     file_issue(index, args.repo, args.title, args.body_file, idea, args.parent, args.bug)
+
+
+def cmd_issue_record(args) -> None:
+    """Jira setup: record the key the connector returned for a pending file (AC3 of #115). Everything is
+    checked before anything changes."""
+    index = lib.Index()
+    if lib.read_setup()["tracker"] != "jira":
+        die("issue record is for a Jira setup; this vault's setup has tracker: github")
+    key = require_issue(index, args.repo, args.key)
+    pending = Path(args.pending)
+    if not pending.is_file() or pending.resolve().parent != lib.PENDING.resolve() \
+            or not pending.name.startswith(args.repo + "-"):
+        die(f"{args.pending} isn't a pending file `issue create` or `idea promote` wrote for repo '{args.repo}'")
+    try:
+        data = json.loads(lib.read_text(pending))
+        facts, fields = data["vault"], data["fields"]
+        ok = (facts["repo"] == args.repo and facts["kind"] in ("feature", "story", "standalone", "bug")
+              and isinstance(fields, dict) and isinstance(facts["title"], str))
+    except (ValueError, KeyError, TypeError):
+        ok = False
+    if not ok:
+        die(f"{args.pending} isn't a valid pending file for repo '{args.repo}'")
+    tickets = lib.read_tickets()
+    if any(key in entries for entries in tickets.values()):
+        die(f"{key} is already recorded")
+    idea = None
+    if facts.get("idea"):
+        idea = lib.VAULT / facts["idea"]
+        ifm = lib.split_frontmatter(lib.read_text(idea))[0] if idea.is_file() else None
+        if not ifm or ifm.get("status") != "open":
+            die(f"the idea {facts['idea']} is no longer open; nothing recorded")
+    if idea is not None:
+        update_note(idea, status="promoted", promoted_to=key)
+        log_idea_event("idea-promoted", facts["title"], idea)
+    tickets.setdefault(args.repo, {})[key] = {k: facts.get(k) for k in ("kind", "title", "design", "story", "parent")}
+    lib.write_tickets(tickets)
+    pending.unlink()
+    print(f"recorded {args.repo} {key} ({facts['kind']})" + (f"; promoted {facts['idea']} to {key}" if idea else ""))
 
 
 def cmd_idea_promote(args) -> None:
@@ -2349,7 +2486,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_idea_promote)
 
     issue = sub.add_parser("issue", help="create an issue from a templated body").add_subparsers(
-        dest="action", required=True, metavar="create")
+        dest="action", required=True, metavar="create|record")
     p = issue.add_parser("create", help="refuses a body that doesn't match the issue template")
     p.add_argument("repo")
     p.add_argument("--title", required=True)
@@ -2361,6 +2498,11 @@ def build_parser() -> argparse.ArgumentParser:
     where.add_argument("--standalone", action="store_true", help="file the issue under no feature, with no label")
     where.add_argument("--bug", action="store_true", help="file a standalone issue labelled 'bug'")
     p.set_defaults(fn=cmd_issue_create)
+    p = issue.add_parser("record", help="Jira setup: record the key of a ticket posted from a pending file")
+    p.add_argument("repo")
+    p.add_argument("key")
+    p.add_argument("--pending", required=True, help="the pending file `issue create` or `idea promote` wrote")
+    p.set_defaults(fn=cmd_issue_record)
 
     p = sub.add_parser("ideas", help="list ideas, or `ideas review` for old open ones")
     p.add_argument("action", nargs="?", choices=["review"])
