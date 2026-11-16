@@ -26,6 +26,7 @@ def main() -> None:
     path = Path(target)
     if not path.is_absolute():
         path = Path(data.get("cwd") or ".") / path
+    path = lib.VAULT.joinpath(*lib.parts_under(path, lib.VAULT))   # the vault's own spelling of its root
     if path.suffix.lower() != ".md" or not path.exists():
         return
     problems = lib.validate_file(path.resolve()).errors   # warnings never block

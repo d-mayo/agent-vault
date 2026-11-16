@@ -433,20 +433,43 @@ def write_text(path: Path, text: str) -> None:
 
 
 # --- Paths -------------------------------------------------------------------
+def _folds_case() -> bool:
+    """True where file names are compared case-insensitively: Windows, and macOS (whose file
+    systems are case-insensitive by default; on a case-sensitive volume this only blocks more)."""
+    return sys.platform in ("win32", "darwin")
+
+
+def norm_path(p) -> str:
+    """The real path of `p`, case-folded on Windows and macOS: for comparing two paths for equality."""
+    n = os.path.normcase(os.path.realpath(p))
+    return n.lower() if sys.platform == "darwin" else n
+
+
+def _split_path(p: str):
+    drive, tail = os.path.splitdrive(p)
+    return drive, [x for x in tail.split(os.path.sep) if x]
+
+
+def parts_under(path, root):
+    """The parts of the real `path` below the real `root`, or None if it is not inside it. The root's
+    own parts match case-insensitively on Windows and macOS; the parts below it keep their spelling."""
+    d1, p1 = _split_path(os.path.realpath(path))
+    d2, p2 = _split_path(os.path.realpath(root))
+    fold = (lambda x: x.lower()) if _folds_case() else (lambda x: x)
+    if fold(d1) != fold(d2) or len(p1) < len(p2):
+        return None
+    if [fold(x) for x in p1[:len(p2)]] != [fold(x) for x in p2]:
+        return None
+    return p1[len(p2):]
+
+
 def vault_parts(path, base=None):
     """Lower-cased path parts relative to the vault, or None if outside it."""
     p = Path(path)
     if not p.is_absolute():
         p = Path(base or os.getcwd()) / p
-    ap = os.path.normcase(os.path.realpath(p))
-    vp = os.path.normcase(os.path.realpath(VAULT))
-    try:
-        if os.path.commonpath([ap, vp]) != vp:
-            return None
-    except ValueError:          # different drives on Windows
-        return None
-    rel = os.path.relpath(ap, vp)
-    return [] if rel == "." else [x.lower() for x in Path(rel).parts]
+    found = parts_under(p, VAULT)
+    return None if found is None else [x.lower() for x in found]
 
 
 def rel(path: Path) -> str:
@@ -1528,11 +1551,7 @@ def history_dir() -> Path:
 
 
 def _inside(path: Path, root: Path) -> bool:
-    a, r = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(root))
-    try:
-        return os.path.commonpath([a, r]) == r
-    except ValueError:
-        return False
+    return parts_under(path, root) is not None
 
 
 def _hgit(*args: str, check: bool = True, raw: bool = False, proc: bool = False):

@@ -936,7 +936,7 @@ def cmd_merge(args) -> None:
 
 def git_common_dir(cwd) -> str:
     out = github.git("rev-parse", "--git-common-dir", cwd=cwd)
-    return os.path.normcase(os.path.realpath(os.path.join(str(cwd), out)))
+    return lib.norm_path(os.path.join(str(cwd), out))
 
 
 def update_install(top: Path) -> None:
@@ -1671,7 +1671,7 @@ def hooks_path_state(top: Path, target: Path) -> tuple[str, str]:
     if not cur:
         return "unset", cur
     where = Path(cur) if Path(cur).is_absolute() else top / cur
-    if os.path.normcase(os.path.realpath(where)) == os.path.normcase(os.path.realpath(target)):
+    if lib.norm_path(where) == lib.norm_path(target):
         return "ours", cur
     try:
         marked = lib.HOOK_MARKER in (where / "pre-push").read_text(encoding="utf-8", errors="replace")
@@ -2328,7 +2328,7 @@ def cmd_phone_pull(args) -> None:
         die(f"'{args.path}' is inside {AGENT.name}/; only phone-side notes can be pulled")
     if any(x.startswith(".") for x in parts) or parts == ["claude.md"]:
         die(f"'{args.path}' is not a phone-side note")
-    rel_path = Path(os.path.relpath(os.path.realpath(src), os.path.realpath(VAULT))).as_posix()
+    rel_path = "/".join(lib.parts_under(src, VAULT))
     done = load_pulled()
     if rel_path in done:
         die(f"'{rel_path}' was already pulled (idea {done[rel_path].get('idea', '?') if isinstance(done[rel_path], dict) else done[rel_path]})")
@@ -2343,10 +2343,10 @@ def restore_target(given: str) -> str:
     """`given` (a path inside Agent/, relative to the vault or absolute) as a posix path relative to Agent/."""
     p = Path(given)
     p = p if p.is_absolute() else VAULT / p
-    rel = os.path.relpath(os.path.realpath(p), os.path.realpath(AGENT))
-    if rel == "." or rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+    found = lib.parts_under(p, AGENT)
+    if not found:
         die(f"'{given}' is not inside {AGENT.name}/; only notes under it can be restored")
-    return Path(rel).as_posix()
+    return "/".join(found)
 
 
 def cmd_restore(args) -> None:

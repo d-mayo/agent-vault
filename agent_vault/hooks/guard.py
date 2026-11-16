@@ -15,7 +15,6 @@ Blocked:
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -33,11 +32,7 @@ def block(msg: str) -> None:
 
 
 def inside(path: Path, root: Path) -> bool:
-    a, r = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(root))
-    try:
-        return os.path.commonpath([a, r]) == r
-    except ValueError:          # different drives on Windows
-        return False
+    return lib.parts_under(path, root) is not None
 
 
 def main() -> None:
