@@ -100,6 +100,12 @@ class Fine(unittest.TestCase):
 """
 
 
+def described(name):
+    """How this Python prints throwaway.test_things.A's test `name` in a report (3.11+ names the method)."""
+    case = type("A", (unittest.TestCase,), {name: lambda self: None, "__module__": "throwaway.test_things"})
+    return str(case(name))
+
+
 class RunnerCase(unittest.TestCase):
     def setUp(self):
         self._t = tmpdir()
@@ -145,8 +151,8 @@ class ParallelRunTest(RunnerCase):
                 self.assertIn("Ran 5 tests", out)
                 for word in ("failures=1", "errors=1", "skipped=1", "expected failures=1"):
                     self.assertIn(word, out)
-                self.assertIn("FAIL: test_fails (throwaway.test_things.A.test_fails)", out)
-                self.assertIn("ERROR: test_errors (throwaway.test_things.A.test_errors)", out)
+                self.assertIn("FAIL: " + described("test_fails"), out)
+                self.assertIn("ERROR: " + described("test_errors"), out)
                 self.assertIn("Traceback", out)
                 self.assertIn('self.assertEqual(1, 2, "the failing message")', out)
                 self.assertIn("1 != 2 : the failing message", out)
