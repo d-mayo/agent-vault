@@ -9,10 +9,19 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CODE = REPO / "agent_vault"
+
+
+def skip_install_prereqs(case) -> None:
+    """The explicit opt-out (D3 of #47) for a test that runs the installer without testing its
+    prerequisite check: CI has a `gh` that is not logged in, and no test may depend on this machine's tools."""
+    patch = mock.patch.dict(os.environ, {"AGENT_VAULT_TEST_PREREQS": "1"})
+    patch.start()
+    case.addCleanup(patch.stop)
 
 
 def find_bash():

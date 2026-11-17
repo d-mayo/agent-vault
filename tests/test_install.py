@@ -10,7 +10,7 @@ from functools import partial
 from pathlib import Path
 from unittest import mock
 
-from tests.helpers import REPO, find_bash, make_vault, tmpdir
+from tests.helpers import REPO, find_bash, make_vault, skip_install_prereqs, tmpdir
 
 sys.path.insert(0, str(REPO))
 import install  # noqa: E402
@@ -747,6 +747,7 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("install.py", out.stderr)
 
     def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
+        skip_install_prereqs(self)
         home = self.root / "inst-home"
         (home / ".claude").mkdir(parents=True)
         vault = make_vault(self.root)
@@ -837,6 +838,7 @@ class HookLauncherTest(unittest.TestCase):
             self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "", ""))
 
     def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
+        skip_install_prereqs(self)
         home = self.root / "inst-home"
         (home / ".claude").mkdir(parents=True)
         vault = make_vault(self.root)
@@ -1046,3 +1048,19 @@ class PrerequisiteDocsTest(unittest.TestCase):  # T5 -> AC5
         for phrase in ("`AGENT_VAULT_GH`, else the config's `gh`, else PATH", "the config's `git`, else PATH",
                        "checks Python 3.9+", "records the absolute paths of `gh` and `git`"):
             self.assertIn(phrase, text)
+
+
+class OptOutCoverageTest(unittest.TestCase):  # R1 of #47: no test may run the real prerequisite check by accident
+    def test_every_test_that_installs_opts_out(self):
+        import ast
+        missing = []
+        for path in sorted((REPO / "tests").glob("test_*.py")):
+            text = path.read_text(encoding="utf-8")
+            for node in ast.walk(ast.parse(text)):
+                if not isinstance(node, ast.ClassDef) or node.name == "OptOutCoverageTest":
+                    continue
+                body = ast.get_source_segment(text, node) or ""
+                runs_installer = "install.install(" in body or 'str(REPO / "install.py")' in body
+                if runs_installer and not ("skip_install_prereqs" in body or "TEST_PREREQS_ENV" in body):
+                    missing.append(f"{path.name}::{node.name}")
+        self.assertEqual(missing, [])
