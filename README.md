@@ -6,7 +6,7 @@ working memory between sessions. Design: [`docs/design-v1.md`](docs/design-v1.md
 
 ## Install
 
-Requires Python 3.9+, git and gh 2.94.0 or later (the first release with sub-issues). On Windows, run these in Git Bash or PowerShell.
+Requires Python 3.9+, git and gh 2.94.0 or later (the first release with sub-issues), logged in (`gh auth login`); ruff is needed only to run the tests. The installer checks all of this before it changes anything and, if something is missing, refuses and names each fix on one line. On Windows, run these in Git Bash or PowerShell.
 
 ```bash
 git clone https://github.com/d-mayo/agent-vault
@@ -17,7 +17,7 @@ python install.py --vault "C:/Users/<you>/iCloudDrive/iCloud~md~obsidian/Notes"
 The installer is safe to rerun after every `git pull`. It:
 
 - copies the code to `~/.claude/agent-vault/` and any skills to `~/.claude/skills/`, replacing the installed files file by file (from a staged copy, so a running session never finds a hook script missing) and deleting the ones the new version dropped;
-- writes `~/.claude/agent-vault.json` with the vault path, the installer's Python (the pre-push hook runs the lint with it), and the clone it installed from (`source`) with the commit installed (`commit`, `commit_time`);
+- writes `~/.claude/agent-vault.json` with the vault path, the installer's Python (the pre-push hook runs the lint with it), the paths of the `gh` and `git` it checked (the code runs those; rerun `install.py` after moving either), and the clone it installed from (`source`) with the commit installed (`commit`, `commit_time`);
 - merges every hook and the permission to run the CLI into `~/.claude/settings.json`,
   only ever replacing entries it created, backing the file up to `.bak` first, and removes
   the entries older versions put in `<vault>/.claude/settings.json`;

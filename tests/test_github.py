@@ -2667,26 +2667,71 @@ class GhHelperTest(GhCase):  # T10 -> AC10
         self.assertEqual(cm.exception.kind, "missing")
         self.assertIn("AGENT_VAULT_GH", str(cm.exception))
 
-    def test_missing_gh(self):
+    def config(self, **tools):
+        """A config recording `tools` (the installer's `gh` and `git` paths); lib.CONFIG points at it."""
+        path = self.root / "recorded.json"
+        path.write_text(json.dumps(tools), encoding="utf-8")
+        patch = mock.patch.object(lib, "CONFIG", path)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def without_override(self):
         env = {k: v for k, v in os.environ.items() if k != "AGENT_VAULT_GH"}
-        with mock.patch.dict(os.environ, env, clear=True), \
-                mock.patch.object(github.shutil, "which", return_value=None), \
-                mock.patch.object(github, "_windows_gh_paths", return_value=[self.root / "no" / "gh.exe"]):
+        patch = mock.patch.dict(os.environ, env, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_missing_gh(self):
+        self.config()
+        self.without_override()
+        with mock.patch.object(github.shutil, "which", return_value=None):
             with self.assertRaises(github.CmdError) as cm:
                 github.gh_command()
         self.assertEqual(cm.exception.kind, "missing")
         self.assertIn("cli.github.com", str(cm.exception))
+        self.assertIn("install.py", str(cm.exception))
 
-    def test_falls_back_to_the_standard_windows_path(self):
-        exe = self.root / "GitHub CLI" / "gh.exe"
-        exe.parent.mkdir()
-        exe.write_text("", encoding="utf-8")
-        env = {k: v for k, v in os.environ.items() if k != "AGENT_VAULT_GH"}
-        with mock.patch.dict(os.environ, env, clear=True), \
-                mock.patch.object(github.shutil, "which", return_value=None), \
-                mock.patch.object(github.sys, "platform", "win32"), \
-                mock.patch.object(github, "_windows_gh_paths", return_value=[exe]):
-            self.assertEqual(github.gh_command(), [str(exe)])
+    def test_config_gh_runs_when_path_is_empty(self):
+        self.config(gh=str(FAKE_GH))
+        self.without_override()
+        with mock.patch.object(github.shutil, "which", return_value=None):
+            self.assertEqual(github.gh_command(), [sys.executable, str(FAKE_GH)])
+            self.assertIn("fake gh", github.run(["gh", "--version"], check=False).stderr)    # the recorded fake ran
+
+    def test_override_beats_the_config(self):
+        other = self.root / "other_gh.py"
+        other.write_text("", encoding="utf-8")
+        self.config(gh=str(other))
+        self.assertEqual(github.gh_command(), [sys.executable, str(FAKE_GH)])
+
+    def test_config_gh_that_is_gone_falls_back_to_path(self):
+        self.config(gh=str(self.root / "gone.py"))
+        self.without_override()
+        with mock.patch.object(github.shutil, "which", return_value="/on/path/gh"):
+            self.assertEqual(github.gh_command(), ["/on/path/gh"])
+
+    def test_config_git_is_used_by_run(self):
+        fake = self.root / "fake_git.py"
+        fake.write_text("import sys\nprint('fake git ' + ' '.join(sys.argv[1:]))\n", encoding="utf-8")
+        self.config(git=str(fake))
+        self.assertEqual(github.git_command(), [sys.executable, str(fake)])
+        self.assertEqual(github.git("status", "--short"), "fake git status --short")
+        self.config(git=str(self.root / "gone.py"))
+        self.assertEqual(github.git_command(), ["git"])
+
+    def test_missing_git_names_install_py(self):
+        self.config()
+        with mock.patch.object(github, "git_command", return_value=[str(self.root / "no-such-git")]):
+            with self.assertRaises(github.CmdError) as cm:
+                github.git("status")
+        self.assertEqual(cm.exception.kind, "missing")
+        self.assertIn("install.py", str(cm.exception))
+
+    def test_no_windows_search_left(self):
+        text = Path(github.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("ProgramFiles", text)
+        self.assertNotIn("win32", text)
+        self.assertFalse(hasattr(github, "_windows_gh_paths"))
 
     def test_missing_gh_through_the_cli(self):
         r = self.cli("stage", "widget", "7", env={"AGENT_VAULT_GH": str(self.root / "nope.py")})

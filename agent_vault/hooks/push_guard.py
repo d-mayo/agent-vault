@@ -54,9 +54,19 @@ def block(msg: str) -> None:
     sys.exit(2)
 
 
+def git_argv() -> list[str]:
+    """How to run git: the config's recorded `git` (a `.py` stand-in runs through this Python), else PATH."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        import github
+        return github.git_command()
+    except Exception:
+        return ["git"]
+
+
 def current_branch(cwd: str | None) -> str | None:
     try:
-        out = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd or None,
+        out = subprocess.run(git_argv() + ["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd or None,
                              capture_output=True, text=True, timeout=5)
         return out.stdout.strip() if out.returncode == 0 else None
     except Exception:

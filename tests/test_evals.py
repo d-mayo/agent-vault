@@ -15,7 +15,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from tests.helpers import REPO, make_vault, tmpdir
+from tests.helpers import REPO, make_vault, skip_install_prereqs, tmpdir
 
 _spec = importlib.util.spec_from_file_location("evals_score", REPO / "evals" / "score.py")
 score = importlib.util.module_from_spec(_spec)
@@ -414,6 +414,7 @@ class RepoWiring(Base):
 
     def test_install_copies_nothing_from_evals(self):
         from tests import test_install as ti
+        skip_install_prereqs(self)
         t = tmpdir()
         self.addCleanup(t.cleanup)
         root = Path(t.name)
@@ -544,6 +545,7 @@ class ReviewerEvalsSkill(Base):
 
     def test_install_creates_no_such_skill(self):
         from tests import test_install as ti
+        skip_install_prereqs(self)
         t = tmpdir()
         self.addCleanup(t.cleanup)
         root = Path(t.name)

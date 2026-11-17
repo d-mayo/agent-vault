@@ -27,6 +27,16 @@ CONFIG = Path(os.environ.get("AGENT_VAULT_CONFIG")
 CLI = "~/.claude/agent-vault/bin/vault"
 
 
+def tool_path(name: str) -> str | None:
+    """The absolute path the installer recorded for `gh` or `git` in the config (read now, so a test's
+    AGENT_VAULT_CONFIG or a patched CONFIG counts), when that file still exists; else None."""
+    try:
+        path = json.loads(CONFIG.read_text(encoding="utf-8-sig")).get(name)
+    except Exception:
+        return None
+    return path if isinstance(path, str) and path and Path(path).is_file() else None
+
+
 def _load_vault():
     """The configured vault, or None if unconfigured or not (yet) an Obsidian
     vault, e.g. moved or not synced. Never guess: a wrong path would get notes."""

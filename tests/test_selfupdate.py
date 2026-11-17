@@ -174,5 +174,27 @@ class FailureTest(SelfUpdateCase):
         self.assertEqual(self.records(), [])
 
 
+class PrerequisiteInstallTest(SelfUpdateCase):
+    """The installer's prerequisite check (#47) is never switched off by the self-update."""
+
+    def test_selfupdate_never_passes_the_test_variable(self):  # T1 -> AC1
+        import install
+        installer = ("import json, os, sys\nfrom pathlib import Path\n"
+                     "home = Path(sys.argv[sys.argv.index('--home') + 1])\n"
+                     f"(home / 'env.json').write_text(json.dumps({{'set': {install.TEST_PREREQS_ENV!r} in os.environ}}))\n")
+        self.setup_clone(installer=installer)
+        with mock.patch.dict(os.environ, {install.TEST_PREREQS_ENV: "1"}):   # even when the parent has it set
+            self.assertIn("installed main", self.run_update())
+        self.assertEqual(json.loads((self.root / "env.json").read_text()), {"set": False})
+
+    def test_the_refusal_line_comes_back(self):  # T1 -> AC1
+        refusal = ("error: install.py can't continue, nothing was changed: gh is missing: install gh "
+                   "from https://cli.github.com (version 2.94.0 or newer); gh is not logged in.")
+        self.setup_clone(installer=f"import sys\nprint('noise', file=sys.stderr)\nprint({refusal!r}, file=sys.stderr)\nsys.exit(1)\n")
+        line = self.run_update()
+        self.assertIn(refusal, line)
+        self.assertIn("install.py --vault", line)
+
+
 if __name__ == "__main__":
     unittest.main()

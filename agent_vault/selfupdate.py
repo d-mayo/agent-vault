@@ -27,6 +27,7 @@ import lib  # noqa: E402
 LOCK_NAME = "agent-vault.update.lock"
 LOCK_STALE_SECONDS = 120
 GUIDE_HELD = "warning: the vault guide is from"   # install.py prints it when it keeps a newer guide
+TEST_PREREQS_ENV = "AGENT_VAULT_TEST_PREREQS"   # install.py's test-only opt-out; the child never gets it
 INSTALL_LIMIT = 60                 # seconds the installer may run
 
 
@@ -115,7 +116,8 @@ def _selfupdate() -> str | None:
         argv = [python, str(tmp / "tree" / "install.py"), "--vault", vault, "--repo", source,
                 "--commit", sha, "--home", str(config_path.parent.parent)]
         try:
-            proc = subprocess.run(argv, cwd=tmp / "tree", capture_output=True, text=True,
+            env = {k: v for k, v in os.environ.items() if k != TEST_PREREQS_ENV}   # never skip the check
+            proc = subprocess.run(argv, cwd=tmp / "tree", capture_output=True, text=True, env=env,
                                   encoding="utf-8", errors="replace", timeout=INSTALL_LIMIT)
         except subprocess.TimeoutExpired:
             return _by_hand(f"install.py took longer than {INSTALL_LIMIT} seconds", source, vault)

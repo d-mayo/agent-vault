@@ -1,8 +1,8 @@
 """The one place that runs `gh` and `git` (design §4, §10).
 
 Every call goes through `run`, so a missing or signed-out `gh` is reported the
-same way everywhere. `AGENT_VAULT_GH` overrides where `gh` is found (tests point
-it at tests/fake_gh.py). Standard library only.
+same way everywhere. `gh` is found through `AGENT_VAULT_GH` (tests point it at
+tests/fake_gh.py), else the `gh` path in the config, else PATH; `git` through the config's `git`, else PATH. Standard library only.
 """
 from __future__ import annotations
 
@@ -31,30 +31,38 @@ class CmdError(Exception):
         self.kind, self.stderr = kind, stderr
 
 
-def _windows_gh_paths() -> list[Path]:
-    roots = [os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")]
-    out = [Path(r) / "GitHub CLI" / "gh.exe" for r in roots if r]
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        out.append(Path(local) / "Programs" / "GitHub CLI" / "gh.exe")
-    return out
+def recorded_tool(name: str) -> str | None:
+    """The path the installer recorded for `gh` or `git` in the config, when that file still exists."""
+    try:
+        import lib
+        return lib.tool_path(name)
+    except Exception:
+        return None
+
+
+def _argv(path: str) -> list[str]:
+    """A recorded `.py` path (a test's stand-in) runs through this Python, as AGENT_VAULT_GH does."""
+    return [sys.executable, path] if path.lower().endswith(".py") else [path]
 
 
 def gh_command() -> list[str]:
-    """The argv prefix that runs gh: AGENT_VAULT_GH, else PATH, else its standard Windows location."""
+    """The argv prefix that runs gh: AGENT_VAULT_GH, else the config's `gh`, else PATH."""
     override = os.environ.get(GH_ENV)
     if override:
         if not Path(override).is_file() and not shutil.which(override):
             raise CmdError(f"{GH_ENV} points at {override!r}, which doesn't exist", "missing")
-        return [sys.executable, override] if override.lower().endswith(".py") else [override]
-    found = shutil.which("gh")
-    if not found and sys.platform == "win32":
-        found = next((str(p) for p in _windows_gh_paths() if p.is_file()), None)
+        return _argv(override)
+    found = recorded_tool("gh") or shutil.which("gh")
     if not found:
-        raise CmdError(f"gh (the GitHub CLI) was not found on PATH or in its standard install "
-                       f"location. Install it from {INSTALL_URL} and run `gh auth login`, "
-                       f"or set {GH_ENV} to its path", "missing")
-    return [found]
+        raise CmdError(f"gh (the GitHub CLI) was not found. Install it from {INSTALL_URL}, run "
+                       "`gh auth login`, then rerun install.py", "missing")
+    return _argv(found)
+
+
+def git_command() -> list[str]:
+    """The argv prefix that runs git: the config's `git`, else PATH."""
+    found = recorded_tool("git")
+    return _argv(found) if found else ["git"]
 
 
 def _sub_issue_unsupported(low: str) -> bool:
@@ -73,7 +81,9 @@ def run(argv: list[str], cwd: Path | str | None = None, check: bool = True,
     tool = argv[0]
     if tool == "gh":
         argv = gh_command() + argv[1:]
-    elif tool != "git":
+    elif tool == "git":
+        argv = git_command() + argv[1:]
+    else:
         raise ValueError(f"github.run only runs gh and git, not {tool!r}")
     timeout = None
     if DEADLINE is not None:
@@ -91,8 +101,9 @@ def run(argv: list[str], cwd: Path | str | None = None, check: bool = True,
         raise CmdError("GitHub did not answer in time", "timeout")
     except FileNotFoundError:
         if tool == "git":
-            raise CmdError("git was not found on PATH", "missing")
-        raise CmdError(f"could not run gh ({argv[0]})", "missing")
+            raise CmdError(f"git ({argv[0]}) was not found. Install git, then rerun install.py", "missing")
+        raise CmdError(f"could not run gh ({argv[0]}). Install it from {INSTALL_URL}, then rerun "
+                       "install.py", "missing")
     if check and proc.returncode != 0:
         err = proc.stderr or proc.stdout
         if isinstance(err, bytes):
@@ -105,7 +116,7 @@ def run(argv: list[str], cwd: Path | str | None = None, check: bool = True,
         if tool == "gh" and _sub_issue_unsupported(low):
             raise CmdError(f"this gh doesn't support sub-issues; update gh to {MIN_GH} or later "
                            f"({INSTALL_URL})", "failed", err)
-        shown = " ".join((argv[len(gh_command()):] if tool == "gh" else argv[1:])[:4])
+        shown = " ".join(argv[len(gh_command() if tool == "gh" else git_command()):][:4])
         raise CmdError(f"`{tool} {shown}` failed: {err}", "failed", err)
     return proc
 

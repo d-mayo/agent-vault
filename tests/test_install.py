@@ -1,12 +1,16 @@
+import contextlib
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
 import unittest
+from functools import partial
 from pathlib import Path
+from unittest import mock
 
-from tests.helpers import REPO, find_bash, make_vault, tmpdir
+from tests.helpers import REPO, find_bash, make_vault, skip_install_prereqs, tmpdir
 
 sys.path.insert(0, str(REPO))
 import install  # noqa: E402
@@ -30,6 +34,9 @@ class InstallTest(unittest.TestCase):
         self.root = Path(self._t.name)
         self.home = self.root / "home"
         self.vault = make_vault(self.root)
+        env = mock.patch.dict(os.environ, {install.TEST_PREREQS_ENV: "1"})   # these tests don't test the check
+        env.start()
+        self.addCleanup(env.stop)
         # v1 leftovers: code in the vault, v1 vault settings, plus a foreign user hook
         sysdir = self.vault / "Agent" / "_system"
         (sysdir / "hooks").mkdir(parents=True)
@@ -740,6 +747,7 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("install.py", out.stderr)
 
     def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
+        skip_install_prereqs(self)
         home = self.root / "inst-home"
         (home / ".claude").mkdir(parents=True)
         vault = make_vault(self.root)
@@ -830,6 +838,7 @@ class HookLauncherTest(unittest.TestCase):
             self.assertEqual((out.returncode, out.stdout, out.stderr), (0, "", ""))
 
     def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
+        skip_install_prereqs(self)
         home = self.root / "inst-home"
         (home / ".claude").mkdir(parents=True)
         vault = make_vault(self.root)
@@ -845,3 +854,232 @@ class HookLauncherTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+GOOD_VERSION = "gh version 2.94.0 (2026-01-01)\nhttps://github.com/cli/cli/releases/tag/v2.94.0"
+SECRET = "ghp_SECRETTOKENVALUE"
+
+
+def fake_which(**found):
+    return lambda name: found.get(name)
+
+
+def fake_run(version=GOOD_VERSION, token_rc=0, calls=None):
+    def run(argv, **kw):
+        if calls is not None:
+            calls.append(list(argv))
+        if argv[-1] == "--version":
+            return subprocess.CompletedProcess(argv, 0, stdout=version + "\n", stderr="")
+        if argv[-2:] == ["auth", "token"]:
+            return subprocess.CompletedProcess(argv, token_rc, stdout=SECRET + "\n", stderr=SECRET)
+        raise AssertionError(argv)
+    return run
+
+
+ALL = {"git": "/usr/bin/git", "gh": "/usr/bin/gh", "ruff": "/usr/bin/ruff"}
+
+
+def posix(path) -> str:
+    return Path(os.path.abspath(path)).as_posix()
+
+
+class PrerequisiteTest(unittest.TestCase):
+    """install.check_prerequisites with injected lookups; no test depends on this machine's tools."""
+
+    def setUp(self):
+        self._t = tmpdir()
+        self.root = Path(self._t.name)
+        self.addCleanup(self._t.cleanup)
+        self.home = self.root / "home"
+        (self.home / ".claude").mkdir(parents=True)
+        self.vault = make_vault(self.root)
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop(install.TEST_PREREQS_ENV, None)
+
+    def listing(self):
+        return sorted(str(p.relative_to(self.root)) + (":" + p.read_bytes().hex() if p.is_file() else "")
+                      for p in self.root.rglob("*"))
+
+    def check(self, which=ALL, version=None, run=None, recorded=None):
+        return install.check_prerequisites(recorded, which=fake_which(**which), run=run or fake_run(),
+                                           version=version)
+
+    def install_with(self, which=ALL, version=None, run=None, repo=None):
+        fake = partial(install.check_prerequisites, which=fake_which(**which), run=run or fake_run(),
+                       version=version)
+        with mock.patch.object(install, "check_prerequisites", fake):
+            return install.install(self.vault, self.home, repo=repo or self.root / "repo")
+
+    def refuse(self, **kwargs):
+        """Run install() with the injected lookups; it must exit and change nothing."""
+        before = self.listing()
+        with self.assertRaises(SystemExit) as cm:
+            self.install_with(**kwargs)
+        self.assertEqual(self.listing(), before)
+        self.assertNotIn(SECRET, str(cm.exception))
+        return str(cm.exception)
+
+    def test_all_good(self):  # T1 -> AC1
+        tools, problems, warnings = self.check()
+        self.assertEqual(problems, [])
+        self.assertEqual(warnings, [])
+        self.assertEqual(tools, {"git": posix("/usr/bin/git"), "gh": posix("/usr/bin/gh")})
+
+    def test_each_failure_alone_refuses(self):  # T1 -> AC1
+        no_git = {k: v for k, v in ALL.items() if k != "git"}
+        no_gh = {k: v for k, v in ALL.items() if k != "gh"}
+        cases = [
+            ({"version": (3, 8, 18)}, "Python 3.9"),
+            ({"which": no_git}, "install git"),
+            ({"which": no_gh}, "https://cli.github.com"),
+            ({"run": fake_run("gh version 2.93.0 (2025-12-01)")}, "update gh from https://cli.github.com"),
+            ({"run": fake_run(token_rc=1)}, "gh auth login"),
+        ]
+        for kwargs, fix in cases:
+            with self.subTest(fix=fix):
+                msg = self.refuse(**kwargs)
+                self.assertIn(fix, msg)
+                self.assertEqual(len(msg.splitlines()), 1)
+                self.assertEqual(msg.count("; "), 0, msg)       # only that failure
+
+    def test_all_failures_named_on_one_line(self):  # T1 -> AC1
+        msg = self.refuse(which={}, version=(3, 8, 0))
+        for fix in ("Python 3.9", "install git", "https://cli.github.com"):
+            self.assertIn(fix, msg)
+        self.assertEqual(len(msg.splitlines()), 1)
+        msg = self.refuse(version=(3, 8, 0), run=fake_run("gh version 2.1.0", token_rc=1))
+        for fix in ("Python 3.9", "older than 2.94.0", "gh auth login"):
+            self.assertIn(fix, msg)
+        self.assertEqual(len(msg.splitlines()), 1)
+
+    def test_ruff_missing_only_warns(self):  # T2 -> AC2
+        which = {k: v for k, v in ALL.items() if k != "ruff"}
+        tools, problems, warnings = self.check(which=which)
+        self.assertEqual(problems, [])
+        self.assertTrue(any("ruff" in w for w in warnings))
+        report = self.install_with(which=which)
+        self.assertTrue(any(line.startswith("warning: ruff") for line in report))
+        self.assertTrue((self.home / ".claude" / "agent-vault.json").exists())
+
+    def test_passing_check_records_both_paths(self):  # T3 -> AC3
+        self.install_with()
+        cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
+        self.assertEqual(cfg["git"], posix("/usr/bin/git"))
+        self.assertEqual(cfg["gh"], posix("/usr/bin/gh"))
+        self.assertNotIn(chr(92), cfg["git"] + cfg["gh"])
+
+    def test_recorded_paths_used_only_when_path_lacks_the_tool(self):  # T3 -> AC3
+        old_gh, old_git = self.root / "old-gh", self.root / "old-git"
+        old_gh.write_text("x")
+        old_git.write_text("x")
+        recorded = {"gh": old_gh.as_posix(), "git": old_git.as_posix()}
+        tools, problems, _ = self.check(which={}, recorded=recorded)
+        self.assertEqual(problems, [])
+        self.assertEqual(tools, recorded)
+        tools, problems, _ = self.check(recorded=recorded)      # PATH wins
+        self.assertEqual(tools["gh"], posix("/usr/bin/gh"))
+        gone = {"gh": (self.root / "nope").as_posix(), "git": (self.root / "nope2").as_posix()}
+        _, problems, _ = self.check(which={}, recorded=gone)      # a recorded path that is gone counts for nothing
+        self.assertEqual(len(problems), 2)
+
+    def test_recorded_py_gh_runs_through_this_python(self):  # T3 -> AC3 (D5)
+        calls = []
+        fake = self.root / "gh.py"
+        fake.write_text("x")
+        self.check(which={"git": "/usr/bin/git"}, recorded={"gh": fake.as_posix()},
+                   run=fake_run(calls=calls))
+        self.assertTrue(calls and all(c[:2] == [sys.executable, fake.as_posix()] for c in calls))
+
+    def test_commit_info_uses_the_recorded_git(self):  # T3 -> AC3
+        clone = self.root / "clone"
+        git = lambda *a: subprocess.run(["git", "-C", str(clone), *a], check=True,  # noqa: E731
+                                        capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        git("config", "user.email", "t@example.com")
+        git("config", "user.name", "t")
+        git("config", "commit.gpgsign", "false")
+        (clone / "a.txt").write_text("a")
+        git("add", ".")
+        git("commit", "-q", "-m", "c")
+        real = shutil.which("git")
+        self.assertEqual(install.commit_info(clone, None, real)["commit"], git("rev-parse", "HEAD"))
+        self.assertEqual(install.commit_info(clone, None, str(self.root / "no-such-git")), {})
+        # `git` found only through the config: install() still records commit and commit_time
+        (self.home / ".claude" / "agent-vault.json").write_text(json.dumps({"git": real}))
+        self.install_with(which={"gh": "/usr/bin/gh"}, repo=clone)
+        cfg = json.loads((self.home / ".claude" / "agent-vault.json").read_text())
+        self.assertEqual(cfg["commit"], git("rev-parse", "HEAD"))
+        self.assertIsInstance(cfg["commit_time"], int)
+        self.assertEqual(cfg["git"], Path(real).as_posix())
+
+    def test_token_never_printed(self):  # T1 -> AC1 (D1)
+        msg = self.refuse(run=fake_run(token_rc=1))
+        self.assertNotIn(SECRET, msg)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            report = self.install_with()
+        self.assertNotIn(SECRET, out.getvalue() + "\n".join(report))
+
+    def test_subprocess_with_selfupdate_flags_still_refuses(self):  # T1 -> AC1
+        empty = self.root / "empty-path"
+        empty.mkdir()
+        env = {k: v for k, v in os.environ.items() if k != install.TEST_PREREQS_ENV}
+        env["PATH"] = str(empty)
+        before = self.listing()
+        out = subprocess.run([sys.executable, str(REPO / "install.py"), "--vault", str(self.vault),
+                              "--home", str(self.home), "--repo", str(self.root / "repo"),
+                              "--commit", "0" * 40], capture_output=True, text=True, env=env)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("https://cli.github.com", out.stderr)
+        self.assertIn("install git", out.stderr)
+        self.assertEqual(self.listing(), before)
+
+
+class PrerequisiteDocsTest(unittest.TestCase):  # T5 -> AC5
+    def test_readme_names_the_prerequisites_and_recorded_paths(self):
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        for phrase in ("Python 3.9+", "gh 2.94.0", "gh auth login", "paths of the `gh` and `git`"):
+            self.assertIn(phrase, readme)
+
+    def test_claude_md_names_the_lookup_order_and_the_check(self):
+        text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+        for phrase in ("`AGENT_VAULT_GH`, else the config's `gh`, else PATH", "the config's `git`, else PATH",
+                       "checks Python 3.9+", "records the absolute paths of `gh` and `git`"):
+            self.assertIn(phrase, text)
+
+
+class OptOutCoverageTest(unittest.TestCase):  # R1 of #47: no test may run the real prerequisite check by accident
+    def test_every_test_that_installs_opts_out(self):
+        import ast
+        missing = []
+        for path in sorted((REPO / "tests").glob("test_*.py")):
+            text = path.read_text(encoding="utf-8")
+            for node in ast.walk(ast.parse(text)):
+                if not isinstance(node, ast.ClassDef) or node.name == "OptOutCoverageTest":
+                    continue
+                body = ast.get_source_segment(text, node) or ""
+                runs_installer = "install.install(" in body or 'str(REPO / "install.py")' in body
+                if runs_installer and not ("skip_install_prereqs" in body or "TEST_PREREQS_ENV" in body):
+                    missing.append(f"{path.name}::{node.name}")
+        self.assertEqual(missing, [])
+
+
+class RefusedInstallLeavesNoBytecodeTest(unittest.TestCase):  # R2 of #47
+    def test_refusal_writes_no_pycache_into_the_clone(self):
+        t = tmpdir()
+        self.addCleanup(t.cleanup)
+        root = Path(t.name)
+        clone = root / "clone"
+        clone.mkdir()
+        shutil.copy(REPO / "install.py", clone / "install.py")
+        shutil.copytree(REPO / "agent_vault", clone / "agent_vault", ignore=shutil.ignore_patterns("__pycache__"))
+        (root / "empty").mkdir()
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_VAULT_TEST_PREREQS", "PYTHONDONTWRITEBYTECODE")}
+        env["PATH"] = str(root / "empty")
+        out = subprocess.run([sys.executable, str(clone / "install.py"), "--vault", str(make_vault(root)),
+                              "--home", str(root / "home")], capture_output=True, text=True, env=env, cwd=clone)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("install git", out.stderr)
+        self.assertEqual(list(clone.rglob("__pycache__")), [])
