@@ -1064,3 +1064,22 @@ class OptOutCoverageTest(unittest.TestCase):  # R1 of #47: no test may run the r
                 if runs_installer and not ("skip_install_prereqs" in body or "TEST_PREREQS_ENV" in body):
                     missing.append(f"{path.name}::{node.name}")
         self.assertEqual(missing, [])
+
+
+class RefusedInstallLeavesNoBytecodeTest(unittest.TestCase):  # R2 of #47
+    def test_refusal_writes_no_pycache_into_the_clone(self):
+        t = tmpdir()
+        self.addCleanup(t.cleanup)
+        root = Path(t.name)
+        clone = root / "clone"
+        clone.mkdir()
+        shutil.copy(REPO / "install.py", clone / "install.py")
+        shutil.copytree(REPO / "agent_vault", clone / "agent_vault", ignore=shutil.ignore_patterns("__pycache__"))
+        (root / "empty").mkdir()
+        env = {k: v for k, v in os.environ.items() if k not in ("AGENT_VAULT_TEST_PREREQS", "PYTHONDONTWRITEBYTECODE")}
+        env["PATH"] = str(root / "empty")
+        out = subprocess.run([sys.executable, str(clone / "install.py"), "--vault", str(make_vault(root)),
+                              "--home", str(root / "home")], capture_output=True, text=True, env=env, cwd=clone)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("install git", out.stderr)
+        self.assertEqual(list(clone.rglob("__pycache__")), [])

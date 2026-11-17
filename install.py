@@ -47,6 +47,7 @@ import sys
 import time
 from pathlib import Path
 
+sys.dont_write_bytecode = True      # importing agent_vault.github for the check must not leave __pycache__ in the clone
 REPO = Path(__file__).resolve().parent
 MARK = "/.claude/agent-vault/"                  # identifies our hook commands
 LEGACY_HOOK_MARK = "Agent/_system/hooks/"       # v1 hook commands
