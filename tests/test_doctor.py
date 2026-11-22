@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -398,6 +399,17 @@ class ReadOnlyTest(DoctorBase):
         before = {p for p in CODE.rglob("__pycache__")}
         self.doctor()
         self.assertEqual({p for p in CODE.rglob("__pycache__")}, before)
+
+
+class DocsTest(unittest.TestCase):
+    def test_docs_name_doctor(self):  # T9 -> AC9
+        for path in (REPO / "README.md", REPO / "CLAUDE.md", VAULT_PY):
+            self.assertIn("doctor", path.read_text(encoding="utf-8"), path.name)
+
+    def test_readme_and_claude_md_name_the_path_fallback(self):  # T9 -> AC9
+        for path in (REPO / "README.md", REPO / "CLAUDE.md"):
+            text = path.read_text(encoding="utf-8")
+            self.assertTrue(re.search(r"doctor[^\n]*PATH|PATH[^\n]*doctor", text), path.name)
 
 
 if __name__ == "__main__":

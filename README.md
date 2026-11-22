@@ -29,6 +29,8 @@ Hooks run with the Python recorded in the config, the one that ran the installer
 is deleted, the guards block tool calls and the other hooks report an error until you rerun
 `install.py`, so rerun it whenever you switch Python installs.
 
+When something seems broken, run `~/.claude/agent-vault/bin/vault doctor`. It checks the config and its Python, `gh` and `git`, the Claude hook entries in `settings.json`, the git hooks of the clone you run it in and of the clone you installed from, and whether the installed copy is behind `main`; it prints `ok`, `problem` (with its fix) or `skipped` for each, exits 1 on any problem, and changes nothing and uses no network. It is the one command that still runs when the config is missing or its Python has moved: the launcher then falls back to `python3`, then `python`, on `PATH`. In PowerShell or cmd run it with the recorded Python: `& "<python>" "$HOME/.claude/agent-vault/vault.py" doctor`.
+
 After that first run you don't have to rerun it by hand: the installed copy keeps itself current
 with `main`. `~/.claude/agent-vault/bin/vault merge`, after it merges a PR in the clone you installed from, installs what
 `main` now holds, and every session start checks whether that clone's local `main` has a newer commit
