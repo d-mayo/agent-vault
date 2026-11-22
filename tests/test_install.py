@@ -716,11 +716,13 @@ class LauncherTest(unittest.TestCase):
     def tearDown(self):
         self._t.cleanup()
 
-    def run_launcher(self, config, *args):
+    def run_launcher(self, config, *args, path=None):
         env = dict(os.environ, HOME=str(self.home))
         env.pop("AGENT_VAULT_CONFIG", None)
         if config is not None:
             env["AGENT_VAULT_CONFIG"] = str(config)
+        if path is not None:
+            env["PATH"] = str(path)
         return subprocess.run([find_bash(), (self.inst / "bin" / "vault").as_posix(), *args],
                               capture_output=True, text=True, env=env)
 
@@ -745,6 +747,60 @@ class LauncherTest(unittest.TestCase):
         self.assertNotEqual(out.returncode, 0)
         self.assertIn("not installed", out.stderr)
         self.assertIn("install.py", out.stderr)
+
+    def standin(self, *names):
+        """A folder, first on PATH, holding a shell script for each name that prints what it was run with."""
+        folder = self.root / "standin"
+        folder.mkdir(exist_ok=True)
+        for name in names:
+            script = folder / name
+            script.write_text(f'#!/bin/sh\necho "standin {name}: $*"\n', encoding="utf-8", newline="\n")
+            script.chmod(0o755)
+        return os.pathsep.join([str(folder), os.environ.get("PATH", "")])
+
+    def test_doctor_runs_on_path_python_when_the_recorded_one_is_gone(self):  # T8 -> AC8
+        gone = self.config((self.root / "nope" / "python").as_posix())
+        out = self.run_launcher(gone, "doctor", "--x", path=self.standin("python3"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("standin python3:", out.stdout)
+        self.assertIn("vault.py doctor --x", out.stdout)
+        self.assertIn("rerun install.py", out.stderr)
+
+    def test_doctor_runs_on_path_python_when_there_is_no_config(self):  # T8 -> AC8
+        out = self.run_launcher(None, "doctor", path=self.standin("python3"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("standin python3:", out.stdout)
+        self.assertIn("not installed", out.stderr)
+
+    def test_doctor_falls_back_to_python_when_there_is_no_python3(self):  # T8 -> AC8
+        if shutil.which("python3"):
+            self.skipTest("this PATH has a python3 that the stand-in can't hide")
+        out = self.run_launcher(None, "doctor", path=self.standin("python"))
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("standin python:", out.stdout)
+
+    def test_other_commands_keep_the_refusal(self):  # T8 -> AC8
+        path = self.standin("python3", "python")
+        for config in (self.config((self.root / "nope" / "python").as_posix()), None):
+            out = self.run_launcher(config, "status", path=path)
+            self.assertEqual(out.returncode, 1)
+            self.assertEqual(out.stdout, "")
+            self.assertIn("install.py", out.stderr)
+
+    def test_doctor_with_no_python_anywhere_exits_naming_install_py(self):  # T8 -> AC8
+        tools = self.root / "tools"
+        tools.mkdir()
+        try:
+            for name in ("sed", "head", "dirname"):
+                (tools / name).symlink_to(shutil.which(name))
+        except (OSError, NotImplementedError, TypeError):
+            self.skipTest("symlinks can't be made here")
+        out = self.run_launcher(None, "doctor", path=tools)
+        if "command not found" in out.stderr:
+            self.skipTest("the launcher's tools don't run from symlinks here")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("install.py", out.stderr)
+        self.assertEqual(out.stdout, "")
 
     def test_installed_launcher_is_executable_and_lf(self):  # T1 -> AC1
         skip_install_prereqs(self)
