@@ -5,7 +5,7 @@ Scripts, hooks and skills for the Claude + Obsidian workflow; installed to `~/.c
 Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is the source of truth).
 
 ## Commands
-<!-- covers: install.py, tests/**; verified: 2026-11-16 -->
+<!-- covers: install.py, tests/**; verified: 2026-11-22 -->
 - Run tests: `python -m unittest discover -s tests -t .` (stdlib only, but the tests need `ruff` on your PATH; pytest also works). It runs the test classes in parallel worker processes (`tests/parallel.py`); setting AGENT_VAULT_TESTS_SERIAL to 1 runs it all in one process, and AGENT_VAULT_TESTS_WORKERS to a number sets the worker count (default: the CPU count, at most the number of classes)
 - Lint: `ruff check .`
 - Reviewer evals: after changing a reviewer file (the ones `evals/score.py` maps), run them in a session in this clone: "run the reviewer evals for <reviewer>" (the reviewer-evals skill). `python evals/score.py --status` shows which reviewer files changed since their baseline.
@@ -47,7 +47,7 @@ Project: agent-vault. Design record: `docs/design-v1.md` (sealed; the code is th
 - All note rules live as constants in `agent_vault/lib.py`; `vault.py schema` prints them from there.
 
 ## Gotchas
-<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-11-16 -->
+<!-- covers: agent_vault/hooks/**, install.py; verified: 2026-11-22 -->
 - Hook commands are the hook launcher's absolute forward-slash path plus the script's name (and `--blocking` for `agent_vault/hooks/guard.py` and `agent_vault/hooks/push_guard.py`), so they don't depend on PATH or how the Windows hook runner expands `$HOME`; the launcher reads the Python from the config at run time (d60): no config means exit 0 silently, a Python that is gone means exit 2 for the guards, exit 1 for PostToolUse and Stop, and for SessionStart exit 0 with hook JSON (`systemMessage` and `additionalContext`). `lib.CLI` is the constant launcher string `~/.claude/agent-vault/bin/vault`, never built from `sys.executable`; the vault's `Bash(~/.claude/agent-vault/bin/vault:*)` permission must match it exactly. The launcher needs the executable bit (git mode 100755, `.gitattributes` pins LF) and a `~/` command in this file is only a warning when the file is missing.
 - `.gitattributes` pins LF endings: a CRLF `agent_vault/githooks/pre-push` fails in bash and blocks every push.
 - `agent_vault/hooks/push_guard.py` tokenizes quote-aware and treats heredoc bodies as data; add a test case for every new command shape it must handle. Its `gh issue create` rule reads the vault config, so those tests must pass a temp config (`AGENT_VAULT_CONFIG`) or they read the real machine's.
