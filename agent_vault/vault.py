@@ -42,6 +42,7 @@ the recorded Python on this file; lib.CLI). Commands:
   repo-init <path>
   claudemd-lint [<repo path>]
   lint
+  doctor                         (one read-only check of the install: config and Python, gh, git, hooks, up to date; exit 1 on a problem; runs with no usable vault)
   check-branch <name>            (exit 1 unless the name follows the setup's branch pattern; the pre-push hook runs it)
   validate
   status
@@ -1680,6 +1681,14 @@ def hooks_path_state(top: Path, target: Path) -> tuple[str, str]:
     return ("accepted" if marked else "foreign"), cur
 
 
+def cmd_doctor(args) -> None:
+    import doctor
+    lines, problems = doctor.run(hooks_path_state)
+    for line in lines:
+        print(line)
+    sys.exit(1 if problems else 0)
+
+
 def cmd_repo_init(args) -> None:
     index = lib.Index()
     found = github.git("rev-parse", "--show-toplevel", cwd=args.path, check=False)
@@ -2552,6 +2561,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_claudemd_lint)
     p = sub.add_parser("lint", help="claudemd-lint plus the repo's declared lint command (current clone)")
     p.set_defaults(fn=cmd_lint)
+    p = sub.add_parser("doctor", help="check the install (config, Python, gh, git, hooks, up to date) and change nothing")
+    p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("check-branch", help="exit 1 unless a branch name follows the setup's branch pattern")
     p.add_argument("name")
     p.set_defaults(fn=cmd_check_branch)
@@ -2677,7 +2688,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     lib.setup_io()
-    if lib.VAULT is None and sys.argv[1:2] not in (["lint"], ["check-branch"]):  # these need no vault
+    if lib.VAULT is None and sys.argv[1:2] not in (["lint"], ["check-branch"], ["doctor"]):  # these need no vault
         die(f"no usable vault: {lib.CONFIG} is missing, or its vault path has no .obsidian folder; "
             "run install.py --vault <path>")
     args = build_parser().parse_args()
